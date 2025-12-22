@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      dnsConfig:
+        options:
+        - name: single-request-reopen
+        - name: use-vc
+      containers:
+        - name: {{ .Release.Name }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+          - name: DO_NOT_TRACK
+            value: {{ .Values.service.doNotTrack | quote }}
+          - name: INFINITY_URL_PREFIX
+            value: {{ .Values.service.urlPrefix }}
+          ports:
+          - containerPort: {{ .Values.ports.apiPort }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.ports.apiPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory }}
+              cpu: {{ .Values.resources.requests.cpu }}
+            limits:
+               memory: {{ .Values.resources.limits.memory }}
+               cpu: {{ .Values.resources.limits.cpu }}
+          securityContext:
+            capabilities:
+              add: ["SYS_ADMIN"]
+      tolerations: {{- toYaml .Values.tolerations | nindent 10 }}

@@ -1,0 +1,317 @@
+openapi: 3.0.2
+info:
+  title: Sandbox API （内部接口）
+  version: 1.0.0
+servers:
+  - url: https://{host}:{port}/api/
+    description: 'host: DIP服务器IP, port: 9101'
+    variables:
+      host:
+        default: host
+        description: DIP服务器IP
+      port:
+        default: '9101'
+        description: 默认端口9101
+tags:
+  - name: 公共Header说明
+    description: |
+      # Authentication
+      - 调用需要鉴权的API，必须将token放在HTTP header中："Authorization: Bearer ACCESS_TOKEN"
+
+      # Business Domain
+      - 业务域标识Header：`x-business-domain`，用于区分不同业务场景的请求
+  - name: 执行代码
+  - name: 其他
+  - name: 自定义错误码汇总
+    description: |
+      自定义错误码汇总：
+      - Sandbox.InvalidParameter : 不合法的请求参数
+      - Sandbox.ExecException: handler 执行异常
+      - Sandbox.TooManyRequestsExection: 无可用沙箱
+      - Sandbox.ExecTimeout: 执行超时
+      - Sandbox.InternalError: 内部错误
+  - name: 相关文档
+    description: |
+      相关文档：
+paths:
+  /workspace/se/v2/execute_code:
+    post:
+      tags:
+        - 执行代码
+      summary: 执行 Python Handler 代码
+      description: |
+        在安全沙箱环境中执行用户提供的 Python handler 代码
+
+        ## Handler 规范
+        - 必须定义 `handler(event, context)` 函数
+        - event: 业务输入数据（字典类型）
+        - context: 运行时上下文对象
+
+        ## 执行限制
+        - 默认超时时间: 3000ms
+        - 默认内存限制: 30MB
+        - 默认禁用网络访问
+      operationId: executeCode
+      requestBody:
+        required: true
+        description: 代码执行请求参数
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteCodeRequest'
+            examples:
+              simple_example:
+                summary: 简单示例
+                value:
+                  handler_code: |
+                    def handler(event, context):
+                        name = event.get('name', 'World')
+                        return {
+                            'statusCode': 200,
+                            'body': f'Hello, {name}!',
+                            'requestId': context.request_id
+                        }
+                  event:
+                    name: Alice
+                  context:
+                    function_name: hello-function
+                    remaining_time_in_millis: 3000
+              computation_example:
+                summary: 数据处理示例
+                value:
+                  handler_code: |
+                    def handler(event, context):
+                        numbers = event.get('numbers', [])
+                        result = {
+                            'sum': sum(numbers),
+                            'count': len(numbers),
+                            'avg': sum(numbers) / len(numbers) if numbers else 0
+                        }
+                        print(f"Processed {len(numbers)} numbers")
+                        return result
+                  event:
+                    numbers:
+                      - 1
+                      - 2
+                      - 3
+                      - 4
+                      - 5
+              error_example:
+                summary: 错误处理示例
+                value:
+                  handler_code: |
+                    def handler(event, context):
+                        if 'required_field' not in event:
+                            raise ValueError("Missing required_field")
+                        return {'status': 'ok'}
+                  event:
+                    invalid_field: test
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteCodeSuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  schemas:
+    ExecuteCodeRequest:
+      type: object
+      required:
+        - handler_code
+        - event
+      properties:
+        handler_code:
+          type: string
+          description: |
+            Python handler 代码字符串
+            - 必须定义 `handler(event, context)` 函数
+            - 支持导入 Python 标准库
+            - 不支持导入第三方库（可配置）
+          minLength: 1
+          maxLength: 102400
+          example: |
+            def handler(event, context):
+                return {'statusCode': 200, 'body': 'Hello, World!'}
+        event:
+          type: object
+          description: |
+            业务输入数据
+            - 必须是 JSON 可序列化类型
+            - 将作为 handler 的第一个参数传入
+          additionalProperties: true
+          example:
+            name: Alice
+            age: 30
+            items:
+              - 1
+              - 2
+              - 3
+        context:
+          type: object
+          description: |
+            自定义运行时上下文参数
+            - 可选，用于覆盖默认 Context 参数
+            - 未指定的字段使用默认值
+          properties:
+            function_name:
+              type: string
+              description: 函数名称
+              default: unknown-function
+              example: data-processor
+            function_version:
+              type: string
+              description: 函数版本
+              default: $LATEST
+              example: v1.2.0
+            remaining_time_in_millis:
+              type: integer
+              description: 最大执行超时时间（毫秒）
+              default: 3000
+              minimum: 100
+              maximum: 300000
+              example: 5000
+            memory_limit_in_mb:
+              type: integer
+              description: 内存限制（MB）
+              default: 256
+              minimum: 128
+              maximum: 3008
+              example: 512
+            log_group_name:
+              type: string
+              description: 日志组名称
+              default: /lambda-sandbox/logs
+              example: /my-app/logs
+          additionalProperties: false
+    ExecuteCodeSuccessResponse:
+      type: object
+      required:
+        - stdout
+        - stderr
+        - result
+        - metrics
+      properties:
+        stdout:
+          type: string
+          description: 标准输出流内容
+          example: |
+            Processing complete.
+        stderr:
+          type: string
+          description: 标准错误流内容
+          example: ''
+        result:
+          description: |
+            Handler 函数返回的业务结果
+            - 可以是任意 JSON 可序列化类型
+            - null 表示 handler 返回 None 或执行失败
+          nullable: true
+          example:
+            status: ok
+            data:
+              - 1
+              - 2
+              - 3
+        metrics:
+          type: object
+          description: 执行性能指标
+          required:
+            - duration_ms
+            - memory_peak_mb
+          properties:
+            duration_ms:
+              type: number
+              format: float
+              description: 执行总耗时（毫秒）
+              example: 75.23
+            memory_peak_mb:
+              type: number
+              format: float
+              description: 峰值内存占用（MB）
+              example: 42.5
+            cpu_time_ms:
+              type: number
+              format: float
+              description: CPU 时间（毫秒）
+              example: 68.12
+    Error:
+      type: object
+      required:
+        - description
+        - error_code
+        - error_detail
+        - error_link
+        - solution
+      properties:
+        description:
+          type: string
+          description: 错误描述
+        error_code:
+          type: string
+          description: 错误码
+        error_detail:
+          type: string
+          description: 错误详情
+        error_link:
+          type: string
+          description: 错误链接
+        solution:
+          type: string
+          description: 处理建议
+      example:
+        description: some text
+        error_code: some text
+        error_detail: some text
+        error_link: some text
+        solution: some text
+    BadRequestError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+      example:
+        error_code: AgentApp.InvalidParameter
+        description: Invalid Parameter
+        error_detail: some text
+        error_link: some text
+        solution: some text
+    InternalServerError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+      example:
+        error_code: AgentApp.InternalError
+        description: internal server error
+        error_detail: some text
+        error_link: some text
+        solution: some text
+  responses:
+    BadRequestError:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BadRequestError'
+    InternalServerError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InternalServerError'
+x-tagGroups:
+  - name: 通用说明
+    tags:
+      - 公共Header说明
+  - name: Sandbox
+    tags:
+      - 执行代码
+  - name: 错误码
+    tags:
+      - 自定义错误码汇总
+  - name: 相关文档
+    tags:
+      - 相关文档

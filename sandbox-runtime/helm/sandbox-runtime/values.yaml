@@ -1,0 +1,46 @@
+replicaCount: 1
+namespace: dip
+
+image:
+  registry: acr.aishu.cn
+  repository: dip/sandbox-runtime
+  tag: 5.0.0
+  name: sandbox-runtime
+
+ports:
+  apiPort: 9101
+
+env:
+  devicecode: ""
+
+nodeSelector: {}
+
+resources:
+  limits:
+    cpu: 2
+    memory: 2Gi
+  requests:
+    cpu: 1
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  ports:
+    port: 9101
+    targetPort: 9101
+  headless:
+    enabled: true
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: "standard"
+  accessMode: ReadWriteOnce
+
+volume:
+  sizeLimit: 1Gi
+
+security:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000

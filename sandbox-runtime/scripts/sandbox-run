@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""
+Sandbox Runtime CLI executable wrapper
+"""
+
+import sys
+import os
+
+# Add src directory to Python path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.join(script_dir, '..', 'src')
+sys.path.insert(0, os.path.abspath(src_dir))
+
+# Import and run the CLI
+from sandbox_runtime.cli.main import entry_point
+
+if __name__ == "__main__":
+    entry_point()
