@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import sys
 import os
 
+import sys as _sys  # 别名避免冲突
+
 from sandbox_runtime.sandbox.sandbox.config import SandboxConfig
 
 from sandbox_runtime.utils.loggers import get_logger
@@ -83,6 +85,9 @@ class AsyncSandboxInstance:
             # "/",
             # "/",  # 只读绑定 /
             "--ro-bind",
+            "/etc",
+            "/etc",
+            "--ro-bind",
             "/usr",
             "/usr",  # 只读绑定 /usr
             "--ro-bind",
@@ -104,14 +109,15 @@ class AsyncSandboxInstance:
             cmd.extend(["--unshare-net"])
 
         # Set PYTHONPATH for the sandbox
-        source_dir = os.path.dirname(
-            os.path.dirname(os.path.dirname(daemon_package_dir))
-        )
+        # daemon_package_dir 是 .../src/sandbox_runtime/sandbox/sandbox
+        # 需要向上 4 级到项目根目录，然后加上 /src
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(daemon_package_dir))))
+        print(project_root)
         cmd.extend(
             [
                 "--setenv",
                 "PYTHONPATH",
-                f"{source_dir}/src",
+                f"{project_root}/src",
             ]
         )
 
@@ -153,8 +159,7 @@ class AsyncSandboxInstance:
             " ".join(ulimit_cmd) + " ".join(change_dir_cmd) + " ".join(python_cmd),
         ]
         cmd.extend(bash_cmd)
-
-        # cmd.extend(["python3", "-m", "daemon"])
+        logger.debug(" ".join(cmd))
 
         return cmd
 
@@ -164,6 +169,19 @@ class AsyncSandboxInstance:
         """
         start_time = time.time()
         loop = asyncio.get_event_loop()
+        lines_seen = []
+        stderr_lines = []
+
+        # 设置 stderr 为非阻塞模式（只设置一次）
+        if self.process.stderr and not self.process.stderr.closed:
+            try:
+                import os
+                import fcntl
+                fd = self.process.stderr.fileno()
+                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            except Exception:
+                pass
 
         while time.time() - start_time < timeout:
 
@@ -176,22 +194,83 @@ class AsyncSandboxInstance:
                 logger.error(f"沙箱进程退出，返回码: {self.process.returncode}")
                 logger.error(f"stdout: {stdout}")
                 logger.error(f"stderr: {stderr}")
-                raise RuntimeError(
-                    f"沙箱进程启动失败，返回码: {self.process.returncode}"
-                )
 
-            # 使用异步方式读取一行输出
+                # 确保回收僵尸进程
+                try:
+                    if self.process.poll() is None:
+                        self.process.wait()
+                except:
+                    pass
+
+                # 检查是否是内存不足导致
+                error_msg = f"沙箱进程启动失败，返回码: {self.process.returncode}"
+                if self.config.memory_limit < 512 * 1024:  # 小于512MB
+                    error_msg += f". 内存限制 ({self.config.memory_limit // 1024}MB) 可能不足。"
+                    error_msg += "建议增加 memory_limit 到至少 512MB 或更高。"
+                if stderr:
+                    error_msg += f"\n进程stderr: {stderr}"
+                raise RuntimeError(error_msg)
+
+            # 使用异步方式读取一行输出（带超时）
             def _readline():
                 return self.process.stdout.readline()
 
-            line = await loop.run_in_executor(None, _readline)
+            # 同时读取 stderr 用于调试（非阻塞）
+            def _read_stderr():
+                if self.process.stderr and not self.process.stderr.closed:
+                    try:
+                        data = self.process.stderr.read(4096)
+                        if data:
+                            return data
+                    except (BlockingIOError, IOError):
+                        pass
+                return None
+
+            try:
+                # 给每个 readline 添加 1 秒超时，防止无限阻塞
+                line = await asyncio.wait_for(
+                    loop.run_in_executor(None, _readline),
+                    timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                # readline 超时，继续循环
+                line = None
+
+            # 读取 stderr（非阻塞）
+            stderr_data = await loop.run_in_executor(None, _read_stderr)
+            if stderr_data:
+                for sl in stderr_data.splitlines():
+                    if sl.strip():
+                        stderr_lines.append(sl.strip())
+                        logger.debug(f"沙箱stderr: {sl.strip()}")
+
+            if line:
+                lines_seen.append(line.strip())
+                logger.debug(f"从沙箱读取: {line.strip()}")
             if line and line.startswith("SANDBOX_PORT:"):
                 self.port = int(line.split(":")[1].strip())
                 return
 
             await asyncio.sleep(0.1)
 
-        raise TimeoutError("等待沙箱就绪超时")
+        # 超时：提供更详细的错误信息
+        timeout_msg = f"等待沙箱就绪超时 ({timeout}秒)"
+        if self.process.poll() is None:
+            # 进程仍在运行但没有输出
+            timeout_msg += f". 进程存在但未响应。"
+            timeout_msg += f"内存限制: {self.config.memory_limit // 1024}MB。"
+            if self.config.memory_limit < 512 * 1024:
+                timeout_msg += " 内存限制过小可能导致进程卡住。"
+                timeout_msg += "建议增加 memory_limit 到至少 512MB 或更高。"
+            timeout_msg += f"已读取的stdout行: {lines_seen}"
+            if stderr_lines:
+                timeout_msg += f". 已读取的stderr: {stderr_lines}"
+        else:
+            # 进程已退出
+            timeout_msg += f". 进程已退出，返回码: {self.process.returncode}"
+            if stderr_lines:
+                timeout_msg += f". stderr: {stderr_lines}"
+        raise TimeoutError(timeout_msg)
 
     async def execute(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -220,6 +299,17 @@ class AsyncSandboxInstance:
                     # 设置连接超时和接收超时
                     sock.settimeout(5.0)  # 5秒连接超时
 
+                    # 连接前检查 bwrap 进程是否还存活
+                    if self.process.poll() is not None:
+                        return {
+                            "exit_code": 137,
+                            "stdout": "",
+                            "stderr": f"Sandbox process (bwrap) exited unexpectedly. "
+                                     f"Return code: {self.process.returncode}. "
+                                     f"This may indicate memory limit ({self.config.memory_limit // 1024}MB) was exceeded.",
+                            "result": None,
+                        }
+
                     # 连接到沙箱守护进程
                     sock.connect(("localhost", self.port))
 
@@ -245,14 +335,61 @@ class AsyncSandboxInstance:
                                 "Socket receive timeout during execution"
                             )
 
+                    # 接收完成后检查进程状态
+                    process_exited = self.process.poll() is not None
+                    return_code = self.process.returncode if process_exited else None
+
                     # 尝试解析结果
                     try:
+                        # 检查是否收到空数据（daemon 可能崩溃）
+                        if not result_data:
+                            if process_exited:
+                                # 进程已退出，返回详细信息
+                                return {
+                                    "exit_code": return_code or 137,
+                                    "stdout": "",
+                                    "stderr": f"Sandbox process exited (code={return_code}). "
+                                             f"Memory limit: {self.config.memory_limit // 1024}MB. "
+                                             f"This usually indicates OOM (out of memory). "
+                                             f"Try increasing memory_limit in SandboxConfig.",
+                                    "result": None,
+                                }
+                            # 进程还在运行但没有返回数据 - 可能是 daemon 被 OOM 杀死
+                            memory_mb = self.config.memory_limit // 1024
+                            if memory_mb < 512:
+                                return {
+                                    "exit_code": 137,
+                                    "stdout": "",
+                                    "stderr": f"Received empty response from daemon. "
+                                             f"Memory limit: {memory_mb}MB. "
+                                             f"This likely indicates OOM - the daemon was killed due to insufficient memory. "
+                                             f"Try increasing memory_limit to at least 512MB or higher.",
+                                    "result": None,
+                                }
+                            return {
+                                "exit_code": 3,
+                                "stdout": "",
+                                "stderr": "Received empty response from daemon",
+                                "result": None,
+                            }
                         return json.loads(result_data.decode())
                     except json.JSONDecodeError as e:
+                        # 提供更详细的错误信息
+                        raw_output = result_data.decode(errors="replace")[:200]  # 前200字符
+                        error_msg = f"Failed to parse execution result: {str(e)}. "
+                        if not result_data:
+                            error_msg += f"Empty response. "
+                        error_msg += f"Raw output: {repr(raw_output)}. "
+                        if process_exited:
+                            error_msg += f"Process exited with code {return_code}. "
+                            error_msg += f"Memory limit: {self.config.memory_limit // 1024}MB. "
+                            error_msg += "This indicates OOM (out of memory). "
+                        else:
+                            error_msg += "This may indicate daemon crash or corruption. "
                         return {
-                            "exit_code": 3,
+                            "exit_code": return_code if process_exited else 3,
                             "stdout": "",
-                            "stderr": f"Failed to parse execution result: {str(e)}",
+                            "stderr": error_msg,
                             "result": None,
                         }
 
@@ -296,6 +433,7 @@ class AsyncSandboxInstance:
         """
         if not self.process:
             return
+
         print("开始终止沙箱进程")
         pgid = -1
         try:
@@ -305,16 +443,33 @@ class AsyncSandboxInstance:
             # 使用异步等待
             loop = asyncio.get_event_loop()
             try:
+                # 在线程池中执行 wait，并设置超时
                 await asyncio.wait_for(
-                    loop.run_in_executor(None, self.process.wait, 5), timeout=5
+                    loop.run_in_executor(None, self.process.wait), timeout=5
                 )
             except asyncio.TimeoutError:
                 os.killpg(pgid, signal.SIGKILL)
-        except Exception as e:
-            print("terminate 沙箱进程失败", e)
+                # 再次尝试回收进程
+                try:
+                    self.process.wait(timeout=2)
+                except:
+                    pass
+        except ProcessLookupError:
+            # 进程已经不存在，直接清理
             pass
+        except Exception as e:
+            print(f"terminate 沙箱进程失败: {e}")
         finally:
-            self.process = None
+            # 确保最终回收进程（避免僵尸进程）
+            if self.process:
+                try:
+                    # 尝试最后一次回收
+                    if self.process.poll() is None:
+                        self.process.wait(timeout=1)
+                except:
+                    pass
+                finally:
+                    self.process = None
 
     def __del__(self):
         """

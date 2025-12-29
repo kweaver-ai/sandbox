@@ -236,18 +236,31 @@ async def main():
             else:
                 sys.exit(0)
 
-    except TimeoutError:
-        print(f"Error: Execution timed out after {args.timeout} seconds", file=sys.stderr)
+    except TimeoutError as e:
+        # 显示详细的超时错误信息
+        error_msg = str(e)
+        if "Execution timed out" not in error_msg:
+            # 使用来自 _wait_for_ready() 的详细错误信息
+            print(f"Error: {error_msg}", file=sys.stderr)
+        else:
+            print(f"Error: Execution timed out after {args.timeout} seconds", file=sys.stderr)
         sys.exit(4)
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)
         sys.exit(130)  # Standard exit code for SIGINT
     except Exception as e:
+        # 显示详细错误信息
         print(f"Error: {e}", file=sys.stderr)
         if args.verbose:
             import traceback
             traceback.print_exc()
-        sys.exit(1)
+        # 根据异常类型设置不同的退出码
+        if isinstance(e, RuntimeError):
+            # Sandbox 启动错误，检查是否是内存相关
+            if "memory" in str(e).lower() or "limit" in str(e).lower():
+                sys.exit(137)  # OOM 退出码
+            sys.exit(4)  # 其他 sandbox 错误
+        sys.exit(1)  # 通用错误
     finally:
         # Cleanup runner resources
         await runner.cleanup()

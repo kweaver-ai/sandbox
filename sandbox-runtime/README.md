@@ -103,6 +103,36 @@
    - 管理文件系统操作和命令执行
    - 提供健康监控端点
 
+## 配置
+
+### 环境变量配置
+
+沙箱支持通过环境变量进行配置，可以在部署时灵活调整沙箱参数：
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---------|------|--------|------|
+| `SANDBOX_CPU_QUOTA` | int | 2 | CPU 配额 |
+| `SANDBOX_MEMORY_LIMIT` | int | 131072 | 内存限制（KB），默认 128MB |
+| `SANDBOX_ALLOW_NETWORK` | bool | true | 是否允许网络访问 |
+| `SANDBOX_TIMEOUT_SECONDS` | int | 300 | 执行超时时间（秒） |
+| `SANDBOX_MAX_USER_PROGRESS` | int | 10 | 最大用户进程数 |
+| `SANDBOX_POOL_SIZE` | int | 2 | 沙箱池大小 |
+
+### Kubernetes 部署配置
+
+在 `values.yaml` 中配置沙箱参数：
+
+```yaml
+# 沙箱配置
+sandbox:
+  cpuQuota: 2
+  memoryLimit: 131072  # 128 * 1024 in KB
+  allowNetwork: true
+  timeoutSeconds: 300
+  maxUserProgress: 10
+  poolSize: 2
+```
+
 ## 安装
 
 ### 环境要求

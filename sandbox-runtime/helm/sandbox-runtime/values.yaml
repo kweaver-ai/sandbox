@@ -13,6 +13,14 @@ ports:
 env:
   devicecode: ""
 
+sandbox:
+  cpuQuota: 2
+  memoryLimit: 131072  # 128 * 1024 in KB
+  allowNetwork: true
+  timeoutSeconds: 300
+  maxUserProgress: 10
+  poolSize: 2
+
 nodeSelector: {}
 
 resources:

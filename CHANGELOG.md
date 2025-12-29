@@ -1,5 +1,13 @@
 #  changelog description
 
+## 0.1.1
+
+- [feat] add environment variable configuration support for sandbox
+    - Sandbox configuration can now be set via environment variables
+    - Added support for: SANDBOX_CPU_QUOTA, SANDBOX_MEMORY_LIMIT, SANDBOX_ALLOW_NETWORK, SANDBOX_TIMEOUT_SECONDS, SANDBOX_MAX_USER_PROGRESS, SANDBOX_POOL_SIZE
+    - Updated Helm chart values.yaml with sandbox configuration section
+    - Updated deployment.yaml template to inject sandbox environment variables
+
 ## 0.1.0
 
 - [feat] add executor_code v2 version

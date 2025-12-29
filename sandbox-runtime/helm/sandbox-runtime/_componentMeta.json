@@ -43,6 +43,32 @@
             "replicaCount": {
                 "type": "number",
                 "title": "服务副本数"
+            },
+            "sandbox": {
+                "type": "object",
+                "title": "沙箱配置项",
+                "properties": {
+                    "cpuQuota": {
+                        "type": "number",
+                        "title": "CPU限制(CPU 核心数)"
+                    },
+                    "memoryLimit": {
+                        "type": "number",
+                        "title": "内存限制 (KB)"
+                    },
+                    "allowNetwork": {
+                        "type": "boolean",
+                        "title": "是否允许网络访问"
+                    },
+                    "timeoutSeconds": {
+                        "type": "number",
+                        "title": "执行超时时间（秒）"
+                    },
+                    "poolSize": {
+                        "type": "number",
+                        "title": "沙箱池大小(沙箱实例个数)"
+                    }
+                }
             }
         }
     }

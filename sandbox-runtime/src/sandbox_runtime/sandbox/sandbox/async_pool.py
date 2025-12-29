@@ -3,11 +3,13 @@
 """
 
 import asyncio
+import os
+import signal
 import queue
 import threading
 import logging
 import trace
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from sandbox_runtime.sandbox.sandbox.config import SandboxConfig
 from sandbox_runtime.sandbox.sandbox.async_instance import AsyncSandboxInstance
 from sandbox_runtime.sandbox.core.errors import NoAvailableSandboxError
@@ -31,6 +33,9 @@ class AsyncSandboxPool:
 
         # 忙碌沙箱字典
         self.busy_sandboxes: Dict[int, AsyncSandboxInstance] = {}
+
+        # 跟踪所有子进程 PID，用于清理僵尸进程
+        self.child_pids: Set[int] = set()
 
         # 池管理锁
         self.lock = asyncio.Lock()
@@ -67,6 +72,11 @@ class AsyncSandboxPool:
         """
         sandbox = AsyncSandboxInstance(self.config)
         await sandbox.start()
+
+        # 跟踪子进程 PID，用于后续清理僵尸进程
+        if sandbox.process and sandbox.process.pid:
+            self.child_pids.add(sandbox.process.pid)
+
         return sandbox
 
     async def acquire(self, timeout: float = 10.0) -> AsyncSandboxInstance:
@@ -141,10 +151,13 @@ class AsyncSandboxPool:
 
     async def _health_check_loop(self) -> None:
         """
-        健康检查循环,定期检查沙箱状态
+        健康检查循环,定期检查沙箱状态并清理僵尸进程
         """
         while self.is_running:
             await asyncio.sleep(30)  # 每30秒检查一次
+
+            # 清理僵尸进程
+            await self._reap_zombie_processes()
 
             # 检查忙碌沙箱
             async with self.lock:
@@ -156,9 +169,43 @@ class AsyncSandboxPool:
                     logger.warning(f"检测到死亡沙箱 {sid},已清理")
                     del self.busy_sandboxes[sid]
 
+    async def _reap_zombie_processes(self) -> None:
+        """
+        清理僵尸进程
+
+        通过尝试 wait 已知的子进程 PID 来回收僵尸进程
+        """
+        if not self.child_pids:
+            return
+
+        dead_pids = set()
+
+        for pid in list(self.child_pids):
+            try:
+                # 使用 os.waitpid 的 WNOHANG 选项非阻塞地检查进程状态
+                # 如果进程已经退出，这会回收它
+                wait_pid, status = os.waitpid(pid, os.WNOHANG)
+
+                if wait_pid == pid:
+                    # 进程已退出并被回收
+                    dead_pids.add(pid)
+                    logger.debug(f"回收僵尸进程: PID {pid}")
+                elif wait_pid == 0:
+                    # 进程仍在运行
+                    pass
+            except ChildProcessError:
+                # 进程不存在或已经被回收
+                dead_pids.add(pid)
+            except Exception as e:
+                logger.warning(f"清理进程 {pid} 时出错: {e}")
+                dead_pids.add(pid)
+
+        # 从跟踪集合中移除已回收的 PID
+        self.child_pids -= dead_pids
+
     async def shutdown(self) -> None:
         """
-        关闭沙箱池,清理所有沙箱
+        关闭沙箱池,清理所有沙箱和僵尸进程
         """
         logger.info("开始关闭异步沙箱池")
         self.is_running = False
@@ -184,6 +231,19 @@ class AsyncSandboxPool:
             for sandbox in self.busy_sandboxes.values():
                 await sandbox.terminate()
             self.busy_sandboxes.clear()
+
+        # 最后一次清理所有可能的僵尸进程
+        await self._reap_zombie_processes()
+
+        # 尝试终止所有剩余的子进程
+        for pid in list(self.child_pids):
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except:
+                pass
+
+        # 等待并回收剩余进程
+        await self._reap_zombie_processes()
 
         logger.info("异步沙箱池已关闭")
 

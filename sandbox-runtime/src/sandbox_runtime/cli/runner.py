@@ -33,9 +33,10 @@ class SandboxRunner:
             config = SandboxConfig(
                 allow_network=True,  # Required for daemon communication
                 cpu_quota=300,  # 5 minutes CPU time
-                memory_limit=256 * 1024,  # 256MB memory in KB
+                memory_limit=256
+                * 1024,  # 512MB memory in KB (minimum for pandas-like libraries)
                 max_idle_time=60,  # 1 minute idle time
-                max_user_progress=10,  # Max 10 processes
+                max_user_progress=10,  # Max 100 processes (increased for pandas/numpy)
                 max_task_count=10,  # Max 10 tasks per sandbox
             )
 
