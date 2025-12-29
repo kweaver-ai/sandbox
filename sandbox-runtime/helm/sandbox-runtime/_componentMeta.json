@@ -56,10 +56,6 @@
                         "type": "number",
                         "title": "内存限制 (KB)"
                     },
-                    "allowNetwork": {
-                        "type": "boolean",
-                        "title": "是否允许网络访问"
-                    },
                     "timeoutSeconds": {
                         "type": "number",
                         "title": "执行超时时间（秒）"
