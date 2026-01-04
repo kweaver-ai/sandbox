@@ -4,125 +4,178 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **Sandbox Runtime** platform - a secure, isolated code execution environment designed for running untrusted Python code safely. It is part of a Data Agent platform that needs to execute AI-generated or user-submitted code in isolation.
+This is a **Sandbox Platform** designed for secure code execution in AI agent applications. The project provides isolated execution environments for running untrusted code, with multi-layer security isolation (container + Bubblewrap).
 
-The project consists of two main components:
-1. **Shared Environment Server** (FastAPI-based REST API) - manages sandbox sessions, file operations, and code execution
-2. **SDK** (Python client library) - for interacting with the sandbox from external applications
+**Current State**: This is a design-phase repository. The codebase contains comprehensive technical documentation and architecture specifications, but no implementation code exists yet. The project is in the planning and research phase.
 
 ## Architecture
 
-### Core Design Patterns
+### High-Level Design
 
-**Two-Component Architecture:**
-- `sandbox-runtime/` contains the main implementation with FastAPI server and isolation logic
-- The system supports multiple isolation technologies: `bubblewrap` (lightweight, Linux namespaces) and Docker containers (stronger isolation)
+The system uses a **Control Plane + Runtime** separated architecture:
 
-**Key Modules:**
-- `sandbox-runtime/src/sandbox_runtime/sandbox/` - Core sandbox isolation implementation
-- `sandbox-runtime/src/sandbox_runtime/sandbox/shared_env/` - FastAPI server with REST API
-- `sandbox-runtime/src/sandbox_runtime/sdk/` - Client SDK for sandbox interaction
-- `sandbox-runtime/helm/` - Kubernetes Helm chart for deployment
+- **Control Plane (管理中心)**: FastAPI-based management service handling API requests, scheduling, session management, and monitoring
+- **Runtime (运行时)**: Container execution environment supporting both Docker and Kubernetes modes
+- **Dual-Layer Isolation**: Container isolation (first layer) + Bubblewrap process isolation (second layer)
 
-### Execution Model
+### Key Components
 
-The sandbox uses a **warm pool pattern** for performance:
-- `AsyncSandboxPool` (`sandbox/async_pool.py`) manages pre-warmed sandbox instances
-- `LambdaSandboxExecutor` (`core/executor.py`) executes code in isolated environments
-- Resource limits are enforced via cgroups (CPU quota, memory limits, timeout)
-- Execution results follow a standardized format with `exit_code`, `stdout`, `stderr`, `result`, and `metrics`
+1. **Control Plane Components**:
+   - API Gateway (FastAPI + Uvicorn)
+   - Scheduler with intelligent task distribution (supports ephemeral and persistent session modes)
+   - Session Manager with Redis-backed state
+   - Template Manager for sandbox environment definitions
+   - Health Probe for runtime monitoring
+   - Warm Pool for fast instance startup
 
-### Configuration
+2. **Runtime Components**:
+   - Docker Runtime for local container management
+   - Kubernetes Runtime for orchestrated pod management
+   - Executor (sandbox-executor) - HTTP daemon running inside containers that receives execution requests and spawns Bubblewrap-isolated processes
 
-Environment variables control sandbox behavior:
-- `SANDBOX_CPU_QUOTA` - CPU quota (default: 2)
-- `SANDBOX_MEMORY_LIMIT` - Memory limit in KB (default: 131072)
-- `SANDBOX_ALLOW_NETWORK` - Network access (default: true)
-- `SANDBOX_TIMEOUT_SECONDS` - Execution timeout (default: 300)
-- `SANDBOX_POOL_SIZE` - Warm pool size (default: 2)
+3. **CLI Tool** (`sandbox-run`):
+   - Command-line interface for executing Lambda handler functions locally
+   - Supports event/context data passing, timeout control, and performance profiling
+   - Compatible with AWS Lambda handler specification
 
-## Development Commands
+### Session Modes
 
-### Installation
+The system supports two session modes with different scheduling strategies:
 
-```bash
-# Install dependencies
-cd sandbox-runtime
-pip install -e ".[dev]"
+- **Ephemeral Mode**: One-time execution, container destroyed after completion. Optimal for isolated, stateless tasks.
+- **Persistent Mode**: Long-running session that can accept multiple execution requests. Optimal for interactive workflows and stateful operations.
 
-# Install system dependency for Linux
-sudo apt-get install -y bubblewrap
+### Protocol Design
+
+The Control Plane and Runtime communicate via RESTful API:
+
+```
+# Session Management
+POST   /api/v1/sessions                 # Create session
+GET    /api/v1/sessions/{id}            # Get session details
+DELETE /api/v1/sessions/{id}            # Terminate session
+
+# Execution
+POST   /api/v1/sessions/{id}/execute    # Submit execution task
+GET    /api/v1/sessions/{id}/status     # Query execution status
+GET    /api/v1/sessions/{id}/result     # Get execution results
+
+# Template Management
+POST   /api/v1/templates                # Create template
+GET    /api/v1/templates                # List templates
 ```
 
-### Running the Server
+### Security Model
 
-```bash
-# Development mode
-cd sandbox-runtime
-python -m sandbox_runtime.shared_env.server
+Multi-layer isolation strategy:
 
-# Production mode (from sandbox-runtime directory)
-uvicorn sandbox_runtime.shared_env.server:app --host 0.0.0.0 --port 8000 --workers 4
+1. **Container Layer**: `NetworkMode=none`, `CAP_DROP=ALL`, non-privileged user (UID:GID=1000:1000)
+2. **Bubblewrap Layer**: Namespace isolation (PID/NET/MNT/IPC/UTS), read-only filesystem, seccomp filtering
+3. **Resource Limits**: CPU/Memory quotas, process limits, ulimit constraints
+
+### Tech Stack (Planned)
+
+- **Language**: Python 3.11+
+- **API Framework**: FastAPI + Uvicorn (async)
+- **Container Runtime**: Docker SDK / Kubernetes Python Client
+- **State Storage**: Redis
+- **Result Storage**: S3-compatible object storage
+- **Configuration**: Etcd
+- **Isolation**: Bubblewrap (bwrap)
+- **Monitoring**: Prometheus metrics
+
+## Key Documentation Files
+
+| File | Purpose |
+|------|---------|
+| `docs/sandbox-prd-v2.md` | Product Requirements Document - business requirements and goals |
+| `docs/sandbox-design-v2.1.md` | Main technical design document - C4 architecture, component design, API specs |
+| `docs/sandbox-cli-design.md` | CLI tool specification for local Lambda handler execution |
+| `docs/timeout-feature.md` | Timeout control implementation details |
+| `docs/sandbox-runtime-v1.md` | AWS Lambda-compatible runtime specification |
+| `docs/opensandbox-research.md` | Research on Alibaba OpenSandbox platform |
+| `docs/dify-sandbox-research.md` | Research on DifySandbox implementation |
+| `docs/multi-runtime-feasibility.md` | Multi-runtime architecture feasibility analysis |
+
+## Important Design Decisions
+
+### Scheduler Behavior
+
+The scheduler implements **Agent-affinity scheduling** for persistent sessions to optimize performance:
+- Reuses existing sessions for the same Agent (fastest: 10-50ms)
+- Routes to nodes with cached templates (Agent node history)
+- Uses Warm Pool for common templates
+- Falls back to load-balanced cold start
+
+### Warm Pool Strategy
+
+Pre-instantiated containers are maintained for high-frequency templates:
+- Separate pools for ephemeral and persistent modes
+- Dynamic sizing based on load patterns
+- Idle timeout for resource reclamation
+
+### Timeout Control
+
+Timeout is enforced at multiple levels:
+- API level: `asyncio.wait_for()` with configurable timeout
+- Event parameter: `__timeout` key in event object (default: 300s, max: 3600s)
+- Daemon level: Threading with timeout
+
+The `__timeout` parameter uses double-underscore prefix to avoid conflicts with user business parameters (e.g., a user may have their own `timeout` parameter for business logic).
+
+### CLI Exit Codes
+
+```
+0 = Success
+1 = General error
+2 = File not found or unreadable
+3 = Syntax error or handler undefined
+4 = Execution timeout
+5 = Sandbox initialization failure
 ```
 
-### Testing
+## When This Project Moves to Implementation
 
-```bash
-# Run all tests (from sandbox-runtime directory)
-pytest
+When implementation begins, the expected structure will be:
 
-# Run specific test file
-pytest test/test_sdk.py
-pytest test/test_http_api.py
+```
+sandbox/
+├── control-plane/          # FastAPI control plane service
+│   ├── api/               # API route handlers
+│   ├── scheduler/         # Task scheduling logic
+│   ├── session_manager/   # Session lifecycle management
+│   └── template_manager/  # Template CRUD operations
+├── runtime/               # Runtime container components
+│   ├── docker_runtime.py  # Docker runtime implementation
+│   ├── k8s_runtime.py     # Kubernetes runtime implementation
+│   └── executor/          # sandbox-executor daemon
+├── cli/                   # CLI tool (sandbox-run)
+│   ├── main.py           # CLI entry point
+│   ├── runner.py         # Execution wrapper
+│   └── formatter.py      # Result formatting
+└── sdk/                   # Python SDK for integration
 ```
 
-### Docker
+Common commands (when implemented):
 
 ```bash
-# Build image (from repository root)
-docker build -t sandbox-runtime -f sandbox-runtime/Dockerfile sandbox-runtime
+# Development
+sandbox-run handler.py --event '{"data": "test"}'
+python -m control_plane.main
 
-# Build multi-platform
-docker buildx build -t sandbox-runtime --platform=linux/amd64,linux/arm64 -f sandbox-runtime/Dockerfile sandbox-runtime
+# Testing (expected)
+pytest tests/
+pytest tests/test_scheduler.py -v
+
+# Linting (expected)
+black control_plane/ runtime/
+flake8 control_plane/ runtime/
 ```
 
-### Kubernetes/Helm
+## Design Philosophy
 
-```bash
-# Install Helm chart
-helm install sandbox-runtime ./sandbox-runtime/helm/sandbox-runtime
-
-# Port forward to access service
-kubectl port-forward svc/sandbox-runtime 8000:8000
-```
-
-## Important Implementation Details
-
-### API Structure
-
-All REST endpoints are prefixed with `/workspace/se/`:
-- `POST /workspace/se/session/{session_id}` - Create session
-- `POST /workspace/se/execute_code/{session_id}` - Execute Python code
-- `POST /workspace/se/execute/{session_id}` - Execute shell command
-- `POST /workspace/se/upload/{session_id}` - Upload file
-- `GET /workspace/se/download/{session_id}/{filename}` - Download file
-
-### Code Organization
-
-- `lifespan.py` - FastAPI lifespan management, initializes the global `AsyncSandboxPool` on startup
-- `routes/` - API endpoint handlers organized by function (execution, files, session management)
-- `models/` - Pydantic models for request/response validation
-- `core/executor.py` - Core execution logic that runs code in isolated environments
-
-### Security Considerations
-
-- Code execution is isolated using bubblewrap (Linux) or Docker containers
-- Resource limits are enforced via cgroups to prevent resource exhaustion
-- File operations are restricted to session directories
-- Network access can be disabled per-session via configuration
-
-### Version Management
-
-- Project version is stored in `/VERSION` file
-- Helm chart versioning follows semantic versioning with branch-based tags
-- Docker images are built for both AMD64 and ARM64 architectures
+- **Protocol-Driven**: All communication via standardized RESTful API
+- **Cloud-Native**: Designed for Kubernetes deployment with HPA
+- **Security-First**: Multiple isolation layers, defense-in-depth
+- **Performance**: Warm Pool, async processing, connection pooling
+- **Compatibility**: AWS Lambda handler specification for easy migration
