@@ -2,63 +2,6 @@
 ## 1. 架构设计
 ### 1.1 整体架构
 
-**技术栈选择说明**：
-
-本系统采用 MariaDB 作为主要数据存储，而非传统的 Redis 缓存方案。这一设计选择基于以下考虑：
-
-1. **数据一致性与事务支持**
-   - MariaDB 提供 ACID 事务保证，确保会话状态变更的原子性
-   - 避免缓存与数据库不一致问题
-   - 支持复杂的关系查询和 JOIN 操作
-
-2. **关系型数据模型**
-   - 会话 (sessions)、执行记录 (executions)、模板 (templates) 存在明确的外键关系
-   - 支持级联删除、数据完整性约束
-   - 便于跨表查询和数据分析
-
-3. **持久化与可靠性**
-   - 数据即时持久化到磁盘，无需担心内存数据丢失
-   - 支持主从复制、备份恢复
-   - InnoDB 引擎提供崩溃恢复能力
-
-4. **性能考虑**
-   - MariaDB 11.2+ 的 InnoDB 性能足以支撑高并发场景
-   - 连接池机制减少连接开销
-   - 合理的索引设计保证查询性能
-   - 对于热点数据可应用 MySQL 查询缓存
-
-5. **运维与扩展**
-   - 成熟的监控、备份、高可用方案
-   - 支持读写分离、分库分表等水平扩展方案
-   - 丰富的工具链和社区支持
-
-6. **成本效益**
-   - 相比 Redis + 数据库的双重存储架构，简化了部署
-   - 减少了缓存同步的复杂性
-   - 降低总体拥有成本（TCO）
-
-**性能优化策略**：
-
-为弥补关系型数据库相比内存缓存的性能劣势，系统采用以下优化措施：
-
-1. **连接池管理**：使用 SQLAlchemy 异步连接池（pool_size=50, max_overflow=100）
-2. **索引优化**：在 status、agent_id、template_id、created_at 等高频查询字段建立索引
-3. **查询优化**：使用 SELECT 指定字段而非 SELECT *，避免全表扫描
-4. **批量操作**：支持事务批量插入，减少网络往返
-5. **读写分离**：未来可扩展为主从架构，读操作分流到从库
-
-**适用场景对比**：
-
-| 场景 | Redis 方案 | MariaDB 方案 |
-|------|-----------|--------------|
-| 会话状态存储 | ❌ 需额外持久化 | ✅ 直接持久化 |
-| 关系查询 | ❌ 不支持 | ✅ 天然支持 |
-| 事务保证 | ❌ 有限支持 | ✅ 完整 ACID |
-| 数据分析 | ❌ 需额外工具 | ✅ SQL 支持 |
-| 部署复杂度 | ❌ 需 + DB | ✅ 单一存储 |
-| 极致性能 | ✅ 内存优势 | ✅ 足够快速 |
-| 数据一致性 | ❌ 需同步机制 | ✅ 单一数据源 |
-
 系统采用管理中心（Control Plane）与运行时（Runtime）分离的云原生架构，支持 Docker 和 Kubernetes 两种部署模式。
 核心设计原则：
 
@@ -106,7 +49,7 @@ graph TB
 
 
 #### C4 Level 2: 容器视图
-![alt text](image-1.png)
+![alt text](image-3.png)
 ```mermaid
 graph TB
     subgraph ControlPlane["管理中心 (Control Plane)"]
@@ -132,7 +75,7 @@ graph TB
     
     subgraph Storage["存储层"]
         MariaDB["MariaDB<br/>(会话状态/模板)"]
-        S3["对象存储<br/>(执行结果)"]
+        S3["对象存储 S3<br/>(workspace 文件)"]
         Etcd["Etcd<br/>(配置中心)"]
     end
 
@@ -168,7 +111,16 @@ graph TB
 - 调度器: 智能任务分发和资源调度
 - 会话管理器: 会话生命周期管理
 - 运行时池: Docker/K8s 运行时实例管理
-- 存储层: MariaDB（会话状态/模板）+ S3（结果）+ Etcd（配置）
+- 存储层：
+  - MariaDB（会话状态/模板/执行记录）
+  - S3 对象存储（workspace 文件，通过 Volume 挂载到容器）
+  - Etcd（配置中心）
+
+**存储架构说明**：
+- workspace 目录通过 S3 CSI Driver 或类似机制挂载为容器 Volume
+- 执行时生成的文件直接写入 workspace，自动持久化到 S3
+- MariaDB 存储 stdout、stderr、执行状态和文件列表（artifacts）
+- 下载文件时通过文件 API 直接从 S3 获取
 
 
 ## 2. 关键组件设计
@@ -850,23 +802,28 @@ class DockerRuntime:
                 "CpuQuota": session.resources.cpu_quota,
                 "CpuPeriod": 100000,
                 "PidsLimit": 128,  # 限制最大进程数
-                
+
                 # 网络隔离
                 "NetworkMode": "none",  # 默认完全隔离网络
-                
+
                 # 安全配置
                 "CapDrop": ["ALL"],  # 删除所有 Linux Capabilities
                 "SecurityOpt": [
                     "no-new-privileges",  # 禁止进程获取新权限
                     "seccomp=default.json"  # Seccomp 配置
                 ],
-                
+
+                # Volume 挂载
+                "Binds": [
+                    f"{session.s3_volume_path}:/workspace",  # S3 对象存储通过 FUSE/s3fs 挂载
+                ],
+
                 # 文件系统
                 "ReadonlyRootfs": False,  # 根目录可写（执行器需要）
                 "Tmpfs": {
                     "/tmp": "rw,noexec,nosuid,size=512m",  # 临时目录
                 },
-                
+
                 # 日志配置
                 "LogConfig": {
                     "Type": "json-file",
@@ -1065,8 +1022,9 @@ class K8sRuntime:
                 volumes=[
                     V1Volume(
                         name="workspace",
-                        empty_dir=V1EmptyDirVolumeSource(
-                            size_limit="1Gi"
+                        # 使用 PVC 挂载 S3 对象存储（通过 CSI Driver）
+                        persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                            claim_name=f"sandbox-{sandbox.name}-workspace"
                         )
                     )
                 ],
@@ -1084,6 +1042,41 @@ class K8sRuntime:
             )
         )
 ```
+
+**S3 CSI Driver 配置说明**：
+
+Kubernetes 环境下使用 S3 CSI Driver 将对象存储挂载为 Pod Volume：
+
+```yaml
+# StorageClass 定义
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: s3-storage
+provisioner: s3.csi.aws.com  # 或其他 S3 CSI Driver
+parameters:
+  mounter: geesefs  # 或 goofys、s3fs 等挂载工具
+  region: us-east-1
+  bucket: sandbox-workspace
+
+# PVC 模板（由沙箱系统动态创建）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-{session-id}-workspace
+  namespace: sandbox-system
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: s3-storage
+  resources:
+    requests:
+      storage: 5Gi  # S3 无实际限制，仅为满足 K8s 要求
+```
+
+**注意事项**：
+- S3 挂载性能较本地磁盘慢，适合文件读写不频繁的场景
+- 对于高频读写场景，可考虑使用本地存储 + 异步上传到 S3 的方案
+- 需要配置 IAM Role 或 Secret 提供 S3 访问凭证
 
 ### 2.3 执行器 (Executor)
 
@@ -1121,6 +1114,7 @@ class ExecuteRequest(BaseModel):
     language: str
     timeout: int = 30
     stdin: str = ""
+    execution_id: str  # 执行 ID，用于上报结果
 
 class ExecutionResult(BaseModel):
     status: str
@@ -1134,10 +1128,11 @@ class SandboxExecutor:
     def __init__(self):
         self.workspace = Path("/workspace")
         self.workspace.mkdir(exist_ok=True)
-        
+
         self.session_id = os.environ.get("SESSION_ID")
         self.control_plane_url = os.environ.get("CONTROL_PLANE_URL")
-        
+        self.internal_api_token = os.environ.get("INTERNAL_API_TOKEN")  # 内部 API 认证令牌
+
         # Bubblewrap 配置
         self.bwrap_base_args = [
             "bwrap",
@@ -1147,41 +1142,41 @@ class SandboxExecutor:
             "--ro-bind", "/lib64", "/lib64",
             "--ro-bind", "/bin", "/bin",
             "--ro-bind", "/sbin", "/sbin",
-            
+
             # 工作目录（可写）
             "--bind", str(self.workspace), "/workspace",
             "--chdir", "/workspace",
-            
+
             # 临时目录
             "--tmpfs", "/tmp",
-            
+
             # 最小化的 /proc 和 /dev
             "--proc", "/proc",
             "--dev", "/dev",
-            
+
             # 隔离所有命名空间
             "--unshare-all",
             "--share-net",  # 可选：根据需求决定是否共享网络
-            
+
             # 进程管理
             "--die-with-parent",  # 父进程死亡时自动终止
             "--new-session",
-            
+
             # 环境变量清理
             "--clearenv",
             "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
             "--setenv", "HOME", "/workspace",
             "--setenv", "TMPDIR", "/tmp",
-            
+
             # 安全选项
             "--cap-drop", "ALL",  # 删除所有 capabilities
         ]
     
     async def execute_code(self, request: ExecuteRequest) -> ExecutionResult:
         """执行用户代码（通过 bwrap 隔离）"""
-        
+        execution_id = request.execution_id
         start_time = time.time()
-        
+
         try:
             # 1. 根据语言构建执行命令
             if request.language == "python":
@@ -1255,10 +1250,10 @@ class SandboxExecutor:
                 execution_time=execution_time,
                 artifacts=[]
             )
-        
-        # 4. 上报结果到管理中心
-        await self._report_result(execution_result)
-        
+
+        # 4. 上报结果到管理中心（通过内部 API）
+        await self._report_result(execution_id, execution_result)
+
         return execution_result
     
     def _collect_artifacts(self) -> list[str]:
@@ -1269,17 +1264,22 @@ class SandboxExecutor:
                 artifacts.append(str(file_path.relative_to(self.workspace)))
         return artifacts
     
-    async def _report_result(self, result: ExecutionResult):
-        """上报执行结果到管理中心"""
+    async def _report_result(self, execution_id: str, result: ExecutionResult):
+        """上报执行结果到管理中心（通过内部 API）"""
         try:
+            headers = {}
+            if self.internal_api_token:
+                headers["Authorization"] = f"Bearer {self.internal_api_token}"
+
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{self.control_plane_url}/api/v1/sessions/{self.session_id}/result",
+                    f"{self.control_plane_url}/internal/executions/{execution_id}/result",
                     json=result.dict(),
+                    headers=headers,
                     timeout=10.0
                 )
         except Exception as e:
-            logger.error(f"Failed to report result: {e}")
+            logger.error(f"Failed to report result for execution {execution_id}: {e}")
 
 # FastAPI 端点
 executor = SandboxExecutor()
@@ -1399,7 +1399,7 @@ sequenceDiagram
 ```
 
 ### 3.2 代码执行流程
-![alt text](image-3.png)
+![alt text](image-1.png)
 ```mermaid
 sequenceDiagram
     participant Agent as AI Agent
@@ -1408,37 +1408,42 @@ sequenceDiagram
     participant Runtime as 运行时
     participant Executor as 执行器
     participant DB as MariaDB
-    participant S3 as 对象存储
+    participant Volume as 对象存储<br/>(Volume 挂载)
 
-    Agent->>API: POST /sessions/{id}/execute (code, language)
+    Agent->>API: POST /api/v1/sessions/{session_id}/execute (code, language)
     API->>SessionMgr: get_session(id)
     SessionMgr->>DB: SELECT * FROM sessions WHERE id=?
     DB-->>SessionMgr: 返回会话信息
     SessionMgr-->>API: 返回会话信息
 
-    API->>Runtime: execute_code(session_id, request)
-    Runtime->>Executor: 注入代码并执行
+    API->>DB: INSERT INTO executions (生成 execution_id)
+    DB-->>API: 返回 execution_id
+
+    API->>Runtime: execute_code(session_id, execution_id, request)
+    Runtime->>Executor: 通过容器内 HTTP API 发送执行请求
+
+    Note over Executor,Volume: workspace 目录已通过 Volume 挂载对象存储
 
     par 异步执行
-        Executor->>Executor: 运行代码 (subprocess)
+        Executor->>Executor: 运行代码 (bwrap + subprocess)
         Executor->>Executor: 收集 stdout/stderr
-        Executor->>Executor: 扫描生成的文件
+        Executor->>Volume: 生成文件写入 workspace<br/>(自动持久化到对象存储)
+        Executor->>Executor: 扫描生成的文件列表
     end
 
-    Executor->>API: POST /sessions/{id}/result (execution_result)
-    API->>DB: INSERT INTO executions ...
-    API->>S3: 上传大文件结果
+    Executor->>API: POST /internal/executions/{execution_id}/result
+    API->>DB: UPDATE executions (保存 stdout/stderr/状态/文件列表)
     DB-->>API: 确认保存
-    S3-->>API: 上传完成
     API-->>Executor: 200 OK
 
-    Runtime-->>API: 返回执行 ID
-    API-->>Agent: 返回执行状态
+    API-->>Agent: 返回 execution_id (已提交)
 
-    Agent->>API: GET /sessions/{id}/result
-    API->>DB: SELECT * FROM executions WHERE session_id=?
-    DB-->>API: 返回结果数据
+    Agent->>API: GET /api/v1/executions/{execution_id}/result
+    API->>DB: SELECT * FROM executions WHERE id=?
+    DB-->>API: 返回结果数据 (stdout/stderr/artifacts)
     API-->>Agent: 返回执行结果
+
+    Note over Agent,Volume: 如需下载文件，通过文件 API 从对象存储获取
 ```
 ### 3.3 健康检查与故障恢复流程
 ![alt text](image-4.png)
@@ -1553,48 +1558,127 @@ class RuntimeNode(BaseModel):
 
 ### 4.2 协议定义
 
-#### 4.2.1 控制平面 API
+#### 4.2.1 控制平面 API（外部 API）
+
+**说明**: 由 AI Agent 或上层服务调用的公开 API 接口。
 
 ```
 # 会话管理
-POST   /api/v1/sessions                    # 创建会话
-GET    /api/v1/sessions/{id}               # 获取会话详情
-GET    /api/v1/sessions                    # 列出会话
-DELETE /api/v1/sessions/{id}               # 终止会话
+POST   /api/v1/sessions                           # 创建会话
+GET    /api/v1/sessions/{id}                      # 获取会话详情
+GET    /api/v1/sessions                           # 列出会话
+DELETE /api/v1/sessions/{id}                      # 终止会话
 
 # 代码执行
-POST   /api/v1/sessions/{id}/execute       # 执行代码/命令
-GET    /api/v1/sessions/{id}/status     # 查询执行状态
-GET    /api/v1/sessions/{id}/results       # 获取执行结果
+POST   /api/v1/sessions/{session_id}/execute      # 提交执行任务，返回 execution_id
+GET    /api/v1/sessions/{session_id}/executions   # 列出该会话的所有执行记录
+
+# 执行结果查询（基于 execution_id）
+GET    /api/v1/executions/{execution_id}          # 获取执行详情（包含结果）
+GET    /api/v1/executions/{execution_id}/status   # 获取执行状态（pending/running/completed/failed）
+GET    /api/v1/executions/{execution_id}/result   # 获取执行结果（stdout/stderr/exit_code）
 
 # 文件操作
-POST   /api/v1/sessions/{id}/files/upload  # 上传文件
-GET    /api/v1/sessions/{id}/files/{name}  # 下载文件
+POST   /api/v1/sessions/{id}/files/upload         # 上传文件到会话工作目录
+GET    /api/v1/sessions/{id}/files/{name}         # 下载会话工作目录中的文件
 
 # 模板管理
-POST   /api/v1/templates                   # 创建模板
-GET    /api/v1/templates                   # 列出模板
-GET    /api/v1/templates/{id}              # 获取模板详情
-PUT    /api/v1/templates/{id}              # 更新模板
-DELETE /api/v1/templates/{id}              # 删除模板
+POST   /api/v1/templates                          # 创建模板
+GET    /api/v1/templates                          # 列出模板
+GET    /api/v1/templates/{id}                     # 获取模板详情
+PUT    /api/v1/templates/{id}                     # 更新模板
+DELETE /api/v1/templates/{id}                     # 删除模板
 
 # 运行时管理
-GET    /api/v1/runtimes                    # 列出运行时节点
-GET    /api/v1/runtimes/{id}/health        # 获取节点健康状态
-GET    /api/v1/runtimes/{id}/metrics       # 获取节点指标
+GET    /api/v1/runtimes                           # 列出运行时节点
+GET    /api/v1/runtimes/{id}/health               # 获取节点健康状态
+GET    /api/v1/runtimes/{id}/metrics              # 获取节点指标
 ```
 
+**请求/响应示例**：
 
-### 5.2 运行时 API
+```python
+# 提交执行任务
+POST /api/v1/sessions/{session_id}/execute
+Request:
+{
+    "code": "print('Hello World')",
+    "language": "python",
+    "timeout": 30,
+    "stdin": ""
+}
+
+Response:
+{
+    "execution_id": "exec_1234567890",
+    "status": "submitted",
+    "submitted_at": "2025-01-04T10:30:00Z"
+}
+
+# 查询执行状态
+GET /api/v1/executions/{execution_id}/status
+Response:
+{
+    "execution_id": "exec_1234567890",
+    "session_id": "sess_abc123",
+    "status": "completed",
+    "created_at": "2025-01-04T10:30:00Z",
+    "completed_at": "2025-01-04T10:30:02Z"
+}
+
+# 获取执行结果
+GET /api/v1/executions/{execution_id}/result
+Response:
+{
+    "execution_id": "exec_1234567890",
+    "status": "success",
+    "stdout": "Hello World\n",
+    "stderr": "",
+    "exit_code": 0,
+    "execution_time": 1.234,
+    "artifacts": ["output.txt"]
+}
+```
+
+#### 4.2.2 内部回调 API（由 Executor 调用）
+
+**说明**: 执行器（运行在容器内的 sandbox-executor）调用的内部接口，用于上报执行结果。
 
 ```
-# 运行时内部 API（由控制平面调用）
-POST   /runtime/sessions                   # 创建会话
-POST   /runtime/sessions/{id}/execute      # 执行代码
-DELETE /runtime/sessions/{id}              # 销毁会话
-GET    /runtime/sessions/{id}/status       # 查询状态
-GET    /runtime/health                     # 健康检查
-GET    /runtime/metrics                    # 资源指标
+# 执行结果上报
+POST   /internal/executions/{execution_id}/result    # 上报执行结果（完成/失败/超时）
+POST   /internal/executions/{execution_id}/status    # 上报执行状态变更（running/timeout）
+
+# 请求体示例：
+POST /internal/executions/{execution_id}/result
+{
+    "status": "success",              # success | failed | timeout | error
+    "stdout": "执行输出内容",
+    "stderr": "错误输出内容",
+    "exit_code": 0,
+    "execution_time": 1.234,
+    "artifacts": ["generated_file.txt"]
+}
+```
+
+**安全说明**: 内部 API 应该：
+- 仅在内网/容器网络中可访问
+- 使用认证机制（如 JWT token 或 API Key）
+- 限制仅运行时节点可访问
+
+#### 4.2.3 运行时 API（由 Control Plane 调用）
+
+**说明**: 控制平面调用运行时节点（Docker/K8s Runtime）的接口。
+
+```
+# 运行时会话管理
+POST   /runtime/sessions                          # 在运行时节点创建会话容器
+DELETE /runtime/sessions/{session_id}             # 销毁会话容器
+GET    /runtime/sessions/{session_id}/status      # 查询会话容器状态
+
+# 运行时健康检查
+GET    /runtime/health                            # 运行时节点健康检查
+GET    /runtime/metrics                           # 运行时节点资源指标（CPU/内存/容器数）
 ```
 
 ## 5. Python 依赖配置
