@@ -122,7 +122,132 @@ graph TB
 - MariaDB 存储 stdout、stderr、执行状态和文件列表（artifacts）
 - 下载文件时通过文件 API 直接从 S3 获取
 
+#### 部署架构
+![alt text](image-6.png)
+```mermaid
+graph TB
+    subgraph Internet["🌐 互联网"]
+        User["👤 开发者/Agent系统"]
+    end
+    
+    subgraph K8sCluster["☸️ Kubernetes 集群"]
+        
+        subgraph IngressLayer["入口层"]
+            Ingress["Ingress Controller<br/>Nginx/Traefik"]
+            LB["Load Balancer<br/>L4/L7"]
+        end
+        
+        subgraph ControlPlaneNS["📦 Namespace: sandbox-system"]
+            subgraph ControlPlaneDeployment["Deployment: control-plane"]
+                CP1["Pod: control-plane-1<br/>├─ API Gateway<br/>├─ Scheduler<br/>├─ Session Manager<br/>└─ Health Probe"]
+                CP2["Pod: control-plane-2<br/>├─ API Gateway<br/>├─ Scheduler<br/>├─ Session Manager<br/>└─ Health Probe"]
+                CP3["Pod: control-plane-3<br/>├─ API Gateway<br/>├─ Scheduler<br/>├─ Session Manager<br/>└─ Health Probe"]
+            end
+            
+            CPService["Service: control-plane-svc<br/>Type: ClusterIP<br/>Port: 8000"]
+            
+            HPA["HPA<br/>Min: 3, Max: 10<br/>CPU Target: 70%"]
+        end
+        
+        subgraph RuntimeNS["🔒 Namespace: sandbox-runtime"]
+            
+            subgraph WarmPoolGroup["预热池"]
+                Warm1["Pod: warm-python311-1<br/>Status: Ready<br/>Image: python:3.11-slim"]
+                Warm2["Pod: warm-python311-2<br/>Status: Ready<br/>Image: python:3.11-slim"]
+                Warm3["Pod: warm-nodejs20-1<br/>Status: Ready<br/>Image: node:20-slim"]
+            end
+            
+            subgraph ActiveSandboxGroup["活跃沙箱"]
+                SB1["Pod: sandbox-abc123<br/>├─ Session: abc123<br/>├─ Status: Executing<br/>└─ CPU: 0.8, Mem: 400Mi"]
+                SB2["Pod: sandbox-def456<br/>├─ Session: def456<br/>├─ Status: Idle<br/>└─ CPU: 0.1, Mem: 200Mi"]
+                SB3["Pod: sandbox-xyz789<br/>├─ Session: xyz789<br/>├─ Status: Executing<br/>└─ CPU: 1.0, Mem: 512Mi"]
+            end
+            
+            NetworkPolicy["NetworkPolicy<br/>- 禁止 Pod 间通信<br/>- 仅允许访问管理中心<br/>- 可选白名单外部访问"]
+        end
+        
+        subgraph DataLayer["💾 数据层 - Namespace: data"]
+            
+            subgraph MariaDBCluster["StatefulSet: MariaDB Cluster"]
+                DB1["mariadb-0<br/>Role: Primary"]
+                DB2["mariadb-1<br/>Role: Replica"]
+                DB3["mariadb-2<br/>Role: Replica"]
+            end
+            
+            subgraph EtcdCluster["StatefulSet: Etcd Cluster"]
+                Etcd1["etcd-0"]
+                Etcd2["etcd-1"]
+                Etcd3["etcd-2"]
+            end
+            
+            MariaDBService["Service: mariadb-svc<br/>Port: 3306"]
+            EtcdService["Service: etcd-svc"]
+        end
+        
+    end
+    
+    subgraph ExternalServices["☁️ 外部服务"]
+        S3["S3 / MinIO<br/>- 执行结果存储<br/>- 生成文件存储<br/>- 日志归档"]
+        Registry["Container Registry<br/>- Docker Hub<br/>- Harbor<br/>- 私有镜像仓库"]
+    end
+    
+    User -->|"HTTPS<br/>TLS 1.3"| Ingress
+    Ingress --> LB
+    LB --> CPService
+    CPService --> CP1
+    CPService --> CP2
+    CPService --> CP3
+    
+    HPA -.->|监控副本数| ControlPlaneDeployment
+    
+    CP1 -->|"查询/写入<br/>会话状态 / 元数据"| MariaDBService
+    CP2 -->|"查询/写入<br/>会话状态 / 元数据"| MariaDBService
+    CP3 -->|"查询/写入<br/>会话状态 / 元数据"| MariaDBService
+    
+    MariaDBService --> DB1
+    DB1 -.->|主从复制| DB2
+    DB1 -.->|主从复制| DB3
+    
+    CP1 -->|"读取配置<br/>模板信息"| EtcdService
+    CP2 -->|"读取配置<br/>模板信息"| EtcdService
+    EtcdService --> Etcd1
+    EtcdService --> Etcd2
+    EtcdService --> Etcd3
+    
+    CP1 -.->|"K8s API<br/>调度 Pod"| Warm1
+    CP1 -.->|"K8s API<br/>调度 Pod"| Warm2
+    CP2 -.->|"K8s API<br/>调度 Pod"| Warm3
+    CP2 -.->|"K8s API<br/>创建 Pod"| SB1
+    CP3 -.->|"K8s API<br/>创建 Pod"| SB2
+    CP3 -.->|"K8s API<br/>创建 Pod"| SB3
+    
+    NetworkPolicy -.->|限制| SB1
+    NetworkPolicy -.->|限制| SB2
+    NetworkPolicy -.->|限制| SB3
+    
+    SB1 -->|"上报结果<br/>S3 API"| S3
+    SB2 -->|"上报结果<br/>S3 API"| S3
+    SB3 -->|"上报结果<br/>S3 API"| S3
+    
+    CP1 -.->|"拉取镜像"| Registry
+    Warm1 -.->|"基础镜像"| Registry
+    SB1 -.->|"用户镜像"| Registry
+    
+    
+    classDef ingressStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef controlStyle fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef runtimeStyle fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef dataStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef externalStyle fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+    
+    class Ingress,LB ingressStyle
+    class CP1,CP2,CP3,CPService,HPA controlStyle
+    class Warm1,Warm2,Warm3,SB1,SB2,SB3,NetworkPolicy runtimeStyle
+    class DB1,DB2,DB3,Etcd1,Etcd2,Etcd3,MariaDBService,EtcdService dataStyle
+    class S3,Registry externalStyle
 
+
+```
 ## 2. 关键组件设计
 ### 2.1 管理中心 (Control Plane)
 #### 2.1.1 API Gateway
@@ -155,7 +280,6 @@ GET    /api/v1/templates/{id}           # 获取模板详情
 ```
 class CreateSessionRequest(BaseModel):
     template_id: str
-    mode: Literal["ephemeral", "persistent"] = "ephemeral"
     timeout: int = 300  # 秒
     resources: ResourceLimit
     env_vars: Dict[str, str] = {}
@@ -188,254 +312,139 @@ class ExecutionResult(BaseModel):
 ```
 
 #### 2.1.2 调度器 (Scheduler)
-调度器负责为会话请求选择最优的运行时节点。根据会话模式（临时/持久）采用不同的调度策略，以优化性能和资源利用率。
-会话模式说明：
-1. 临时模式 (Ephemeral Mode)
 
-- 每次执行创建新容器，执行完立即销毁
-- 无状态保留，完全隔离
+调度器负责为会话请求选择最优的运行时节点。系统采用**无状态架构**，容器本身不存储任何数据，所有状态存储在外部 S3 workspace 中。
 
-适用场景：
+**无状态架构说明**：
 
-- 单次独立任务（如格式化文本、简单计算）
-- 大规模并行处理（1000+ 并发独立任务）
-- 高安全要求（执行不可信代码后立即销毁）
-- 无需保持状态的批处理任务
+- 容器完全无状态（数据在 S3 workspace）
+- 容器随时可创建/销毁/重建
+- 节点故障时可无缝迁移到其他节点
+- 调度不依赖历史绑定，基于当前集群状态做最优决策
 
+**调度策略**：
 
+调度原则：
+1. 优先使用预热池实例（快速启动）
+2. 其次考虑模板亲和性（镜像已缓存）
+3. 最后使用负载均衡（新建容器）
 
-2. 持久模式 (Persistent Mode)
+#### 2.1.2.1 预热池优先
 
-- 创建后保持运行，可接受多次执行请求
-- 保留变量、文件系统、已安装依赖
+为常用模板维护预热实例池：
+- 预热实例：已启动的容器，可立即接受执行请求
+- 快速响应（100ms 内）
 
-适用场景：
+#### 2.1.2.2 模板亲和性
 
-- 多轮交互式任务（数据分析、调试、迭代开发）
-- 大型依赖安装（避免重复安装 TensorFlow 等）
-- 状态保持需求（Agent 需要在多次执行间共享数据）
-- 交互式编程体验
+优先选择已缓存镜像的节点：
+- 避免镜像拉取，加快启动速度
+- 启动时间：1-2s（vs 冷启动 2-5s）
 
+#### 2.1.2.3 负载均衡
 
+综合考虑 CPU、内存、会话数：
+- 选择负载最低的节点
+- 确保集群负载均衡
 
-调度策略：
-1. 临时模式调度策略
-```python
-# 临时模式：注重隔离性和并发能力
-- 优先使用预热池实例（快速响应）
-- 负载均衡优先（避免热点节点）
-- 执行完立即回收资源
-- 不考虑节点亲和性（每次全新环境）
-```
-2. 持久模式调度策略
-```python
-# 持久模式：注重状态保持和响应速度
-- Agent 亲和性调度（同一 Agent 的请求调度到同一节点）
-- 模板亲和性调度（优先选择已缓存镜像的节点）
-- 会话复用（检查是否有可复用的活跃会话）
-- 长期占用资源（需要超时回收机制）
-```
-3. 预热池调度
+**调度流程实现**：
 
-```
-- 为常用模板维护预热实例池
-- 临时模式优先使用预热池（快速启动）
-- 持久模式在无可复用会话时使用预热池
-- 动态调整预热池大小（根据负载）
-```
-
-调度流程实现：
 ```python
 class Scheduler:
     def __init__(self):
-        self.agent_session_map = {}  # Agent -> Session 映射
-        self.session_node_map = {}   # Session -> Node 映射
-        self.agent_node_history = {} # Agent -> [Node] 历史记录
-    
+        # 仅跟踪当前运行位置（不用于调度决策）
+        self.session_node_map = {}   # Session ID -> Runtime Node
+
     async def schedule(self, request: CreateSessionRequest) -> RuntimeNode:
-        """根据会话模式选择调度策略"""
-        
-        if request.mode == "persistent":
-            return await self._schedule_persistent(request)
-        else:  # ephemeral
-            return await self._schedule_ephemeral(request)
-    
-    async def _schedule_persistent(self, request: CreateSessionRequest) -> RuntimeNode:
-        """持久模式调度：优先考虑会话复用和节点亲和性"""
-        agent_id = request.agent_id
-        
-        # 1. 检查是否有该 Agent 的活跃持久会话
-        if agent_id in self.agent_session_map:
-            existing_session = self.agent_session_map[agent_id]
-            if existing_session.status == SessionStatus.RUNNING:
-                # 复用现有会话（最快，10-50ms）
-                logger.info(f"Reusing existing session {existing_session.id} for agent {agent_id}")
-                return self.session_node_map[existing_session.id]
-        
-        # 2. 检查该 Agent 最近使用的节点（镜像缓存命中率高）
-        if agent_id in self.agent_node_history:
-            recent_node = self.agent_node_history[agent_id][-1]
-            if self._is_node_healthy(recent_node) and recent_node.has_capacity():
-                logger.info(f"Agent affinity: scheduling to recent node {recent_node.id}")
-                return recent_node
-        
-        # 3. 检查预热池（针对该模板的预热实例）
+        """统一调度逻辑（无状态架构）"""
+
+        # 1. 优先使用预热池（快速启动）
         if warm_instance := await self.warm_pool.acquire(request.template_id):
             logger.info(f"Using warm pool instance for template {request.template_id}")
             return warm_instance.node
-        
-        # 4. 亲和性评分 + 负载均衡
+
+        # 2. 获取所有健康节点
         nodes = await self.health_probe.get_healthy_nodes()
-        best_node = await self._select_best_node_with_affinity(nodes, request)
-        
-        # 5. 记录 Agent 节点历史（用于后续亲和性调度）
-        self._record_agent_node_history(agent_id, best_node)
-        
+
+        # 3. 选择最优节点（负载 + 模板亲和性）
+        best_node = await self._select_best_node(nodes, request)
+
+        logger.info(f"Selected node {best_node.id} for session")
         return best_node
-    
-    async def _schedule_ephemeral(self, request: CreateSessionRequest) -> RuntimeNode:
-        """临时模式调度：优先考虑预热池和负载均衡"""
-        
-        # 1. 优先使用预热池（快速启动）
-        if warm_instance := await self.warm_pool.acquire(request.template_id):
-            logger.info(f"Ephemeral mode: using warm pool instance")
-            # 临时模式使用后立即标记为待回收
-            warm_instance.mark_ephemeral()
-            return warm_instance.node
-        
-        # 2. 负载均衡选择节点（不考虑亲和性）
-        nodes = await self.health_probe.get_healthy_nodes()
-        best_node = await self._select_best_node_by_load(nodes, request)
-        
-        return best_node
-    
-    async def _select_best_node_with_affinity(
-        self, 
-        nodes: List[RuntimeNode], 
+
+    async def _select_best_node(
+        self,
+        nodes: List[RuntimeNode],
         req: CreateSessionRequest
     ) -> RuntimeNode:
-        """持久模式：综合评分（负载 + 亲和性）"""
+        """综合评分（负载 + 模板亲和性）"""
         scored_nodes = [
-            (node, self._calculate_affinity_score(node, req))
+            (node, self._calculate_score(node, req))
             for node in nodes
         ]
-        
+
         best_node = max(scored_nodes, key=lambda x: x[1])[0]
-        
+
         logger.info(
-            f"Selected node {best_node.id} with affinity score "
+            f"Selected node {best_node.id} with score "
             f"{max(scored_nodes, key=lambda x: x[1])[1]:.2f}"
         )
-        
+
         return best_node
-    
-    async def _select_best_node_by_load(
-        self, 
-        nodes: List[RuntimeNode], 
-        req: CreateSessionRequest
-    ) -> RuntimeNode:
-        """临时模式：纯负载均衡"""
-        scored_nodes = [
-            (node, self._calculate_load_score(node))
-            for node in nodes
-        ]
-        
-        best_node = max(scored_nodes, key=lambda x: x[1])[0]
-        return best_node
-    
-    def _calculate_affinity_score(self, node: RuntimeNode, req: CreateSessionRequest) -> float:
-        """计算持久模式的综合评分（负载 + 亲和性）"""
-        
-        # 基础负载评分 (权重 0.6)
-        cpu_score = (1 - node.cpu_usage) * 0.24  # 40% of 60%
-        mem_score = (1 - node.mem_usage) * 0.24  # 40% of 60%
-        session_score = (1 - node.session_count / node.max_sessions) * 0.12  # 20% of 60%
+
+    def _calculate_score(self, node: RuntimeNode, req: CreateSessionRequest) -> float:
+        """计算综合评分（负载 + 模板亲和性）"""
+
+        # 基础负载评分 (权重 0.7)
+        cpu_score = (1 - node.cpu_usage) * 0.28   # 40% of 70%
+        mem_score = (1 - node.mem_usage) * 0.28   # 40% of 70%
+        session_score = (1 - node.session_count / node.max_sessions) * 0.14  # 20% of 70%
         load_score = cpu_score + mem_score + session_score
-        
-        # 亲和性评分 (权重 0.4)
+
+        # 模板亲和性评分 (权重 0.3)
         affinity_score = 0.0
-        
-        # 1. 模板亲和性（镜像已缓存）
+
+        # 模板亲和性（镜像已缓存，启动更快）
         if req.template_id in node.cached_templates:
-            affinity_score += 0.2
-        
-        # 2. Agent 历史节点亲和性
-        if req.agent_id and node.id in self._get_agent_history_nodes(req.agent_id):
-            affinity_score += 0.15
-        
-        # 3. 同模板会话亲和性（节点擅长此类任务）
-        same_template_sessions = node.get_sessions_by_template(req.template_id)
-        affinity_score += min(len(same_template_sessions) * 0.025, 0.05)
-        
+            affinity_score += 0.3
+
         return load_score + affinity_score
-    
-    def _calculate_load_score(self, node: RuntimeNode) -> float:
-        """计算临时模式的纯负载评分"""
-        cpu_score = (1 - node.cpu_usage) * 0.4
-        mem_score = (1 - node.mem_usage) * 0.4
-        session_score = (1 - node.session_count / node.max_sessions) * 0.2
-        
-        return cpu_score + mem_score + session_score
-    
-    def _record_agent_node_history(self, agent_id: str, node: RuntimeNode):
-        """记录 Agent 使用节点的历史（用于亲和性调度）"""
-        if agent_id not in self.agent_node_history:
-            self.agent_node_history[agent_id] = []
-        
-        # 保留最近 5 个节点记录
-        self.agent_node_history[agent_id].append(node)
-        if len(self.agent_node_history[agent_id]) > 5:
-            self.agent_node_history[agent_id].pop(0)
-    
-    def _get_agent_history_nodes(self, agent_id: str) -> List[str]:
-        """获取 Agent 历史使用过的节点 ID 列表"""
-        if agent_id not in self.agent_node_history:
-            return []
-        return [node.id for node in self.agent_node_history[agent_id]]
 ```
 
-性能优化说明：
-
-1. 持久模式的优化路径
-
-```
-
-最优：会话复用（10-50ms）
-     ↓ 无可复用会话
-   次优：Agent 亲和节点（100-500ms，镜像已缓存）
-     ↓ 节点无容量
-   良好：预热池实例（500ms-1s）
-     ↓ 预热池耗尽
-   可接受：冷启动（2-5s）
-```
-
-2. 临时模式的优化路径
+**性能优化路径**：
 
 ```
 最优：预热池实例（100ms）
      ↓ 预热池耗尽
-   可接受：负载均衡冷启动（2-5s）
+   次优：模板亲和节点（1-2s，镜像缓存但容器未预热）
+     ↓ 无缓存
+   可接受：冷启动（2-5s）
 ```
 
-3. 预热池策略
+**无状态架构优势**：
 
-```
+- 节点故障时可在其他节点重建容器
+- 调度更灵活，无历史绑定
+- 支持会话迁移
+- 完全弹性扩展
+
+**预热池策略**：
+
+```python
 WARM_POOL_CONFIG = {
-       # 高频模板（如 Python 数据分析）
-       "python-datascience": {
-           "ephemeral_pool_size": 20,   # 临时模式预留
-           "persistent_pool_size": 10,   # 持久模式预留
-           "min_size": 15,
-           "max_idle_time": 300
-       },
-       # 低频模板
-       "nodejs-basic": {
-           "ephemeral_pool_size": 5,
-           "persistent_pool_size": 3,
-           "min_size": 3,
-           "max_idle_time": 180
-       }
-   }
+    # 高频模板（如 Python 数据分析）
+    "python-datascience": {
+        "pool_size": 20,           # 预热池大小
+        "min_size": 10,            # 最小保留
+        "max_idle_time": 300       # 最大空闲时间（秒）
+    },
+    # 低频模板
+    "nodejs-basic": {
+        "pool_size": 5,
+        "min_size": 3,
+        "max_idle_time": 180
+    }
+}
 ```
 
 #### 2.1.3 会话管理器 (Session Manager)
@@ -451,25 +460,26 @@ WARM_POOL_CONFIG = {
 CREATE TABLE sessions (
     id VARCHAR(64) PRIMARY KEY,
     template_id VARCHAR(64) NOT NULL,
-    agent_id VARCHAR(128),
     status ENUM('creating', 'running', 'completed', 'failed', 'timeout', 'terminated') NOT NULL,
-    mode ENUM('ephemeral', 'persistent') NOT NULL DEFAULT 'ephemeral',
     runtime_type ENUM('docker', 'kubernetes') NOT NULL,
-    runtime_node VARCHAR(128),
-    container_id VARCHAR(128),
-    pod_name VARCHAR(128),
+    runtime_node VARCHAR(128),           -- 当前运行的节点（可为空，支持会话迁移）
+    container_id VARCHAR(128),           -- 当前容器 ID
+    pod_name VARCHAR(128),               -- 当前 Pod 名称
+    workspace_path VARCHAR(256),         -- S3 路径：s3://bucket/sessions/{session_id}/
     resources_cpu VARCHAR(16),
     resources_memory VARCHAR(16),
     resources_disk VARCHAR(16),
     env_vars JSON,
     timeout INT NOT NULL DEFAULT 300,
+    last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 最后活动时间（用于自动清理）
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL,
     INDEX idx_status (status),
-    INDEX idx_agent (agent_id),
     INDEX idx_template (template_id),
-    INDEX idx_created (created_at)
+    INDEX idx_created (created_at),
+    INDEX idx_runtime_node (runtime_node),  -- 支持节点故障时查询会话
+    INDEX idx_last_activity (last_activity_at)  -- 支持自动清理查询
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 执行记录表
@@ -526,18 +536,18 @@ class SessionDB(Base):
 
     id = Column(String(64), primary_key=True)
     template_id = Column(String(64), nullable=False)
-    agent_id = Column(String(128))
     status = Column(Enum("creating", "running", "completed", "failed", "timeout", "terminated"), nullable=False)
-    mode = Column(Enum("ephemeral", "persistent"), nullable=False, default="ephemeral")
     runtime_type = Column(Enum("docker", "kubernetes"), nullable=False)
     runtime_node = Column(String(128))
     container_id = Column(String(128))
     pod_name = Column(String(128))
+    workspace_path = Column(String(256))  # S3 路径：s3://bucket/sessions/{session_id}/
     resources_cpu = Column(String(16))
     resources_memory = Column(String(16))
     resources_disk = Column(String(16))
     env_vars = Column(JSON)
     timeout = Column(Integer, default=300)
+    last_activity_at = Column(DateTime, nullable=False, default=datetime.now)  # 最后活动时间
     created_at = Column(DateTime, nullable=False, default=datetime.now)
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
     completed_at = Column(DateTime, nullable=True)
@@ -564,17 +574,19 @@ class SessionManager:
         # 2. 调度运行时
         runtime_node = await self.scheduler.schedule(request)
 
-        # 3. 创建数据库事务
+        # 3. 生成 S3 workspace 路径
+        workspace_path = f"s3://{self.s3_bucket}/sessions/{session_id}/"
+
+        # 4. 创建数据库事务
         async with self.async_session() as db:
             # 创建会话记录
             session_db = SessionDB(
                 id=session_id,
                 template_id=request.template_id,
-                agent_id=request.agent_id,
                 status=SessionStatus.CREATING,
-                mode=request.mode,
                 runtime_type=runtime_node.type,
                 runtime_node=runtime_node.id,
+                workspace_path=workspace_path,
                 resources_cpu=request.resources.cpu,
                 resources_memory=request.resources.memory,
                 resources_disk=request.resources.disk,
@@ -641,35 +653,97 @@ class SessionManager:
             session_db.completed_at = datetime.now()
             await db.commit()
 
-            # 回收到 Warm Pool（如果是持久模式）
-            if session_db.mode == "persistent":
+            # 回收到 Warm Pool（如果容器仍然健康）
+            if await self._is_container_healthy(session_db):
                 await self.warm_pool.recycle(self._db_to_pydantic(session_db))
 
-    async def get_active_sessions_by_agent(self, agent_id: str) -> List[Session]:
-        """获取指定 Agent 的所有活跃会话（用于持久模式会话复用）"""
-        async with self.async_session() as db:
-            result = await db.execute(
-                select(SessionDB)
-                .where(SessionDB.agent_id == agent_id)
-                .where(SessionDB.status == SessionStatus.RUNNING)
-                .where(SessionDB.mode == "persistent")
-                .order_by(SessionDB.created_at.desc())
+    async def execute_code(self, session_id: str, request: ExecuteRequest) -> str:
+        """执行代码，自动处理容器重建"""
+        session = await self.get_session(session_id)
+
+        # 检查容器是否存活，如果已销毁则自动重建
+        if not await self._is_container_alive(session):
+            logger.info(f"Container for session {session_id} not alive, recreating...")
+            await self._recreate_container(session)
+
+        # 更新最后活动时间
+        await self._update_last_activity(session_id)
+
+        # 调用运行时执行代码
+        runtime_node = await self.scheduler.get_node(session.runtime_node)
+        execution_id = await runtime_node.execute(session_id, request)
+
+        return execution_id
+
+    async def _is_container_alive(self, session: Session) -> bool:
+        """检查容器是否存活"""
+        try:
+            runtime_node = await self.scheduler.get_node(session.runtime_node)
+            return await runtime_node.is_container_alive(session.container_id)
+        except Exception:
+            return False
+
+    async def _is_container_healthy(self, session_db: SessionDB) -> bool:
+        """检查容器是否健康（用于回收判断）"""
+        try:
+            runtime_node = await self.scheduler.get_node(session_db.runtime_node)
+            return await runtime_node.is_container_healthy(session_db.container_id)
+        except Exception:
+            return False
+
+    async def _recreate_container(self, session: Session):
+        """重建容器（共享同一个 S3 workspace）"""
+        # 重新调度到最优节点
+        runtime_node = await self.scheduler.schedule(
+            CreateSessionRequest(
+                template_id=session.template_id,
+                resources=session.resources,
+                env_vars=session.env_vars,
+                timeout=session.timeout
             )
-            sessions_db = result.scalars().all()
-            return [self._db_to_pydantic(s) for s in sessions_db]
+        )
+
+        # 创建新容器，挂载同一个 S3 workspace
+        container_id = await runtime_node.create_container(
+            session_id=session.id,
+            workspace_path=session.workspace_path
+        )
+
+        # 更新数据库中的容器信息
+        async with self.async_session() as db:
+            await db.execute(
+                update(SessionDB)
+                .where(SessionDB.id == session.id)
+                .values(
+                    runtime_node=runtime_node.id,
+                    container_id=container_id,
+                    status=SessionStatus.RUNNING,
+                    updated_at=datetime.now()
+                )
+            )
+            await db.commit()
+
+    async def _update_last_activity(self, session_id: str):
+        """更新最后活动时间（用于自动清理）"""
+        async with self.async_session() as db:
+            await db.execute(
+                update(SessionDB)
+                .where(SessionDB.id == session_id)
+                .values(last_activity_at=datetime.now())
+            )
+            await db.commit()
 
     def _db_to_pydantic(self, session_db: SessionDB) -> Session:
         """将 SQLAlchemy 模型转换为 Pydantic 模型"""
         return Session(
             id=session_db.id,
             template_id=session_db.template_id,
-            agent_id=session_db.agent_id,
             status=SessionStatus(session_db.status),
-            mode=session_db.mode,
             runtime_type=session_db.runtime_type,
             runtime_node=session_db.runtime_node,
             container_id=session_db.container_id,
             pod_name=session_db.pod_name,
+            workspace_path=session_db.workspace_path,
             resources=ResourceLimit(
                 cpu=session_db.resources_cpu,
                 memory=session_db.resources_memory,
@@ -681,15 +755,59 @@ class SessionManager:
             timeout=session_db.timeout
         )
 
-    async def cleanup_expired_sessions(self):
-        """定期清理过期会话（后台任务）"""
+    async def cleanup_idle_sessions(self):
+        """定期清理空闲会话（后台任务）
+
+        清理策略：
+        - 空闲超过 30 分钟自动销毁容器
+        - 创建超过 6 小时强制销毁
+        """
         async with self.async_session() as db:
-            expiry_threshold = datetime.now() - timedelta(hours=24)
+            # 空闲超时清理
+            idle_threshold = datetime.now() - timedelta(minutes=30)
+            idle_sessions = await db.execute(
+                select(SessionDB)
+                .where(SessionDB.status == SessionStatus.RUNNING)
+                .where(SessionDB.last_activity_at < idle_threshold)
+            )
+            idle_sessions = idle_sessions.scalars().all()
+
+            for session_db in idle_sessions:
+                logger.info(f"Cleaning up idle session {session_db.id}")
+                await self._destroy_session_container(session_db.id, session_db)
+
+            # 最大生命周期强制清理
+            max_lifetime_threshold = datetime.now() - timedelta(hours=6)
+            old_sessions = await db.execute(
+                select(SessionDB)
+                .where(SessionDB.status == SessionStatus.RUNNING)
+                .where(SessionDB.created_at < max_lifetime_threshold)
+            )
+            old_sessions = old_sessions.scalars().all()
+
+            for session_db in old_sessions:
+                logger.info(f"Cleaning up old session {session_db.id}")
+                await self._destroy_session_container(session_db.id, session_db)
+
+    async def _destroy_session_container(self, session_id: str, session_db: SessionDB):
+        """销毁会话容器"""
+        try:
+            runtime_node = await self.scheduler.get_node(session_db.runtime_node)
+            await runtime_node.destroy_container(session_id, session_db.container_id)
+        except Exception as e:
+            logger.warning(f"Failed to destroy container for session {session_id}: {e}")
+
+        # 更新数据库状态
+        async with self.async_session() as db:
             await db.execute(
                 update(SessionDB)
-                .where(SessionDB.status == SessionStatus.COMPLETED)
-                .where(SessionDB.completed_at < expiry_threshold)
-                .values(status=SessionStatus.ARCHIVED)
+                .where(SessionDB.id == session_id)
+                .values(
+                    status=SessionStatus.TERMINATED,
+                    completed_at=datetime.now(),
+                    container_id=None,  # 清空容器 ID
+                    runtime_node=None
+                )
             )
             await db.commit()
 ```
@@ -1156,7 +1274,7 @@ class SandboxExecutor:
 
             # 隔离所有命名空间
             "--unshare-all",
-            "--share-net",  # 可选：根据需求决定是否共享网络
+            "--unshare-net",  # 可选：根据需求决定是否共享网络
 
             # 进程管理
             "--die-with-parent",  # 父进程死亡时自动终止
@@ -1517,7 +1635,6 @@ class Session(BaseModel):
     id: str
     template_id: str
     status: SessionStatus
-    mode: str  # "ephemeral" or "persistent"
     runtime_type: str  # "docker" or "kubernetes"
     runtime_node: str  # 节点 ID
     container_id: Optional[str]
@@ -1538,9 +1655,19 @@ class Execution(BaseModel):
     stderr: str
     exit_code: int
     execution_time: float  # 执行耗时（秒）
-    artifacts: List[str]  # 生成的文件路径
+    artifacts: List[Artifact]  # 生成的文件元数据列表
     created_at: datetime
     completed_at: Optional[datetime]
+
+class Artifact(BaseModel):
+    """文件元数据模型"""
+    path: str  # 相对于 workspace 的文件路径，如 "results/output.csv"
+    size: int  # 文件大小（字节）
+    mime_type: str  # MIME 类型，如 "text/csv"
+    type: Literal["artifact", "log", "output"]  # 文件类型
+    created_at: datetime  # 创建时间
+    checksum: Optional[str] = None  # SHA256 校验和（可选）
+    download_url: Optional[str] = None  # 下载 URL（预签名 S3 URL）
 
 class RuntimeNode(BaseModel):
     id: str
@@ -1680,6 +1807,605 @@ GET    /runtime/sessions/{session_id}/status      # 查询会话容器状态
 GET    /runtime/health                            # 运行时节点健康检查
 GET    /runtime/metrics                           # 运行时节点资源指标（CPU/内存/容器数）
 ```
+
+### 4.3 执行语义与幂等性模型
+
+#### 4.3.1 execution_id 生命周期
+
+每个代码执行请求都会被分配一个唯一的 `execution_id`，用于追踪整个执行过程。
+
+**execution_id 生成规则**:
+```python
+execution_id = f"exec_{timestamp}_{uuid4()[:8]}"
+# 示例: exec_20240115_abc12345
+```
+
+**生命周期状态机**:
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: 创建 execution_id
+    Pending --> Running: Executor 开始执行
+    Running --> Completed: 执行成功
+    Running --> Failed: 执行失败（语法错误/运行时错误）
+    Running --> Timeout: 超时
+    Running --> Crashed: Executor 崩溃
+    Crashed --> Running: 自动重试（最多 3 次）
+    Crashed --> Failed: 重试次数耗尽
+    Completed --> [*]
+    Failed --> [*]
+    Timeout --> [*]
+```
+
+**状态说明**:
+
+| 状态 | 说明 | 可否重试 |
+|------|------|----------|
+| `pending` | 已创建，等待 Executor 接收 | 是 |
+| `running` | Executor 正在执行 | 否 |
+| `completed` | 执行成功完成 | 否 |
+| `failed` | 执行失败（用户代码错误） | 否 |
+| `timeout` | 执行超时 | 可选（由调用方决定） |
+| `crashed` | Executor 进程崩溃 | 是（自动重试） |
+
+#### 4.3.2 幂等性保证
+
+**At-Least-Once 语义**:
+- 系统保证每个执行请求**至少被执行一次**
+- 在网络故障、Executor 崩溃等场景下可能会执行多次
+- 调用方应设计幂等处理逻辑
+
+**Exactly-Once 语义（有限保证）**:
+- 在正常情况下（无崩溃、无网络分区），每个 execution_id 只执行一次
+- 通过数据库唯一约束和状态机保证：
+  ```sql
+  CREATE UNIQUE INDEX idx_execution_id ON executions(id);
+  ```
+
+**幂等性建议**:
+1. **调用方层面**:
+   - 对于有副作用的操作（如写文件），应先检查是否已存在
+   - 使用幂等键（idempotency key）去重
+
+2. **平台层面**:
+   - 相同 execution_id 的重复提交返回已有结果
+   - 文件写入使用原子操作（重命名而非覆盖）
+
+```python
+# 示例：幂等文件写入
+def write_output(filename: str, content: str):
+    tmp_file = f"{filename}.tmp.{uuid4()}"
+    with open(tmp_file, 'w') as f:
+        f.write(content)
+    os.rename(tmp_file, filename)  # 原子操作
+```
+
+#### 4.3.3 重试机制
+
+**自动重试条件**:
+- Executor 进程崩溃（exit_code = -1 或信号终止）
+- 网络通信失败（超过 3 次心跳超时）
+- 容器异常退出（非用户代码导致的失败）
+
+**重试策略**:
+```python
+class RetryPolicy:
+    max_attempts: int = 3  # 最大重试次数
+    backoff_base: float = 1.0  # 退避基数（秒）
+    backoff_factor: float = 2.0  # 退避因子
+    max_backoff: float = 10.0  # 最大退避时间
+
+    def get_delay(attempt: int) -> float:
+        """计算第 N 次重试的延迟时间"""
+        delay = backoff_base * (backoff_factor ** (attempt - 1))
+        return min(delay, max_backoff)
+
+# 重试延迟序列: 1s, 2s, 4s, 8s, 10s, 10s, ...
+```
+
+**不重试的场景**:
+- 用户代码错误（语法错误、ImportError、NameError 等）
+- 超时（timeout 状态）
+- 显式取消（调用方主动终止）
+- 重试次数已达上限
+
+**重试执行流程**:
+```python
+async def retry_execution_if_needed(execution_id: str) -> bool:
+    """判断并执行重试"""
+    execution = await db.get_execution(execution_id)
+
+    if execution.status != ExecutionStatus.CRASHED:
+        return False
+
+    if execution.retry_count >= MAX_RETRY_ATTEMPTS:
+        await mark_failed(execution_id, reason="Max retries exceeded")
+        return False
+
+    # 计算退避延迟
+    delay = RetryPolicy.get_delay(execution.retry_count + 1)
+    await asyncio.sleep(delay)
+
+    # 重新调度到相同 session（复用 workspace）
+    await scheduler.resubmit(execution.session_id, execution_id)
+
+    # 更新重试计数
+    execution.retry_count += 1
+    await db.commit()
+
+    return True
+```
+
+#### 4.3.4 Executor 崩溃处理
+
+**崩溃检测机制**:
+
+1. **心跳检测**:
+   ```python
+   # Executor 每 5 秒发送一次心跳
+   async def heartbeat_loop(execution_id: str):
+       while True:
+           await api.post(f"/internal/executions/{execution_id}/heartbeat")
+           await asyncio.sleep(5)
+
+   # Control Plane 15 秒未收到心跳则判定为崩溃
+   HEARTBEAT_TIMEOUT = 15
+   ```
+
+2. **容器状态监控**:
+   ```python
+   # 健康探针检查容器状态
+   async def check_container_health(container_id: str):
+       container = docker.containers.get(container_id)
+       status = container.status
+
+       if status in {"exited", "dead"}:
+           return "crashed"
+       elif status == "running":
+           return "healthy"
+       else:
+           return "unknown"
+   ```
+
+**崩溃恢复流程**:
+```mermaid
+flowchart TD
+    A[检测到崩溃] --> B{崩溃类型}
+    B -->|容器退出| C[标记为 crashed]
+    B -->|心跳超时| D[检查容器状态]
+
+    D -->|容器正常运行| E[恢复心跳]
+    D -->|容器已退出| C
+
+    C --> F{重试次数 < 3?}
+    F -->|是| G[延迟后重试]
+    F -->|否| H[标记为 failed]
+
+    G --> I[创建新容器/复用 session]
+    I --> J[重新执行相同代码]
+    J --> K{执行成功?}
+    K -->|是| L[标记为 completed]
+    K -->|否| C
+```
+
+**数据一致性保证**:
+
+1. **执行结果幂等上报**:
+   ```python
+   # Executor 使用幂等键上报结果
+   async def report_result(execution_id: str, result: ExecutionResult):
+       await api.post(
+           f"/internal/executions/{execution_id}/result",
+           json=result.dict(),
+           headers={"Idempotency-Key": f"{execution_id}_result"}
+       )
+   ```
+
+2. **Artifact 文件原子化**:
+   - 文件先写入临时目录 `.tmp/{execution_id}/`
+   - 执行完成后原子移动到 workspace
+   - 崩溃时临时文件自动清理
+
+3. **数据库事务隔离**:
+   ```sql
+   -- 使用乐观锁防止并发更新
+   UPDATE executions
+   SET status = 'completed',
+       version = version + 1
+   WHERE id = ? AND version = ?;
+   ```
+
+#### 4.3.5 执行结果查询
+
+**最终一致性**:
+- 执行完成后结果通常在 100ms 内可查询
+- 在高负载下可能有 1-2 秒延迟
+- 调用方应使用轮询或 Webhook 获取结果
+
+**推荐查询模式**:
+```python
+async def wait_for_result(execution_id: str, timeout: int = 60) -> ExecutionResult:
+    """等待执行结果（带超时）"""
+    start = time.time()
+
+    while True:
+        result = await api.get(f"/api/v1/executions/{execution_id}")
+
+        if result["status"] in {"completed", "failed", "timeout"}:
+            return result
+
+        if time.time() - start > timeout:
+            raise TimeoutError(f"Execution {execution_id} query timeout")
+
+        await asyncio.sleep(0.5)  # 退避轮询
+```
+
+#### 4.3.6 失败恢复路径
+
+本节描述各种故障场景下的恢复机制，确保系统在各种异常情况下的可用性和数据一致性。
+
+**故障分类**:
+
+| 故障类型 | 影响范围 | 恢复策略 | 数据一致性 |
+|----------|----------|----------|------------|
+| Control Plane 重启 | 所有正在进行的请求 | 数据库状态恢复 + 运行时重连 | 强一致性 |
+| Executor 崩溃 | 单个执行任务 | 自动重试（最多 3 次） | At-Least-Once |
+| Pod Eviction | 整个沙箱 Pod | 透明重建 + 复用 workspace | At-Least-Once |
+| 网络分区 | 部分节点不可达 | 自动重路由 + 超时重试 | 最终一致性 |
+| 节点故障 | 节点上所有 Pod | 调度到其他节点 + 重建 | 最终一致性 |
+| 数据库故障 | 所有元数据操作 | 只读模式 + 重试 | 强一致性 |
+
+**场景 1: Control Plane 重启**
+
+```mermaid
+flowchart TD
+    A[Control Plane 重启] --> B[从数据库恢复状态]
+    B --> C{检查 running 状态的 executions}
+
+    C --> D[查询 last_heartbeat_at]
+    D --> E{心跳超时?}
+
+    E -->|是| F[标记为 crashed]
+    E -->|否| G[保持 running 状态]
+
+    F --> H[触发重试逻辑]
+    G --> I[等待 Executor 上报结果]
+
+    H --> J[检查 session 容器状态]
+    J --> K{容器存在?}
+    K -->|是| L[复用现有容器]
+    K -->|否| M[创建新容器]
+
+    L --> N[重新执行代码]
+    M --> N
+```
+
+**恢复流程**:
+
+1. **启动时状态恢复**:
+   ```python
+   async def recover_on_startup():
+       """Control Plane 启动时恢复状态"""
+
+       # 1. 查找所有 running 状态的执行
+       running_executions = await db.query(
+           SELECT * FROM executions
+           WHERE status = 'running'
+       )
+
+       for execution in running_executions:
+           # 2. 检查心跳时间
+           if execution.last_heartbeat_at < heartbeat_threshold():
+               # 心跳超时，标记为崩溃
+               await mark_crashed(execution.id)
+               # 触发重试
+               await retry_execution_if_needed(execution.id)
+
+       # 3. 检查 session 容器状态
+       sessions = await db.query(
+           SELECT * FROM sessions
+           WHERE status = 'running'
+       )
+
+       for session in sessions:
+           is_alive = await check_container_status(session.container_id)
+           if not is_alive:
+               # 容器已消失，标记为待重建
+               await mark_session_unhealthy(session.id)
+   ```
+
+2. **运行时连接恢复**:
+   ```python
+   async def reconnect_runtime_nodes():
+       """重新连接所有运行时节点"""
+       nodes = await db.query(SELECT * FROM runtime_nodes)
+
+       for node in nodes:
+           try:
+               # 发送健康检查
+               await node.health_check()
+               node.status = "healthy"
+           except Exception:
+               node.status = "unhealthy"
+
+       await db.commit()
+   ```
+
+**场景 2: Pod Eviction / 节点 Drain**
+
+当 Kubernetes 节点需要维护（如升级内核）时，Pod 会被主动驱逐。
+
+```mermaid
+flowchart TD
+    A[Kubernetes 发出 Eviction 信号] --> B[Pod 收到 SIGTERM]
+    B --> C[Executor 尝试优雅关闭]
+
+    C --> D{正在执行的任务?}
+    D -->|是| E[标记当前执行为 crashed]
+    D -->|否| F[直接退出]
+
+    E --> F
+    F --> G[Pod 被删除]
+
+    G --> H[Control Plane 检测到 Pod 消失]
+    H --> I[从数据库查询 session 信息]
+
+    I --> J[调度到新节点]
+    J --> K[创建新 Pod + 挂载同一 S3 workspace]
+
+    K --> L[恢复 crashed 状态的 executions]
+    L --> M[自动重试执行]
+```
+
+**恢复机制**:
+
+1. **优雅关闭处理**:
+   ```python
+   # Executor 收到 SIGTERM 时的处理
+   async def handle_shutdown():
+       # 1. 标记所有正在执行的任务为 crashed
+       running_executions = get_running_executions()
+       for exec_id in running_executions:
+           await mark_crashed_via_callback(exec_id)
+
+       # 2. 清理临时文件
+       cleanup_temp_files()
+
+       # 3. 最多等待 10 秒后强制退出
+       await asyncio.sleep(10)
+       sys.exit(143)  # SIGTERM exit code
+   ```
+
+2. **跨节点会话恢复**:
+   ```python
+   async def recover_session_on_eviction(session_id: str):
+       """Pod 驱逐后恢复会话"""
+       session = await db.get_session(session_id)
+
+       # 1. 调度到新的健康节点
+       new_node = await scheduler.select_best_node(session.template_id)
+
+       # 2. 在新节点上创建容器，挂载同一 S3 workspace
+       new_container_id = await new_node.create_container(
+           session_id=session_id,
+           workspace_path=session.workspace_path,  # 复用 S3 路径
+           template_id=session.template_id
+       )
+
+       # 3. 更新 session 记录
+       session.runtime_node = new_node.id
+       session.container_id = new_container_id
+       await db.commit()
+
+       # 4. 恢复所有 crashed 状态的执行
+       crashed_executions = await db.query(
+           SELECT * FROM executions
+           WHERE session_id = ? AND status = 'crashed'
+       )
+
+       for execution in crashed_executions:
+           await retry_execution_if_needed(execution.id)
+   ```
+
+**场景 3: 网络分区**
+
+网络分区可能导致 Control Plane 与 Runtime 节点、Executor 之间通信中断。
+
+```mermaid
+flowchart TD
+    A[网络分区发生] --> B{哪些节点受影响?}
+
+    B -->|Runtime 节点不可达| C[标记节点为 unhealthy]
+    B -->|Executor 心跳丢失| D[标记执行为 crashed]
+    B -->|Control Plane 不可达| E[Executor 本地持久化结果]
+
+    C --> F[停止向该节点调度新任务]
+    D --> G[触发重试逻辑]
+    E --> H[网络恢复后重试上报]
+
+    F --> I[等待网络恢复]
+    G --> I
+    H --> I
+
+    I --> J{网络恢复?}
+    J -->|是| K[恢复正常调度]
+    J -->|否| L[超时后标记为 failed]
+```
+
+**处理策略**:
+
+1. **超时与重试配置**:
+   ```python
+   class NetworkConfig:
+       # HTTP 客户端配置
+       connect_timeout: float = 5.0  # 连接超时
+       read_timeout: float = 30.0    # 读取超时
+       max_retries: int = 3          # 最大重试次数
+
+       # 心跳配置
+       heartbeat_interval: float = 5.0    # 心跳间隔
+       heartbeat_timeout: float = 15.0    # 心跳超时
+
+       # 节点健康检查
+       health_check_interval: float = 10.0
+       node_unhealthy_threshold: int = 3  # 连续失败次数阈值
+   ```
+
+2. **Executor 本地持久化**:
+   ```python
+   # Executor 在 Control Plane 不可达时本地保存结果
+   async def report_result_with_fallback(execution_id: str, result: ExecutionResult):
+       try:
+           await api.post(f"/internal/executions/{execution_id}/result", json=result)
+       except Exception as e:
+           # 网络失败，本地持久化
+           local_path = f"/tmp/results/{execution_id}.json"
+           with open(local_path, 'w') as f:
+               json.dump(result.dict(), f)
+
+           # 后台重试任务
+           asyncio.create_task(retry_report_when_available(execution_id, local_path))
+
+   async def retry_report_when_available(execution_id: str, local_path: str):
+       while True:
+           try:
+               with open(local_path, 'r') as f:
+                   result = json.load(f)
+               await api.post(f"/internal/executions/{execution_id}/result", json=result)
+               os.remove(local_path)  # 上报成功，删除本地文件
+               break
+           except Exception:
+               await asyncio.sleep(5)  # 5 秒后重试
+   ```
+
+**场景 4: 数据库故障**
+
+```mermaid
+flowchart TD
+    A[检测到数据库故障] --> B{故障类型}
+
+    B -->|连接失败| C[切换到备用数据库]
+    B -->|主从切换| D[更新连接池指向新主库]
+    B -->|完全不可用| E[进入只读降级模式]
+
+    C --> F[重试失败的操作]
+    D --> F
+    E --> G[拒绝写操作<br/>允许读缓存]
+
+    F --> H{服务恢复?}
+    H -->|是| I[恢复正常服务]
+    H -->|否| J[返回 503 Service Unavailable]
+
+    G --> K[等待数据库恢复]
+    K --> I
+```
+
+**降级策略**:
+
+1. **只读模式**:
+   ```python
+   class DatabaseManager:
+       def __init__(self):
+           self.read_only_mode = False
+           self.cache = TTLCache(maxsize=1000, ttl=60)  # 1 分钟缓存
+
+       async def execute_write(self, query, params):
+           if self.read_only_mode:
+               raise ServiceUnavailable("Database in read-only mode")
+
+           return await self.db.execute(query, params)
+
+       async def execute_read(self, query, params):
+           # 优先从缓存读取
+           cache_key = f"{query}:{params}"
+           if cached := self.cache.get(cache_key):
+               return cached
+
+           result = await self.db.execute(query, params)
+           self.cache[cache_key] = result
+           return result
+   ```
+
+**场景 5: S3 对象存储故障**
+
+```mermaid
+flowchart TD
+    A[S3 上报/下载失败] --> B{操作类型}
+
+    B -->|Executor 上报结果| C[本地持久化 + 重试]
+    B -->|下载 artifact| D[返回预签名 URL<br/>客户端直接下载]
+    B -->|创建 workspace| E[使用本地临时存储]
+
+    C --> F{重试成功?}
+    F -->|是| G[清理本地副本]
+    F -->|否| H[保留 24 小时后删除]
+
+    D --> I[绕过 Control Plane]
+    E --> J[降级警告]
+```
+
+**容错机制**:
+
+1. **本地临时存储**:
+   ```python
+   # S3 不可用时使用本地存储
+   class ArtifactStorage:
+       def __init__(self):
+           self.s3_client = boto3.client('s3')
+           self.fallback_path = "/tmp/artifacts"
+
+       async def upload(self, file_path: str, s3_path: str):
+           try:
+               await self.s3_client.upload_file(file_path, bucket, s3_path)
+           except Exception:
+               # 降级到本地存储
+               local_path = os.path.join(self.fallback_path, s3_path)
+               os.makedirs(os.path.dirname(local_path), exist_ok=True)
+               shutil.copy(file_path, local_path)
+               logger.warning(f"S3 unavailable, using local storage: {local_path}")
+   ```
+
+2. **预签名 URL 直接下载**:
+   ```python
+   # 绕过 Control Plane，客户端直接从 S3 下载
+   async def get_artifact_download_url(session_id: str, file_path: str) -> str:
+       s3_path = f"sessions/{session_id}/{file_path}"
+       url = s3_client.generate_presigned_url(
+           'get_object',
+           Params={'Bucket': S3_BUCKET, 'Key': s3_path},
+           ExpiresIn=3600  # 1 小时有效期
+       )
+       return url
+   ```
+
+**恢复时间目标 (RTO)**:
+
+| 故障场景 | RTO | RPO | 说明 |
+|----------|-----|-----|------|
+| Control Plane 重启 | < 30s | 0 | 内存状态可从数据库恢复 |
+| Executor 崩溃 | < 10s | 0 | 自动重试，最多 3 次 |
+| Pod Eviction | < 60s | 0 | 跨节点恢复，复用 S3 workspace |
+| 网络分区 | < 30s | 0 | 超时重试 + 自动重路由 |
+| 数据库故障 | < 60s | 0 | 主从切换 |
+| S3 故障 | N/A | > 0 | 降级到本地存储 |
+
+**最佳实践建议**:
+
+1. **定期健康检查**:
+   - 每 10 秒检查一次 Runtime 节点健康状态
+   - 每 5 秒检查一次 Executor 心跳
+   - 使用 Kubernetes liveness/readiness probe
+
+2. **优雅关闭**:
+   - Control Plane 收到 SIGTERM 时：
+     - 停止接受新请求
+     - 等待正在处理的请求完成（最多 30 秒）
+     - 持久化内存状态到数据库
+
+3. **监控告警**:
+   - 监控崩溃重试率（应 < 1%）
+   - 监控心跳超时次数（应 < 0.1%）
+   - 监控节点不健康比例（应 < 10%）
+   - 告警阈值：连续 3 次重试失败
 
 ## 5. Python 依赖配置
 
@@ -2068,25 +2794,26 @@ USE sandbox;
 CREATE TABLE IF NOT EXISTS sessions (
     id VARCHAR(64) PRIMARY KEY,
     template_id VARCHAR(64) NOT NULL,
-    agent_id VARCHAR(128),
     status ENUM('creating', 'running', 'completed', 'failed', 'timeout', 'terminated') NOT NULL,
-    mode ENUM('ephemeral', 'persistent') NOT NULL DEFAULT 'ephemeral',
     runtime_type ENUM('docker', 'kubernetes') NOT NULL,
-    runtime_node VARCHAR(128),
-    container_id VARCHAR(128),
-    pod_name VARCHAR(128),
+    runtime_node VARCHAR(128),           -- 当前运行的节点（可为空，支持会话迁移）
+    container_id VARCHAR(128),           -- 当前容器 ID
+    pod_name VARCHAR(128),               -- 当前 Pod 名称
+    workspace_path VARCHAR(256),         -- S3 路径：s3://bucket/sessions/{session_id}/
     resources_cpu VARCHAR(16),
     resources_memory VARCHAR(16),
     resources_disk VARCHAR(16),
     env_vars JSON,
     timeout INT NOT NULL DEFAULT 300,
+    last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 最后活动时间（用于自动清理）
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL,
     INDEX idx_status (status),
-    INDEX idx_agent (agent_id),
     INDEX idx_template (template_id),
-    INDEX idx_created (created_at)
+    INDEX idx_created (created_at),
+    INDEX idx_runtime_node (runtime_node),  -- 支持节点故障时查询会话
+    INDEX idx_last_activity (last_activity_at)  -- 支持自动清理查询
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 执行记录表
@@ -2095,18 +2822,21 @@ CREATE TABLE IF NOT EXISTS executions (
     session_id VARCHAR(64) NOT NULL,
     code TEXT NOT NULL,
     language VARCHAR(16) NOT NULL,
-    status ENUM('pending', 'running', 'completed', 'failed', 'timeout') NOT NULL,
+    status ENUM('pending', 'running', 'completed', 'failed', 'timeout', 'crashed') NOT NULL,
     stdout MEDIUMTEXT,
     stderr MEDIUMTEXT,
     exit_code INT,
     execution_time FLOAT,
-    artifacts JSON,
+    artifacts JSON,  -- Artifact 对象数组: [{"path": "...", "size": 123, "mime_type": "...", ...}]
+    retry_count INT DEFAULT 0,  -- 重试次数
+    last_heartbeat_at TIMESTAMP NULL,  -- 最后心跳时间
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
     INDEX idx_session (session_id),
     INDEX idx_status (status),
-    INDEX idx_created (created_at)
+    INDEX idx_created (created_at),
+    INDEX idx_last_heartbeat (last_heartbeat_at)  -- 支持心跳超时检测
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 模板表
@@ -2258,25 +2988,26 @@ data:
     CREATE TABLE IF NOT EXISTS sessions (
         id VARCHAR(64) PRIMARY KEY,
         template_id VARCHAR(64) NOT NULL,
-        agent_id VARCHAR(128),
         status ENUM('creating', 'running', 'completed', 'failed', 'timeout', 'terminated') NOT NULL,
-        mode ENUM('ephemeral', 'persistent') NOT NULL DEFAULT 'ephemeral',
         runtime_type ENUM('docker', 'kubernetes') NOT NULL,
-        runtime_node VARCHAR(128),
-        container_id VARCHAR(128),
-        pod_name VARCHAR(128),
+        runtime_node VARCHAR(128),           -- 当前运行的节点（可为空，支持会话迁移）
+        container_id VARCHAR(128),           -- 当前容器 ID
+        pod_name VARCHAR(128),               -- 当前 Pod 名称
+        workspace_path VARCHAR(256),         -- S3 路径：s3://bucket/sessions/{session_id}/
         resources_cpu VARCHAR(16),
         resources_memory VARCHAR(16),
         resources_disk VARCHAR(16),
         env_vars JSON,
         timeout INT NOT NULL DEFAULT 300,
+        last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 最后活动时间（用于自动清理）
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         completed_at TIMESTAMP NULL,
         INDEX idx_status (status),
-        INDEX idx_agent (agent_id),
         INDEX idx_template (template_id),
-        INDEX idx_created (created_at)
+        INDEX idx_created (created_at),
+        INDEX idx_runtime_node (runtime_node),  -- 支持节点故障时查询会话
+        INDEX idx_last_activity (last_activity_at)  -- 支持自动清理查询
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
