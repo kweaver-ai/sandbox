@@ -14,7 +14,6 @@
 
 ### 1.2 C4 架构模型
 #### C4 Level 1: 系统上下文
-![alt text](image.png)
 ```mermaid
 graph TB
     subgraph External["外部系统"]
@@ -49,7 +48,6 @@ graph TB
 
 
 #### C4 Level 2: 容器视图
-![alt text](image-3.png)
 ```mermaid
 graph TB
     subgraph ControlPlane["管理中心 (Control Plane)"]
@@ -123,7 +121,6 @@ graph TB
 - 下载文件时通过文件 API 直接从 S3 获取
 
 #### 部署架构
-![alt text](image-6.png)
 ```mermaid
 graph TB
     subgraph Internet["🌐 互联网"]
