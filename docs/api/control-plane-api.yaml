@@ -1,0 +1,1317 @@
+openapi: 3.0.2
+info:
+  title: Sandbox Control Plane API
+  version: 1.0.0
+  description: |
+    沙箱平台控制平面 API - 由 AI Agent 或上层服务调用的公开接口
+
+    ## 功能特性
+    - 会话管理：创建、查询、终止会话
+    - 代码执行：提交代码执行任务并获取结果
+    - 文件操作：上传/下载会话工作目录中的文件
+    - 模板管理：管理沙箱环境模板
+    - 运行时管理：监控运行时节点状态
+
+servers:
+  - url: https://{host}:{port}/api/v1
+    description: 生产环境
+    variables:
+      host:
+        default: api.sandbox.example.com
+        description: API 服务器地址
+      port:
+        default: '443'
+        description: HTTPS 端口
+  - url: http://localhost:8000/api/v1
+    description: 本地开发环境
+
+tags:
+  - name: 公共Header说明
+    description: |
+      # Authentication
+      - 调用需要鉴权的API，必须将token放在HTTP header中：`Authorization: Bearer ACCESS_TOKEN`
+
+      # Business Domain
+      - 业务域标识Header：`x-business-domain`，用于区分不同业务场景的请求
+  - name: 会话管理
+    description: 管理沙箱会话的生命周期
+  - name: 代码执行
+    description: 提交和查询代码执行任务
+  - name: 执行结果
+    description: 查询执行结果和状态
+  - name: 文件操作
+    description: 管理会话工作目录中的文件
+  - name: 模板管理
+    description: 管理沙箱环境模板
+  - name: 运行时管理
+    description: 监控运行时节点状态
+  - name: 自定义错误码汇总
+    description: |
+      自定义错误码汇总：
+      - Sandbox.InvalidParameter : 不合法的请求参数
+      - Sandbox.SessionNotFound : 会话不存在
+      - Sandbox.ExecutionNotFound : 执行记录不存在
+      - Sandbox.ExecException: handler 执行异常
+      - Sandbox.TooManyRequestsExection: 无可用沙箱
+      - Sandbox.ExecTimeout: 执行超时
+      - Sandbox.InternalError: 内部错误
+
+paths:
+  /sessions:
+    post:
+      tags:
+        - 会话管理
+      summary: 创建会话
+      description: |
+        创建一个新的沙箱执行会话
+
+        ## 会话模式
+        - **ephemeral**: 一次性执行模式，执行完成后自动销毁容器
+        - **persistent**: 持久化模式，容器长期运行，可接受多次执行请求
+
+        ## 资源限制
+        - CPU: 0.5 - 4 核
+        - Memory: 256Mi - 8Gi
+        - Disk: 1Gi - 50Gi
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+            examples:
+              python_basic:
+                summary: Python 基础环境
+                value:
+                  template_id: python-basic
+                  mode: ephemeral
+                  timeout: 300
+                  resources:
+                    cpu: '1'
+                    memory: 512Mi
+                    disk: 1Gi
+                  env_vars:
+                    LOG_LEVEL: info
+              python_datascience:
+                summary: Python 数据科学环境
+                value:
+                  template_id: python-datascience
+                  mode: persistent
+                  timeout: 3600
+                  resources:
+                    cpu: '2'
+                    memory: 2Gi
+                    disk: 5Gi
+      responses:
+        '201':
+          description: 会话创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+    get:
+      tags:
+        - 会话管理
+      summary: 列出会话
+      description: 查询会话列表，支持按状态和模板过滤
+      operationId: listSessions
+      parameters:
+        - name: status
+          in: query
+          description: 按状态过滤
+          schema:
+            type: string
+            enum: [creating, running, completed, failed, timeout, terminated]
+        - name: template_id
+          in: query
+          description: 按模板ID过滤
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: 返回数量限制
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          description: 偏移量
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - sessions
+                  - total
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionResponse'
+                  total:
+                    type: integer
+                    description: 总数量
+
+  /sessions/{id}:
+    get:
+      tags:
+        - 会话管理
+      summary: 获取会话详情
+      description: 查询指定会话的详细信息
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '404':
+          $ref: '#/components/responses/SessionNotFoundError'
+
+    delete:
+      tags:
+        - 会话管理
+      summary: 终止会话
+      description: |
+        终止指定的会话并释放资源
+
+        ## 清理策略
+        - 销毁容器/Pod
+        - 保留 S3 workspace 中的文件（24小时后自动清理）
+        - 更新会话状态为 terminated
+      operationId: terminateSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 会话已终止
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Session terminated successfully
+        '404':
+          $ref: '#/components/responses/SessionNotFoundError'
+
+  /sessions/{session_id}/execute:
+    post:
+      tags:
+        - 代码执行
+      summary: 提交执行任务
+      description: |
+        向会话提交代码执行请求
+
+        ## Handler 规范
+        - 必须定义 `handler(event)` 函数
+        - event: 业务输入数据（字典类型）
+        - 返回值必须支持 JSON 序列化
+
+        ## Fileless Execution
+        - Python 代码使用 `python3 -c` 直接在内存中执行
+        - 避免文件 I/O 操作，提高安全性
+      operationId: executeCode
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+            examples:
+              simple_handler:
+                summary: 简单 Handler
+                value:
+                  code: |
+                    def handler(event):
+                        name = event.get('name', 'World')
+                        return {
+                            'statusCode': 200,
+                            'body': f'Hello, {name}!'
+                        }
+                  language: python
+                  timeout: 30
+                  event:
+                    name: Alice
+              data_processing:
+                summary: 数据处理
+                value:
+                  code: |
+                    import statistics
+
+                    def handler(event):
+                        numbers = event.get('data', [])
+                        return {
+                            'mean': statistics.mean(numbers),
+                            'median': statistics.median(numbers),
+                            'stdev': statistics.stdev(numbers) if len(numbers) > 1 else 0
+                        }
+                  language: python
+                  timeout: 60
+                  event:
+                    data:
+                      - 1
+                      - 2
+                      - 3
+                      - 4
+                      - 5
+      responses:
+        '200':
+          description: 执行任务已提交
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/SessionNotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /sessions/{session_id}/executions:
+    get:
+      tags:
+        - 代码执行
+      summary: 列出会话的所有执行记录
+      description: 查询指定会话的所有执行记录
+      operationId: listExecutions
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: status
+          in: query
+          description: 按状态过滤
+          schema:
+            type: string
+            enum: [pending, running, completed, failed, timeout]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExecutionSummary'
+                  total:
+                    type: integer
+
+  /executions/{execution_id}:
+    get:
+      tags:
+        - 执行结果
+      summary: 获取执行详情
+      description: 获取执行的完整信息，包含结果
+      operationId: getExecution
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionDetail'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /executions/{execution_id}/status:
+    get:
+      tags:
+        - 执行结果
+      summary: 获取执行状态
+      description: 查询执行状态（pending/running/completed/failed）
+      operationId: getExecutionStatus
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionStatus'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /executions/{execution_id}/result:
+    get:
+      tags:
+        - 执行结果
+      summary: 获取执行结果
+      description: |
+        获取执行结果（stdout/stderr/return_value/artifacts）
+
+        ## 最终一致性
+        - 执行完成后结果通常在 100ms 内可查询
+        - 建议使用轮询或 Webhook 获取结果
+      operationId: getExecutionResult
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResult'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /sessions/{id}/files/upload:
+    post:
+      tags:
+        - 文件操作
+      summary: 上传文件到会话工作目录
+      description: |
+        上传文件到会话的 workspace 目录
+
+        ## 文件限制
+        - 单文件最大 100MB
+        - 总文件大小限制取决于会话 disk 配置
+      operationId: uploadFile
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 要上传的文件
+                path:
+                  type: string
+                  description: 目标路径（相对于 workspace）
+                  example: data/input.csv
+      responses:
+        '200':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path:
+                    type: string
+                    example: data/input.csv
+                  size:
+                    type: integer
+                    example: 1024
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/SessionNotFoundError'
+
+  /sessions/{id}/files/{name}:
+    get:
+      tags:
+        - 文件操作
+      summary: 下载会话工作目录中的文件
+      description: |
+        下载 workspace 中的文件
+
+        ## 下载方式
+        - 直接返回文件内容
+        - 对于大文件，返回 S3 预签名 URL
+      operationId: downloadFile
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: name
+          in: path
+          required: true
+          description: 文件路径（相对于 workspace）
+          schema:
+            type: string
+          example: output/result.csv
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '307':
+          description: 临时重定向到 S3 预签名 URL
+          headers:
+            Location:
+              schema:
+                type: string
+              description: S3 预签名 URL
+        '404':
+          description: 文件不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates:
+    post:
+      tags:
+        - 模板管理
+      summary: 创建模板
+      description: |
+        创建新的沙箱环境模板
+
+        ## 镜像要求
+        - 镜像必须包含 sandbox-executor
+        - 镜像必须以非特权用户运行（UID:GID=1000:1000）
+        - 必须安装 bubblewrap
+      operationId: createTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplateRequest'
+            examples:
+              python_template:
+                summary: Python 模板
+                value:
+                  id: python-custom
+                  name: Python Custom Environment
+                  image: registry.example.com/sandbox-python:3.11-custom
+                  base_image: python:3.11-slim
+                  pre_installed_packages:
+                    - numpy>=1.24.0
+                    - pandas>=2.0.0
+                    - scikit-learn>=1.3.0
+                  default_resources:
+                    cpu: '2'
+                    memory: 2Gi
+                    disk: 5Gi
+                  security_context:
+                    network_enabled: false
+                    max_processes: 128
+      responses:
+        '201':
+          description: 模板创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+
+    get:
+      tags:
+        - 模板管理
+      summary: 列出模板
+      description: 查询所有可用的沙箱环境模板
+      operationId: listTemplates
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Template'
+                  total:
+                    type: integer
+
+  /templates/{id}:
+    get:
+      tags:
+        - 模板管理
+      summary: 获取模板详情
+      operationId: getTemplate
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: 模板不存在
+
+    put:
+      tags:
+        - 模板管理
+      summary: 更新模板
+      operationId: updateTemplate
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTemplateRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: 模板不存在
+
+    delete:
+      tags:
+        - 模板管理
+      summary: 删除模板
+      description: |
+        删除模板
+
+        ## 注意事项
+        - 已有会话的模板无法删除
+        - 建议先标记为 deprecated，等待会话自然结束
+      operationId: deleteTemplate
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      responses:
+        '204':
+          description: 删除成功
+        '400':
+          description: 模板正在被使用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 模板不存在
+
+  /runtimes:
+    get:
+      tags:
+        - 运行时管理
+      summary: 列出运行时节点
+      description: 查询所有运行时节点及其状态
+      operationId: listRuntimes
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtimes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RuntimeNode'
+                  total:
+                    type: integer
+
+  /runtimes/{id}/health:
+    get:
+      tags:
+        - 运行时管理
+      summary: 获取节点健康状态
+      operationId: getRuntimeHealth
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 节点 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 健康状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeHealth'
+
+  /runtimes/{id}/metrics:
+    get:
+      tags:
+        - 运行时管理
+      summary: 获取节点指标
+      description: 获取运行时节点的资源使用指标
+      operationId: getRuntimeMetrics
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 指标数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeMetrics'
+
+components:
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      description: 会话 ID
+      schema:
+        type: string
+        pattern: '^sess_[a-z0-9]{16}$'
+      example: sess_abc123def4567890
+
+    ExecutionId:
+      name: execution_id
+      in: path
+      required: true
+      description: 执行 ID
+      schema:
+        type: string
+        pattern: '^exec_[0-9]{8}_[a-z0-9]{8}$'
+      example: exec_20240115_abc12345
+
+    TemplateId:
+      name: id
+      in: path
+      required: true
+      description: 模板 ID
+      schema:
+        type: string
+      example: python-datascience
+
+  schemas:
+    CreateSessionRequest:
+      type: object
+      required:
+        - template_id
+      properties:
+        template_id:
+          type: string
+          description: 模板 ID
+          example: python-datascience
+        mode:
+          type: string
+          enum: [ephemeral, persistent]
+          default: persistent
+          description: 会话模式
+        timeout:
+          type: integer
+          description: 会话超时时间（秒）
+          minimum: 60
+          maximum: 3600
+          default: 300
+          example: 300
+        resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+          description: 自定义环境变量
+          example:
+            LOG_LEVEL: debug
+            API_KEY: secret-key
+
+    ResourceLimit:
+      type: object
+      required:
+        - cpu
+        - memory
+        - disk
+      properties:
+        cpu:
+          type: string
+          description: CPU 核心数
+          pattern: "^[0-9]+(\\.[0-9]+)?$"
+          example: "2"
+        memory:
+          type: string
+          description: 内存限制
+          pattern: '^[0-9]+(Mi|Gi)$'
+          example: 2Gi
+        disk:
+          type: string
+          description: 磁盘限制
+          pattern: '^[0-9]+(Mi|Gi)$'
+          example: 5Gi
+        max_processes:
+          type: integer
+          description: 最大进程数
+          minimum: 32
+          maximum: 1024
+          default: 128
+
+    SessionResponse:
+      type: object
+      required:
+        - session_id
+        - status
+        - created_at
+        - runtime_type
+      properties:
+        session_id:
+          type: string
+          pattern: '^sess_[a-z0-9]{16}$'
+          example: sess_abc123def4567890
+        template_id:
+          type: string
+          example: python-datascience
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+        runtime_type:
+          type: string
+          enum: [docker, kubernetes]
+          example: kubernetes
+        runtime_node:
+          type: string
+          description: 运行时节点 ID
+          example: k8s-node-1
+        container_id:
+          type: string
+          description: 容器 ID
+          example: abc123def456
+        pod_name:
+          type: string
+          description: Pod 名称（Kubernetes 模式）
+          example: sandbox-sess-abc123
+        workspace_path:
+          type: string
+          description: S3 workspace 路径
+          example: s3://sandbox-workspace/sessions/sess_abc123/
+        resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+          example: '2025-01-04T10:30:00Z'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2025-01-04T10:30:00Z'
+        timeout:
+          type: integer
+          example: 300
+
+    SessionStatus:
+      type: string
+      enum: [creating, running, completed, failed, timeout, terminated]
+      description: |
+        - creating: 会话创建中
+        - running: 运行中
+        - completed: 已完成
+        - failed: 执行失败
+        - timeout: 超时
+        - terminated: 已终止
+
+    ExecuteRequest:
+      type: object
+      required:
+        - code
+        - language
+      properties:
+        code:
+          type: string
+          description: 代码字符串
+          maxLength: 102400
+          example: |
+            def handler(event):
+                return {'status': 'ok', 'data': event}
+        language:
+          type: string
+          enum: [python, javascript, shell]
+          description: 编程语言
+          example: python
+        timeout:
+          type: integer
+          description: 执行超时时间（秒）
+          minimum: 1
+          maximum: 3600
+          default: 30
+          example: 60
+        event:
+          type: object
+          description: 传递给 handler 的业务数据
+          additionalProperties: true
+          example:
+            data:
+              - 1
+              - 2
+              - 3
+
+    ExecuteResponse:
+      type: object
+      required:
+        - execution_id
+        - status
+      properties:
+        execution_id:
+          type: string
+          pattern: '^exec_[0-9]{8}_[a-z0-9]{8}$'
+          example: exec_20240115_abc12345
+        status:
+          type: string
+          enum: [pending, submitted]
+          example: submitted
+        submitted_at:
+          type: string
+          format: date-time
+          example: '2025-01-04T10:30:00Z'
+
+    ExecutionSummary:
+      type: object
+      required:
+        - id
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          example: exec_20240115_abc12345
+        status:
+          type: string
+          enum: [pending, running, completed, failed, timeout]
+        language:
+          type: string
+          example: python
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ExecutionDetail:
+      allOf:
+        - $ref: '#/components/schemas/ExecutionSummary'
+        - type: object
+          properties:
+            code:
+              type: string
+            session_id:
+              type: string
+            result:
+              $ref: '#/components/schemas/ExecutionResult'
+
+    ExecutionStatus:
+      type: object
+      required:
+        - execution_id
+        - session_id
+        - status
+      properties:
+        execution_id:
+          type: string
+          example: exec_20240115_abc12345
+        session_id:
+          type: string
+          example: sess_abc123def4567890
+        status:
+          type: string
+          enum: [pending, running, completed, failed, timeout]
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ExecutionResult:
+      type: object
+      required:
+        - execution_id
+        - status
+        - stdout
+        - stderr
+        - exit_code
+        - execution_time
+        - metrics
+      properties:
+        execution_id:
+          type: string
+          example: exec_20240115_abc12345
+        status:
+          type: string
+          enum: [success, failed, timeout]
+        stdout:
+          type: string
+          description: 标准输出
+          example: Processing complete.
+        stderr:
+          type: string
+          description: 标准错误
+          example: ''
+        exit_code:
+          type: integer
+          description: 进程退出码
+          example: 0
+        execution_time:
+          type: number
+          format: float
+          description: 执行耗时（秒）
+          example: 0.07523
+        return_value:
+          type: object
+          description: handler 函数返回值
+          nullable: true
+          additionalProperties: true
+          example:
+            status: ok
+            data:
+              - 1
+              - 2
+              - 3
+        metrics:
+          $ref: '#/components/schemas/ExecutionMetrics'
+        artifacts:
+          type: array
+          description: 生成的文件路径列表
+          items:
+            type: string
+          example:
+            - output/result.csv
+            - plots/chart.png
+
+    ExecutionMetrics:
+      type: object
+      required:
+        - duration_ms
+      properties:
+        duration_ms:
+          type: number
+          format: float
+          description: 墙钟耗时（毫秒）
+          example: 75.23
+        cpu_time_ms:
+          type: number
+          format: float
+          description: CPU 时间（毫秒）
+          example: 68.12
+        peak_memory_mb:
+          type: number
+          format: float
+          description: 内存峰值（MB）
+          example: 42.5
+
+    CreateTemplateRequest:
+      type: object
+      required:
+        - id
+        - name
+        - image
+        - default_resources
+      properties:
+        id:
+          type: string
+          description: 模板唯一标识
+          example: python-custom
+        name:
+          type: string
+          description: 模板名称
+          example: Python Custom Environment
+        image:
+          type: string
+          description: Docker 镜像地址
+          example: registry.example.com/sandbox-python:3.11-custom
+        base_image:
+          type: string
+          description: 基础镜像（用于两阶段加载）
+          example: python:3.11-slim
+        pre_installed_packages:
+          type: array
+          description: 预安装的 Python 包列表
+          items:
+            type: string
+          example:
+            - numpy>=1.24.0
+            - pandas>=2.0.0
+        default_resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        security_context:
+          type: object
+          description: 安全上下文配置
+          additionalProperties: true
+
+    UpdateTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        image:
+          type: string
+        pre_installed_packages:
+          type: array
+          items:
+            type: string
+        default_resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        security_context:
+          type: object
+
+    Template:
+      type: object
+      required:
+        - id
+        - name
+        - image
+        - default_resources
+        - created_at
+      properties:
+        id:
+          type: string
+          example: python-datascience
+        name:
+          type: string
+          example: Python Data Science
+        image:
+          type: string
+          example: sandbox-python:3.11-datascience
+        base_image:
+          type: string
+          example: python:3.11-slim
+        pre_installed_packages:
+          type: array
+          items:
+            type: string
+        default_resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        security_context:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RuntimeNode:
+      type: object
+      required:
+        - id
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          example: k8s-node-1
+        type:
+          type: string
+          enum: [docker, kubernetes]
+        status:
+          type: string
+          enum: [healthy, unhealthy, draining]
+        cpu_usage:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.65
+        mem_usage:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.72
+        session_count:
+          type: integer
+          example: 15
+        max_sessions:
+          type: integer
+          example: 50
+        cached_templates:
+          type: array
+          items:
+            type: string
+          example:
+            - python-basic
+            - python-datascience
+        last_heartbeat:
+          type: string
+          format: date-time
+
+    RuntimeHealth:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        last_check:
+          type: string
+          format: date-time
+
+    RuntimeMetrics:
+      type: object
+      required:
+        - cpu_usage
+        - memory_usage
+        - session_count
+      properties:
+        cpu_usage:
+          type: number
+          format: float
+          description: CPU 使用率（0-1）
+        memory_usage:
+          type: number
+          format: float
+          description: 内存使用率（0-1）
+        session_count:
+          type: integer
+        available_capacity:
+          type: integer
+          description: 可用容量
+        uptime_seconds:
+          type: integer
+          description: 运行时长（秒）
+
+    Error:
+      type: object
+      required:
+        - error_code
+        - description
+        - error_detail
+      properties:
+        error_code:
+          type: string
+          description: 错误码
+          example: Sandbox.InvalidParameter
+        description:
+          type: string
+          description: 错误描述
+        error_detail:
+          type: string
+          description: 错误详情
+        error_link:
+          type: string
+          description: 错误链接
+        solution:
+          type: string
+          description: 处理建议
+
+  responses:
+    BadRequestError:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Sandbox.InvalidParameter
+            description: Invalid parameter
+            error_detail: Field 'timeout' must be between 1 and 3600
+            solution: Please check your request parameters
+
+    SessionNotFoundError:
+      description: 会话不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Sandbox.SessionNotFound
+            description: Session not found
+            error_detail: Session 'sess_abc123' does not exist or has been terminated
+            solution: Please check the session_id
+
+    ExecutionNotFoundError:
+      description: 执行记录不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Sandbox.ExecutionNotFound
+            description: Execution not found
+            error_detail: Execution 'exec_20240115_abc12345' does not exist
+
+    ServiceUnavailableError:
+      description: 服务暂时不可用
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Sandbox.TooManyRequestsExection
+            description: No available sandbox
+            error_detail: All runtime nodes are at capacity
+            solution: Please retry later
+
+    InternalServerError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Sandbox.InternalError
+            description: Internal server error
+            error_detail: An unexpected error occurred
+            solution: Please contact support
+
+x-tagGroups:
+  - name: 通用说明
+    tags:
+      - 公共Header说明
+  - name: 会话与执行
+    tags:
+      - 会话管理
+      - 代码执行
+      - 执行结果
+      - 文件操作
+  - name: 资源管理
+    tags:
+      - 模板管理
+      - 运行时管理
+  - name: 错误码
+    tags:
+      - 自定义错误码汇总

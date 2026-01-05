@@ -1,0 +1,981 @@
+openapi: 3.0.2
+info:
+  title: Sandbox Runtime API
+  version: 1.0.0
+  description: |
+    沙箱平台运行时 API - 由 Control Plane 调用运行时节点的接口
+
+    ## 接口说明
+    这些接口由 Control Plane 调用，用于管理运行时节点的容器生命周期
+
+    ## 实现方式
+    - Docker Runtime: 调用 Docker Engine API
+    - Kubernetes Runtime: 调用 Kubernetes API
+
+servers:
+  - url: http://{runtime_node}:{port}/runtime
+    description: 生产环境
+    variables:
+      runtime_node:
+        default: runtime-1
+        description: 运行时节点地址
+      port:
+        default: '9000'
+        description: Runtime API 端口
+  - url: http://localhost:9000/runtime
+    description: 本地开发环境
+
+tags:
+  - name: 公共Header说明
+    description: |
+      # Authentication
+      - Control Plane 调用使用内部认证：`Authorization: Bearer CONTROL_PLANE_API_TOKEN`
+
+      # 通信方式
+      - HTTP/REST API
+      - 支持 gRPC（可选，用于高性能场景）
+  - name: 会话管理
+    description: 管理运行时节点的会话容器
+  - name: 容器操作
+    description: 容器级别的操作
+  - name: 健康检查
+    description: 运行时节点健康状态监控
+  - name: 自定义错误码汇总
+    description: |
+      运行时 API 错误码：
+      - Runtime.Unauthorized: 认证失败
+      - Runtime.CapacityExceeded: 节点容量不足
+      - Runtime.ContainerNotFound: 容器不存在
+      - Runtime.TemplateNotFound: 模板镜像不存在
+      - Runtime.InternalError: 运行时内部错误
+ 
+paths:
+  /sessions:
+    post:
+      tags:
+        - 会话管理
+      summary: 创建会话容器
+      description: |
+        在运行时节点创建新的会话容器
+
+        ## 创建流程
+        1. 拉取镜像（如未缓存）
+        2. 创建容器/Pod
+        3. 挂载 S3 workspace volume
+        4. 启动容器
+        5. 等待 Executor 就绪（HTTP 8080 端口）
+
+        ## 返回时机
+        - 容器创建成功
+        - Executor HTTP API 可访问
+        - 准备好接收执行请求
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRuntimeSessionRequest'
+            examples:
+              ephemeral_session:
+                summary: 一次性会话
+                value:
+                  session_id: sess_abc123def4567890
+                  template_id: python-basic
+                  mode: ephemeral
+                  workspace_path: s3://sandbox-workspace/sessions/sess_abc123/
+                  resources:
+                    cpu: '1'
+                    memory: 512Mi
+                    disk: 1Gi
+                  env_vars:
+                    SESSION_ID: sess_abc123def4567890
+                    CONTROL_PLANE_URL: http://control-plane:8000
+                    EXECUTION_TIMEOUT: 300
+                  security_context:
+                    network_enabled: false
+                    max_processes: 128
+              persistent_session:
+                summary: 持久化会话
+                value:
+                  session_id: sess_xyz789abc0123456
+                  template_id: python-datascience
+                  mode: persistent
+                  workspace_path: s3://sandbox-workspace/sessions/sess_xyz789/
+                  resources:
+                    cpu: '2'
+                    memory: 2Gi
+                    disk: 5Gi
+                  env_vars:
+                    LOG_LEVEL: debug
+                  security_context:
+                    network_enabled: true
+                    network_policy:
+                      allow_domains:
+                        - api.example.com
+                        - '*.data.example.com'
+      responses:
+        '201':
+          description: 容器创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          $ref: '#/components/responses/CapacityExceededError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    get:
+      tags:
+        - 会话管理
+      summary: 列出节点的所有会话
+      description: 查询运行时节点上所有会话容器的状态
+      operationId: listSessions
+      parameters:
+        - name: status
+          in: query
+          description: 按容器状态过滤
+          schema:
+            type: string
+            enum: [creating, running, exited, removing]
+        - name: mode
+          in: query
+          description: 按会话模式过滤
+          schema:
+            type: string
+            enum: [ephemeral, persistent]
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RuntimeSessionSummary'
+                  total:
+                    type: integer
+
+  /sessions/{session_id}:
+    get:
+      tags:
+        - 会话管理
+      summary: 查询会话容器状态
+      description: 获取指定会话容器的详细状态
+      operationId: getSessionStatus
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSessionDetail'
+        '404':
+          $ref: '#/components/responses/ContainerNotFoundError'
+
+    delete:
+      tags:
+        - 会话管理
+      summary: 销毁会话容器
+      description: |
+        销毁指定的会话容器并释放资源
+
+        ## 清理流程
+        1. 发送 SIGTERM 信号（优雅关闭）
+        2. 等待最多 10 秒
+        3. 如未退出，发送 SIGKILL
+        4. 删除容器/Pod
+        5. 保留 S3 workspace 数据（由 Control Plane 定期清理）
+      operationId: destroySession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: force
+          in: query
+          description: 强制销毁（SIGKILL）
+          schema:
+            type: boolean
+            default: false
+        - name: recycle
+          in: query
+          description: 回收到预热池（如果容器健康）
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 容器已销毁
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Container destroyed successfully
+                  recycled:
+                    type: boolean
+                    description: 是否回收到预热池
+                    example: false
+        '404':
+          $ref: '#/components/responses/ContainerNotFoundError'
+
+    put:
+      tags:
+        - 会话管理
+      summary: 更新会话容器配置
+      description: |
+        更新运行中会话容器的配置
+
+        ## 支持的更新操作
+        - 资源限制调整（仅增加）
+        - 环境变量更新（仅追加）
+        - 标签/注解更新
+      operationId: updateSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRuntimeSessionRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/ContainerNotFoundError'
+
+  /sessions/{session_id}/execute:
+    post:
+      tags:
+        - 容器操作
+      summary: 在容器中执行代码
+      description: |
+        向容器内的 Executor 发送执行请求
+
+        ## 通信方式
+        - Control Plane 通过容器内 HTTP API (端口 8080) 与 Executor 通信
+        - 或通过 Kubernetes exec 直接执行（备用方案）
+      operationId: executeInContainer
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - execution_id
+                - code
+                - language
+                - timeout
+              properties:
+                execution_id:
+                  type: string
+                  description: 执行 ID
+                  example: exec_20240115_abc12345
+                code:
+                  type: string
+                  description: 代码字符串
+                language:
+                  type: string
+                  enum: [python, javascript, shell]
+                timeout:
+                  type: integer
+                  description: 超时时间（秒）
+                  minimum: 1
+                  maximum: 3600
+                event:
+                  type: object
+                  description: 传递给 handler 的 event 数据
+                  additionalProperties: true
+                stdin:
+                  type: string
+                  description: 标准输入内容
+      responses:
+        '200':
+          description: 执行请求已提交
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Execution request submitted
+                  executor_url:
+                    type: string
+                    description: Executor HTTP 地址
+                    example: http://sess-abc123-executor:8080
+        '404':
+          $ref: '#/components/responses/ContainerNotFoundError'
+        '503':
+          description: Executor 不可用
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Executor not responding
+
+  /sessions/{session_id}/logs:
+    get:
+      tags:
+        - 容器操作
+      summary: 获取容器日志
+      description: |
+        获取容器的标准输出和标准错误日志
+
+        ## 日志来源
+        - 容器主进程（sandbox-executor）日志
+        - 用户代码的 stdout/stderr
+      operationId: getContainerLogs
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: tail
+          in: query
+          description: 返回最后 N 行日志
+          schema:
+            type: integer
+            default: 100
+        - name: since
+          in: query
+          description: 返回指定时间之后的日志
+          schema:
+            type: string
+            format: date-time
+        - name: follow
+          in: query
+          description: 持续跟踪日志（Server-Sent Events）
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 日志内容
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                2025-01-04 10:30:00 INFO sandbox-executor: Starting...
+                2025-01-04 10:30:01 INFO sandbox-executor: Listening on :8080
+                2025-01-04 10:30:05 INFO executor: Received execution request exec_20240115_abc12345
+        '404':
+          $ref: '#/components/responses/ContainerNotFoundError'
+
+  /sessions/{session_id}/exec:
+    post:
+      tags:
+        - 容器操作
+      summary: 在容器中执行命令
+      description: |
+        在容器中执行任意命令（调试用途）
+
+        ## 安全限制
+        - 仅在开发/调试模式启用
+        - 生产环境禁用此接口
+        - 所有命令记录审计日志
+      operationId: execInContainer
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - command
+              properties:
+                command:
+                  type: array
+                  description: 命令及参数
+                  items:
+                    type: string
+                  example:
+                    - ls
+                    - -la
+                    - /workspace
+                timeout:
+                  type: integer
+                  description: 执行超时（秒）
+                  default: 30
+      responses:
+        '200':
+          description: 命令执行结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exit_code:
+                    type: integer
+                  stdout:
+                    type: string
+                  stderr:
+                    type: string
+        '403':
+          description: 生产环境禁用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags:
+        - 健康检查
+      summary: 运行时节点健康检查
+      description: |
+        检查运行时节点的健康状态
+
+        ## 检查项
+        - 运行时服务可访问性
+        - Docker/Kubernetes API 连接
+        - 磁盘空间充足
+        - 无异常错误日志
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 节点健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+        '503':
+          description: 节点不健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+              example:
+                status: unhealthy
+                checks:
+                  docker_api:
+                    status: pass
+                  disk_space:
+                    status: fail
+                    message: Disk usage above 90%
+                  resource_monitor:
+                    status: pass
+
+  /metrics:
+    get:
+      tags:
+        - 健康检查
+      summary: 运行时节点指标
+      description: |
+        获取运行时节点的资源使用指标
+
+        ## 指标类型
+        - CPU 使用率（按核心）
+        - 内存使用率
+        - 磁盘使用情况
+        - 容器统计（总数/运行中）
+        - 预热池状态
+      operationId: getMetrics
+      responses:
+        '200':
+          description: 指标数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeMetricsResponse'
+
+  /templates:
+    get:
+      tags:
+        - 会话管理
+      summary: 列出已缓存的模板镜像
+      description: |
+        查询运行时节点已缓存的模板镜像
+
+        ## 用途
+        - 调度决策时参考
+        - 避免重复拉取镜像
+      operationId: listCachedTemplates
+      responses:
+        '200':
+          description: 缓存列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        template_id:
+                          type: string
+                        image:
+                          type: string
+                        cached_at:
+                          type: string
+                          format: date-time
+                        size_mb:
+                          type: number
+
+  /warm_pool:
+    get:
+      tags:
+        - 会话管理
+      summary: 查询预热池状态
+      description: 获取运行时节点预热池的当前状态
+      operationId: getWarmPoolStatus
+      responses:
+        '200':
+          description: 预热池状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarmPoolStatus'
+
+    post:
+      tags:
+        - 会话管理
+      summary: 调整预热池大小
+      description: 动态调整预热池的目标大小
+      operationId: adjustWarmPool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                template_id:
+                  type: string
+                  description: 模板 ID（可选，不指定则调整所有模板）
+                target_size:
+                  type: integer
+                  description: 目标池大小
+                  minimum: 0
+                  maximum: 100
+      responses:
+        '200':
+          description: 调整请求已接受
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Warm pool adjustment initiated
+
+components:
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      description: 会话 ID
+      schema:
+        type: string
+        pattern: '^sess_[a-z0-9]{16}$'
+      example: sess_abc123def4567890
+
+  schemas:
+    CreateRuntimeSessionRequest:
+      type: object
+      required:
+        - session_id
+        - template_id
+        - mode
+        - workspace_path
+        - resources
+      properties:
+        session_id:
+          type: string
+          description: 会话 ID
+          pattern: '^sess_[a-z0-9]{16}$'
+        template_id:
+          type: string
+          description: 模板 ID
+        mode:
+          type: string
+          enum: [ephemeral, persistent]
+          description: 会话模式
+        workspace_path:
+          type: string
+          description: S3 workspace 路径
+          example: s3://sandbox-workspace/sessions/sess_abc123/
+        resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+          description: 环境变量
+        security_context:
+          $ref: '#/components/schemas/SecurityContext'
+
+    UpdateRuntimeSessionRequest:
+      type: object
+      properties:
+        resources:
+          type: object
+          description: 资源限制调整（仅支持增加）
+          properties:
+            cpu:
+              type: string
+            memory:
+              type: string
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+          description: 新增环境变量（不会覆盖已有变量）
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+
+    ResourceLimit:
+      type: object
+      required:
+        - cpu
+        - memory
+        - disk
+      properties:
+        cpu:
+          type: string
+          description: CPU 核心数
+          pattern: "^[0-9]+(\\.[0-9]+)?$"
+          example: "2"
+        memory:
+          type: string
+          description: 内存限制
+          pattern: '^[0-9]+(Mi|Gi)$'
+          example: 2Gi
+        disk:
+          type: string
+          description: 磁盘限制
+          pattern: '^[0-9]+(Mi|Gi)$'
+          example: 5Gi
+        max_processes:
+          type: integer
+          description: 最大进程数
+          minimum: 32
+          maximum: 1024
+          default: 128
+
+    SecurityContext:
+      type: object
+      description: 安全上下文配置
+      properties:
+        network_enabled:
+          type: boolean
+          description: 是否启用网络访问
+          default: false
+        network_policy:
+          type: object
+          description: 网络策略（network_enabled=true 时）
+          properties:
+            allow_domains:
+              type: array
+              items:
+                type: string
+              description: 允许访问的域名白名单
+              example:
+                - api.example.com
+                - '*.data.example.com'
+            allow_ips:
+              type: array
+              items:
+                type: string
+              description: 允许访问的 IP 白名单
+              example:
+                - 10.0.0.0/8
+        max_processes:
+          type: integer
+          description: 最大进程数
+          minimum: 32
+          maximum: 1024
+
+    RuntimeSessionResponse:
+      type: object
+      required:
+        - session_id
+        - container_id
+        - status
+        - executor_url
+      properties:
+        session_id:
+          type: string
+          example: sess_abc123def4567890
+        container_id:
+          type: string
+          description: 容器 ID 或 Pod 名称
+          example: abc123def456
+        pod_name:
+          type: string
+          description: Pod 名称（Kubernetes）
+          example: sandbox-sess-abc123
+        status:
+          type: string
+          enum: [creating, running, exited, removing]
+        executor_url:
+          type: string
+          description: Executor HTTP API 地址
+          example: http://sess-abc123-executor:8080
+        created_at:
+          type: string
+          format: date-time
+
+    RuntimeSessionSummary:
+      type: object
+      required:
+        - session_id
+        - status
+        - mode
+      properties:
+        session_id:
+          type: string
+        status:
+          type: string
+          enum: [creating, running, exited, removing]
+        mode:
+          type: string
+          enum: [ephemeral, persistent]
+        template_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    RuntimeSessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/RuntimeSessionSummary'
+        - type: object
+          properties:
+            container_id:
+              type: string
+            resources:
+              $ref: '#/components/schemas/ResourceLimit'
+            env_vars:
+              type: object
+              additionalProperties:
+                type: string
+            uptime_seconds:
+              type: integer
+              description: 容器运行时长（秒）
+            executor_healthy:
+              type: boolean
+              description: Executor HTTP API 是否健康
+
+    HealthCheckResponse:
+      type: object
+      required:
+        - status
+        - checks
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        checks:
+          type: object
+          description: 各项检查结果
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [pass, fail, warn]
+              message:
+                type: string
+              duration_ms:
+                type: number
+        timestamp:
+          type: string
+          format: date-time
+
+    RuntimeMetricsResponse:
+      type: object
+      required:
+        - cpu_usage
+        - memory_usage
+        - session_count
+      properties:
+        cpu_usage:
+          type: number
+          format: float
+          description: CPU 使用率（0-1）
+          example: 0.65
+        memory_usage:
+          type: number
+          format: float
+          description: 内存使用率（0-1）
+          example: 0.72
+        disk_usage:
+          type: object
+          properties:
+            used_gb:
+              type: number
+            total_gb:
+              type: number
+            usage_percent:
+              type: number
+        session_count:
+          type: integer
+          description: 运行中会话数
+        max_sessions:
+          type: integer
+          description: 最大会话容量
+        available_capacity:
+          type: integer
+          description: 可用容量
+        uptime_seconds:
+          type: integer
+          description: 运行时长（秒）
+        warm_pool:
+          type: object
+          description: 预热池状态
+          properties:
+            total:
+              type: integer
+            idle:
+              type: integer
+            in_use:
+              type: integer
+
+    WarmPoolStatus:
+      type: object
+      properties:
+        pools:
+          type: object
+          description: 按模板分组的预热池状态
+          additionalProperties:
+            type: object
+            properties:
+              template_id:
+                type: string
+              total:
+                type: integer
+                description: 预热实例总数
+              idle:
+                type: integer
+                description: 空闲实例数
+              in_use:
+                type: integer
+                description: 使用中实例数
+              target_size:
+                type: integer
+                description: 目标池大小
+
+    Error:
+      type: object
+      required:
+        - error_code
+        - description
+        - error_detail
+      properties:
+        error_code:
+          type: string
+          example: Runtime.CapacityExceeded
+        description:
+          type: string
+          description: 错误描述
+        error_detail:
+          type: string
+          description: 错误详情
+        solution:
+          type: string
+          description: 处理建议
+
+  responses:
+    BadRequestError:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Runtime.InvalidParameter
+            description: Invalid parameter
+            error_detail: Invalid resource limit format
+
+    UnauthorizedError:
+      description: 认证失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Runtime.Unauthorized
+            description: Authentication failed
+            error_detail: Invalid or missing API token
+
+    CapacityExceededError:
+      description: 节点容量不足
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Runtime.CapacityExceeded
+            description: Node capacity exceeded
+            error_detail: All available resources are in use
+            solution: Please schedule to another node
+
+    ContainerNotFoundError:
+      description: 容器不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Runtime.ContainerNotFound
+            description: Container not found
+            error_detail: Session container does not exist or has been destroyed
+
+    InternalError:
+      description: 运行时内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Runtime.InternalError
+            description: Runtime internal error
+            error_detail: Failed to create container
+            solution: Please check runtime logs and retry
+
+x-tagGroups:
+  - name: 通用说明
+    tags:
+      - 公共Header说明
+  - name: 运行时接口
+    tags:
+      - 会话管理
+      - 容器操作
+      - 健康检查
+  - name: 错误码
+    tags:
+      - 自定义错误码汇总
