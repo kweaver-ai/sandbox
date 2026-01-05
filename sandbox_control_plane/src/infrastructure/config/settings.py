@@ -1,0 +1,157 @@
+"""
+应用配置
+
+使用 Pydantic Settings 管理应用配置。
+"""
+from functools import lru_cache
+from typing import List
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """应用配置类"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # ============== 应用配置 ==============
+    app_name: str = Field(default="Sandbox Control Plane")
+    app_version: str = Field(default="2.1.0")
+    environment: str = Field(default="development")
+    debug: bool = Field(default=False)
+
+    # ============== 服务器配置 ==============
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8000)
+    workers: int = Field(default=4)
+
+    # ============== 数据库配置 ==============
+    db_host: str = Field(default="localhost")
+    db_port: int = Field(default=3306)
+    db_user: str = Field(default="sandbox")
+    db_password: str = Field(default="password")
+    db_name: str = Field(default="sandbox")
+    db_pool_size: int = Field(default=20)
+    db_max_overflow: int = Field(default=40)
+    db_pool_recycle: int = Field(default=3600)
+
+    @property
+    def database_url(self) -> str:
+        """构建数据库连接 URL"""
+        return (
+            f"mysql+aiomysql://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
+
+    # ============== Redis 配置 ==============
+    redis_host: str = Field(default="localhost")
+    redis_port: int = Field(default=6379)
+    redis_db: int = Field(default=0)
+    redis_password: str = Field(default="")
+
+    @property
+    def redis_url(self) -> str:
+        """构建 Redis 连接 URL"""
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    # ============== S3 配置 ==============
+    s3_bucket: str = Field(default="sandbox-workspace")
+    s3_region: str = Field(default="us-east-1")
+    s3_access_key_id: str = Field(default="")
+    s3_secret_access_key: str = Field(default="")
+    s3_endpoint_url: str = Field(default="")  # MinIO 支持
+
+    # ============== Docker 配置 ==============
+    docker_host: str = Field(default="unix://var/run/docker.sock")
+    docker_tls_verify: bool = Field(default=False)
+    docker_cert_path: str = Field(default="")
+
+    # ============== Kubernetes 配置 ==============
+    kubernetes_namespace: str = Field(default="sandbox-runtime")
+
+    # ============== 执行配置 ==============
+    default_timeout: int = Field(default=300)
+    max_timeout: int = Field(default=3600)
+    default_cpu: str = Field(default="1")
+    default_memory: str = Field(default="512Mi")
+    default_disk: str = Field(default="1Gi")
+
+    # ============== 清理配置 ==============
+    idle_threshold_minutes: int = Field(default=30)
+    max_lifetime_hours: int = Field(default=6)
+    cleanup_interval_seconds: int = Field(default=300)
+
+    # ============== 重试配置 ==============
+    max_retry_attempts: int = Field(default=3)
+    retry_backoff_base: float = Field(default=1.0)
+    retry_backoff_factor: float = Field(default=2.0)
+    max_retry_backoff: float = Field(default=10.0)
+
+    # ============== 预热池配置 ==============
+    warm_pool_enabled: bool = Field(default=True)
+    warm_pool_default_size: int = Field(default=10)
+    warm_pool_min_size: int = Field(default=5)
+    warm_pool_max_idle_time: int = Field(default=300)
+
+    # ============== 健康检查配置 ==============
+    health_check_interval_seconds: int = Field(default=10)
+    heartbeat_interval_seconds: int = Field(default=5)
+    heartbeat_timeout_seconds: int = Field(default=15)
+
+    # ============== 日志配置 ==============
+    log_level: str = Field(default="INFO")
+    log_format: str = Field(default="json")  # json, text
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if v.upper() not in allowed:
+            raise ValueError(f"log_level must be one of {allowed}")
+        return v.upper()
+
+    @field_validator("log_format")
+    @classmethod
+    def validate_log_format(cls, v: str) -> str:
+        allowed = {"json", "text"}
+        if v not in allowed:
+            raise ValueError(f"log_format must be one of {allowed}")
+        return v
+
+    # ============== 监控配置 ==============
+    metrics_enabled: bool = Field(default=True)
+    metrics_port: int = Field(default=9090)
+
+    # ============== 安全配置 ==============
+    secret_key: str = Field(default="change-this-in-production")
+    allowed_hosts: List[str] = Field(default=["*"])
+    cors_origins: List[str] = Field(default=["http://localhost:3000"])
+
+    # ============== 限流配置 ==============
+    rate_limit_enabled: bool = Field(default=True)
+    rate_limit_per_minute: int = Field(default=60)
+
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, v: str) -> str:
+        allowed = {"development", "staging", "production"}
+        if v not in allowed:
+            raise ValueError(f"environment must be one of {allowed}")
+        return v
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """
+    获取配置单例
+
+    使用 lru_cache 确保配置只加载一次。
+    """
+    return Settings()
