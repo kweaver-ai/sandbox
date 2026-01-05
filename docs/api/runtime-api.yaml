@@ -77,12 +77,11 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateRuntimeSessionRequest'
             examples:
-              ephemeral_session:
-                summary: 一次性会话
+              python_session:
+                summary: Python 会话
                 value:
                   session_id: sess_abc123def4567890
                   template_id: python-basic
-                  mode: ephemeral
                   workspace_path: s3://sandbox-workspace/sessions/sess_abc123/
                   resources:
                     cpu: '1'
@@ -95,12 +94,11 @@ paths:
                   security_context:
                     network_enabled: false
                     max_processes: 128
-              persistent_session:
-                summary: 持久化会话
+              datascience_session:
+                summary: 数据科学会话
                 value:
                   session_id: sess_xyz789abc0123456
                   template_id: python-datascience
-                  mode: persistent
                   workspace_path: s3://sandbox-workspace/sessions/sess_xyz789/
                   resources:
                     cpu: '2'
@@ -143,12 +141,6 @@ paths:
           schema:
             type: string
             enum: [creating, running, exited, removing]
-        - name: mode
-          in: query
-          description: 按会话模式过滤
-          schema:
-            type: string
-            enum: [ephemeral, persistent]
       responses:
         '200':
           description: 查询成功
@@ -603,7 +595,6 @@ components:
       required:
         - session_id
         - template_id
-        - mode
         - workspace_path
         - resources
       properties:
@@ -614,10 +605,6 @@ components:
         template_id:
           type: string
           description: 模板 ID
-        mode:
-          type: string
-          enum: [ephemeral, persistent]
-          description: 会话模式
         workspace_path:
           type: string
           description: S3 workspace 路径
@@ -754,16 +741,12 @@ components:
       required:
         - session_id
         - status
-        - mode
       properties:
         session_id:
           type: string
         status:
           type: string
           enum: [creating, running, exited, removing]
-        mode:
-          type: string
-          enum: [ephemeral, persistent]
         template_id:
           type: string
         created_at:

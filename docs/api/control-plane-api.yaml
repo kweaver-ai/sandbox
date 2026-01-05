@@ -65,10 +65,6 @@ paths:
       description: |
         创建一个新的沙箱执行会话
 
-        ## 会话模式
-        - **ephemeral**: 一次性执行模式，执行完成后自动销毁容器
-        - **persistent**: 持久化模式，容器长期运行，可接受多次执行请求
-
         ## 资源限制
         - CPU: 0.5 - 4 核
         - Memory: 256Mi - 8Gi
@@ -85,7 +81,6 @@ paths:
                 summary: Python 基础环境
                 value:
                   template_id: python-basic
-                  mode: ephemeral
                   timeout: 300
                   resources:
                     cpu: '1'
@@ -97,7 +92,6 @@ paths:
                 summary: Python 数据科学环境
                 value:
                   template_id: python-datascience
-                  mode: persistent
                   timeout: 3600
                   resources:
                     cpu: '2'
@@ -733,11 +727,6 @@ components:
           type: string
           description: 模板 ID
           example: python-datascience
-        mode:
-          type: string
-          enum: [ephemeral, persistent]
-          default: persistent
-          description: 会话模式
         timeout:
           type: integer
           description: 会话超时时间（秒）
@@ -904,6 +893,23 @@ components:
           type: string
           format: date-time
           example: '2025-01-04T10:30:00Z'
+
+    RuntimeSessionSummary:
+      type: object
+      required:
+        - session_id
+        - status
+      properties:
+        session_id:
+          type: string
+        status:
+          type: string
+          enum: [creating, running, exited, removing]
+        template_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
 
     ExecutionSummary:
       type: object

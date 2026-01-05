@@ -365,7 +365,7 @@ paths:
         ## 退出场景
         - 优雅关闭（SIGTERM）
         - 异常退出（OOM、Killed 等）
-        - 执行完成（ephemeral 模式）
+        - 执行完成
       operationId: reportContainerExited
       parameters:
         - $ref: '#/components/parameters/SessionId'
