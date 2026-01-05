@@ -30,6 +30,9 @@ class Execution:
     artifacts: list[Artifact] = field(default_factory=list)
     retry_count: int = 0
     last_heartbeat_at: datetime | None = None
+    # 新增字段：handler 返回值和性能指标
+    return_value: dict | None = None  # handler 函数返回值（JSON 可序列化）
+    metrics: dict | None = None  # 性能指标（JSON 对象）
 
     def __post_init__(self):
         """初始化后验证"""
@@ -54,7 +57,9 @@ class Execution:
         stderr: str,
         exit_code: int,
         execution_time: float,
-        artifacts: list[Artifact] | None = None
+        artifacts: list[Artifact] | None = None,
+        return_value: dict | None = None,
+        metrics: dict | None = None
     ) -> None:
         """标记为已完成"""
         if self.state.status != ExecutionStatus.RUNNING:
@@ -68,6 +73,8 @@ class Execution:
         self.stderr = stderr
         self.execution_time = execution_time
         self.artifacts = artifacts or []
+        self.return_value = return_value  # handler 返回值
+        self.metrics = metrics  # 性能指标
         self.completed_at = datetime.now()
         self.last_heartbeat_at = datetime.now()
 

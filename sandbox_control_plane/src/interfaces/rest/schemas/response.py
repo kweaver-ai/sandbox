@@ -59,6 +59,9 @@ class ExecutionResponse(BaseModel):
     retry_count: int = 0
     created_at: datetime
     completed_at: Optional[datetime] = None
+    # 新增字段：handler 返回值和性能指标
+    return_value: Optional[dict] = None  # handler 函数返回值（JSON 可序列化）
+    metrics: Optional[dict] = None  # 性能指标（duration_ms, cpu_time_ms, peak_memory_mb 等）
 
 
 class ExecuteCodeResponse(BaseModel):

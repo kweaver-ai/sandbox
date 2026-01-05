@@ -104,6 +104,8 @@ class ExecutionResult:
         execution_time_ms: Execution duration in milliseconds
         artifacts: List of generated files
         error: Optional error message if failed
+        return_value: Handler function return value (JSON serializable)
+        metrics: Performance metrics (duration_ms, cpu_time_ms, peak_memory_mb, etc.)
     """
 
     status: ExecutionStatus
@@ -113,6 +115,9 @@ class ExecutionResult:
     execution_time_ms: float
     artifacts: List[Artifact] = field(default_factory=list)
     error: Optional[str] = None
+    # 新增字段：handler 返回值和性能指标
+    return_value: Optional[dict] = None
+    metrics: Optional[dict] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -124,6 +129,8 @@ class ExecutionResult:
             "execution_time_ms": self.execution_time_ms,
             "artifacts": [a.to_dict() for a in self.artifacts],
             "error": self.error,
+            "return_value": self.return_value,
+            "metrics": self.metrics,
         }
 
 

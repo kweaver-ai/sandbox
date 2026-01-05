@@ -36,6 +36,9 @@ class ExecutionModel(Base):
     last_heartbeat_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
     completed_at = Column(DateTime, nullable=True)
+    # 新增字段：handler 返回值和性能指标
+    return_value = Column(JSON, nullable=True)  # handler 函数返回值（JSON 可序列化）
+    metrics = Column(JSON, nullable=True)  # 性能指标（JSON 对象）
 
     def to_entity(self):
         """转换为领域实体"""
@@ -70,6 +73,8 @@ class ExecutionModel(Base):
             last_heartbeat_at=self.last_heartbeat_at,
             created_at=self.created_at,
             completed_at=self.completed_at,
+            return_value=self.return_value,  # handler 返回值
+            metrics=self.metrics,  # 性能指标
         )
 
     @classmethod
@@ -100,4 +105,6 @@ class ExecutionModel(Base):
             last_heartbeat_at=execution.last_heartbeat_at,
             created_at=execution.created_at,
             completed_at=execution.completed_at,
+            return_value=execution.return_value,  # handler 返回值
+            metrics=execution.metrics,  # 性能指标
         )
