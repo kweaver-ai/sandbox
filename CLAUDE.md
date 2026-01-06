@@ -193,3 +193,10 @@ flake8 control_plane/ executor/
 - **Security-First**: Multiple isolation layers, defense-in-depth
 - **Performance**: Warm Pool, async processing, connection pooling
 - **Compatibility**: AWS Lambda handler specification for easy migration
+
+## Active Technologies
+- Python 3.11+ + FastAPI (0.104+), Uvicorn (0.24+), Pydantic (2.5+), SQLAlchemy (2.0+ async), aiomysql (0.2+), aiodocker (0.21+), kubernetes (28.0+), boto3 (1.29+), httpx (0.25+), structlog (23.2+) (001-control-plane)
+- MariaDB 11.2+ (sessions, executions, templates), S3-compatible object storage (workspace files) (001-control-plane)
+
+## Recent Changes
+- 001-control-plane: Added Python 3.11+ + FastAPI (0.104+), Uvicorn (0.24+), Pydantic (2.5+), SQLAlchemy (2.0+ async), aiomysql (0.2+), aiodocker (0.21+), kubernetes (28.0+), boto3 (1.29+), httpx (0.25+), structlog (23.2+)

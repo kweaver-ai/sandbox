@@ -1,0 +1,626 @@
+openapi: 3.0.2
+info:
+  title: Sandbox Internal API
+  version: 1.0.0
+  description: |
+    沙箱平台内部回调 API - 由 Executor (容器内 sandbox-executor) 调用的内部接口
+
+    ## 安全说明
+    - **仅限内网访问**: 这些接口应该只在内网或容器网络中可访问
+    - **认证机制**: 使用 JWT token 或 API Key 进行认证
+    - **访问控制**: 限制仅运行时节点可访问
+    - **IP 白名单**: 建议配置 IP 白名单
+
+servers:
+  - url: http://control-plane:8000/internal
+    description: 生产环境（Kubernetes 内部服务）
+  - url: http://localhost:8000/internal
+    description: 本地开发环境
+
+tags:
+  - name: 公共Header说明
+    description: |
+      # Authentication
+      - 内部 API 使用 API Key 认证：`Authorization: Bearer INTERNAL_API_TOKEN`
+      - INTERNAL_API_TOKEN 通过环境变量注入到 Executor 容器中
+
+      # 安全要求
+      - 仅在容器网络内可访问
+      - 建议配置 NetworkPolicy 限制访问
+  - name: 执行结果上报
+    description: Executor 上报执行结果和状态
+  - name: 心跳上报
+    description: Executor 定时上报心跳
+  - name: 自定义错误码汇总
+    description: |
+      内部 API 错误码：
+      - Internal.Unauthorized: 认证失败
+      - Internal.InvalidExecution: 执行记录不存在
+      - Internal.StateConflict: 状态冲突
+      - Internal.InternalError: 内部错误
+
+paths:
+  /executions/{execution_id}/result:
+    post:
+      tags:
+        - 执行结果上报
+      summary: 上报执行结果
+      description: |
+        Executor 完成执行后上报结果到控制平面
+
+        ## 上报时机
+        - 执行成功完成（status = success）
+        - 执行失败（status = failed）
+        - 执行超时（status = timeout）
+        - Executor 崩溃（status = crashed）
+
+        ## 幂等性保证
+        - 使用 Idempotency-Key 确保重复上报不会创建重复记录
+        - 相同 execution_id 的重复上报返回已有结果
+      operationId: reportExecutionResult
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionResultReport'
+            examples:
+              success:
+                summary: 执行成功
+                value:
+                  status: success
+                  stdout: |
+                    Processing complete.
+                    Generated 3 files.
+                  stderr: ''
+                  exit_code: 0
+                  execution_time: 0.07523
+                  return_value:
+                    status: ok
+                    count: 3
+                  metrics:
+                    duration_ms: 75.23
+                    cpu_time_ms: 68.12
+                    peak_memory_mb: 42.5
+                  artifacts:
+                    - output/result.csv
+                    - plots/summary.png
+              failed:
+                summary: 执行失败
+                value:
+                  status: failed
+                  stdout: ''
+                  stderr: |
+                    Traceback (most recent call last):
+                      File "<string>", line 5, in <module>
+                    NameError: name 'undefined_var' is not defined
+                  exit_code: 1
+                  execution_time: 0.0123
+                  return_value: null
+                  metrics:
+                    duration_ms: 12.3
+                  artifacts: []
+              timeout:
+                summary: 执行超时
+                value:
+                  status: timeout
+                  stdout: ''
+                  stderr: Execution timeout after 30 seconds
+                  exit_code: -1
+                  execution_time: 30.0
+                  return_value: null
+                  metrics:
+                    duration_ms: 30000
+                  artifacts: []
+      responses:
+        '200':
+          description: 结果已记录
+          headers:
+            X-Idempotency-Key:
+              schema:
+                type: string
+              description: 幂等键
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Result recorded successfully
+        '201':
+          description: 结果已创建（首次上报）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Result created successfully
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+        '409':
+          $ref: '#/components/responses/StateConflictError'
+
+  /executions/{execution_id}/status:
+    post:
+      tags:
+        - 执行结果上报
+      summary: 上报执行状态变更
+      description: |
+        上报执行状态变更（不包含完整结果）
+
+        ## 使用场景
+        - Executor 开始执行时上报 `running` 状态
+        - 检测到超时时上报 `timeout` 状态
+        - Executor 崩溃时上报 `crashed` 状态
+
+        ## 最终结果
+        - 完整结果通过 `/result` 接口上报
+      operationId: reportExecutionStatus
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionStatusReport'
+            examples:
+              running:
+                summary: 开始执行
+                value:
+                  status: running
+                  started_at: '2025-01-04T10:30:01Z'
+              crashed:
+                summary: Executor 崩溃
+                value:
+                  status: crashed
+                  crashed_at: '2025-01-04T10:30:15Z'
+                  error: Executor process crashed (signal 9)
+      responses:
+        '200':
+          description: 状态已更新
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /executions/{execution_id}/heartbeat:
+    post:
+      tags:
+        - 心跳上报
+      summary: 上报执行心跳
+      description: |
+        Executor 定时上报心跳，用于：
+        - 确认 Executor 正在运行
+        - 防止被误判为崩溃
+        - 更新最后活动时间
+
+        ## 心跳频率
+        - 建议每 5 秒发送一次
+        - Control Plane 15 秒未收到心跳则判定为崩溃
+      operationId: reportHeartbeat
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - timestamp
+              properties:
+                timestamp:
+                  type: string
+                  format: date-time
+                  description: 心跳时间戳
+                  example: '2025-01-04T10:30:10Z'
+                progress:
+                  type: object
+                  description: 可选的执行进度信息
+                  additionalProperties: true
+                  example:
+                    completed_steps: 5
+                    total_steps: 10
+      responses:
+        '200':
+          description: 心跳已记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Heartbeat recorded
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /executions/{execution_id}/artifacts:
+    post:
+      tags:
+        - 执行结果上报
+      summary: 上报生成的文件列表
+      description: |
+        单独上报生成的文件列表（异步文件上传场景）
+
+        ## 使用场景
+        - Executor 异步上传大文件到 S3
+        - 文件上传完成后单独上报文件列表
+
+        ## 文件元数据
+        - path: 相对于 workspace 的路径
+        - size: 文件大小（字节）
+        - mime_type: MIME 类型
+        - checksum: SHA256 校验和（可选）
+      operationId: reportArtifacts
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - artifacts
+              properties:
+                artifacts:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ArtifactMetadata'
+            examples:
+              multiple_files:
+                summary: 多个文件
+                value:
+                  artifacts:
+                    - path: output/result.csv
+                      size: 1024
+                      mime_type: text/csv
+                      type: artifact
+                      checksum: abc123def456...
+                    - path: plots/summary.png
+                      size: 524288
+                      mime_type: image/png
+                      type: output
+                      checksum: def789ghi012...
+      responses:
+        '200':
+          description: 文件列表已更新
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/ExecutionNotFoundError'
+
+  /sessions/{session_id}/container_ready:
+    post:
+      tags:
+        - 执行结果上报
+      summary: 上报容器就绪状态
+      description: |
+        Executor 启动完成后上报就绪状态
+
+        ## 上报时机
+        - sandbox-executor 守护进程启动完成
+        - HTTP API 开始监听（默认 8080 端口）
+        - 准备好接收执行请求
+      operationId: reportContainerReady
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                container_id:
+                  type: string
+                  description: 容器 ID
+                  example: abc123def456
+                pod_name:
+                  type: string
+                  description: Pod 名称（Kubernetes）
+                  example: sandbox-sess-abc123
+                executor_port:
+                  type: integer
+                  description: Executor HTTP 端口
+                  default: 8080
+                ready_at:
+                  type: string
+                  format: date-time
+                  example: '2025-01-04T10:30:00Z'
+      responses:
+        '200':
+          description: 就绪状态已记录
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /sessions/{session_id}/container_exited:
+    post:
+      tags:
+        - 执行结果上报
+      summary: 上报容器退出事件
+      description: |
+        容器退出时上报事件（包括优雅关闭和异常退出）
+
+        ## 退出场景
+        - 优雅关闭（SIGTERM）
+        - 异常退出（OOM、Killed 等）
+        - 执行完成
+      operationId: reportContainerExited
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - exit_code
+                - exited_at
+              properties:
+                exit_code:
+                  type: integer
+                  description: 容器退出码
+                  example: 143
+                exit_reason:
+                  type: string
+                  enum: [normal, sigterm, sigkill, oom_killed, error]
+                  description: 退出原因
+                  example: sigterm
+                exited_at:
+                  type: string
+                  format: date-time
+                  example: '2025-01-04T10:35:00Z'
+      responses:
+        '200':
+          description: 退出事件已记录
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+components:
+  parameters:
+    ExecutionId:
+      name: execution_id
+      in: path
+      required: true
+      description: 执行 ID
+      schema:
+        type: string
+        pattern: '^exec_[0-9]{8}_[a-z0-9]{8}$'
+      example: exec_20240115_abc12345
+
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      description: 会话 ID
+      schema:
+        type: string
+        pattern: '^sess_[a-z0-9]{16}$'
+      example: sess_abc123def4567890
+
+  schemas:
+    ExecutionResultReport:
+      type: object
+      required:
+        - status
+        - stdout
+        - stderr
+        - exit_code
+        - execution_time
+        - metrics
+      properties:
+        status:
+          type: string
+          enum: [success, failed, timeout, crashed]
+          description: 执行状态
+        stdout:
+          type: string
+          description: 标准输出
+        stderr:
+          type: string
+          description: 标准错误
+        exit_code:
+          type: integer
+          description: 进程退出码
+        execution_time:
+          type: number
+          format: float
+          description: 执行耗时（秒）
+        return_value:
+          type: object
+          description: handler 函数返回值（JSON 可序列化）
+          nullable: true
+          additionalProperties: true
+        metrics:
+          $ref: '#/components/schemas/ExecutionMetrics'
+        artifacts:
+          type: array
+          description: 生成的文件路径列表
+          items:
+            type: string
+
+    ExecutionMetrics:
+      type: object
+      required:
+        - duration_ms
+      properties:
+        duration_ms:
+          type: number
+          format: float
+          description: 墙钟耗时（毫秒）
+        cpu_time_ms:
+          type: number
+          format: float
+          description: CPU 时间（毫秒）
+        peak_memory_mb:
+          type: number
+          format: float
+          description: 内存峰值（MB）
+        io_read_bytes:
+          type: integer
+          description: 读取字节数
+        io_write_bytes:
+          type: integer
+          description: 写入字节数
+
+    ExecutionStatusReport:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [running, timeout, crashed]
+          description: 执行状态
+        started_at:
+          type: string
+          format: date-time
+          description: 开始执行时间（status = running 时必需）
+        crashed_at:
+          type: string
+          format: date-time
+          description: 崩溃时间（status = crashed 时必需）
+        timeout_at:
+          type: string
+          format: date-time
+          description: 超时时间（status = timeout 时必需）
+        error:
+          type: string
+          description: 错误信息（crashed 状态）
+
+    ArtifactMetadata:
+      type: object
+      required:
+        - path
+        - size
+        - mime_type
+        - type
+      properties:
+        path:
+          type: string
+          description: 相对于 workspace 的文件路径
+          example: output/result.csv
+        size:
+          type: integer
+          description: 文件大小（字节）
+          example: 1024
+        mime_type:
+          type: string
+          description: MIME 类型
+          example: text/csv
+        type:
+          type: string
+          enum: [artifact, log, output]
+          description: 文件类型
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+        checksum:
+          type: string
+          description: SHA256 校验和（可选）
+        download_url:
+          type: string
+          description: 预签名 S3 URL（可选）
+
+    Error:
+      type: object
+      required:
+        - error_code
+        - description
+        - error_detail
+      properties:
+        error_code:
+          type: string
+          example: Internal.Unauthorized
+        description:
+          type: string
+          description: 错误描述
+        error_detail:
+          type: string
+          description: 错误详情
+        solution:
+          type: string
+          description: 处理建议
+
+  responses:
+    BadRequestError:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Internal.InvalidParameter
+            description: Invalid parameter
+            error_detail: Field 'execution_time' must be a number
+            solution: Please check your request format
+
+    UnauthorizedError:
+      description: 认证失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Internal.Unauthorized
+            description: Authentication failed
+            error_detail: Invalid or missing API token
+            solution: Please provide valid INTERNAL_API_TOKEN
+
+    ExecutionNotFoundError:
+      description: 执行记录不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Internal.InvalidExecution
+            description: Execution not found
+            error_detail: Execution record does not exist
+
+    StateConflictError:
+      description: 状态冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: Internal.StateConflict
+            description: State conflict
+            error_detail: Execution is already in 'completed' state
+            solution: Cannot update status of completed execution
+
+x-tagGroups:
+  - name: 通用说明
+    tags:
+      - 公共Header说明
+  - name: 内部接口
+    tags:
+      - 执行结果上报
+      - 心跳上报
+  - name: 错误码
+    tags:
+      - 自定义错误码汇总
