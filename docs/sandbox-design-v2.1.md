@@ -2,11 +2,11 @@
 ## 1. 架构设计
 ### 1.1 整体架构
 
-系统采用管理中心（Control Plane）与运行时（Runtime）分离的云原生架构，支持 Docker 和 Kubernetes 两种部署模式。
+系统采用管理中心（Control Plane）与容器调度器（Container Scheduler）分离的云原生架构，支持 Docker 和 Kubernetes 两种部署模式。
 核心设计原则：
 
 - 控制平面无状态，支持水平扩展
-- 运行时池化管理，动态伸缩
+- 容器调度器池化管理，动态伸缩
 - 协议驱动的解耦设计
 - 多层安全隔离
 - 异步高并发处理
@@ -22,21 +22,18 @@ graph TB
         K8s["Kubernetes 集群"]
         Docker["Docker Engine"]
     end
-    
+
     subgraph SandboxPlatform["Python 沙箱平台"]
         ControlPlane["管理中心<br/>(Control Plane)"]
-        Runtime["运行时<br/>(Runtime)"]
+        ContainerScheduler["Container Scheduler 模块"]
     end
-    
+
     上层服务 -->|执行代码请求| ControlPlane
     Dev -->|SDK/API 调用| ControlPlane
-    ControlPlane -->|调度任务| Runtime
-    ControlPlane -->|创建/管理 Pod| K8s
-    ControlPlane -->|管理容器| Docker
-    Runtime -->|上报结果| ControlPlane
-    Runtime -->|运行在| K8s
-    Runtime -->|运行在| Docker
-    
+    ContainerScheduler -->|直接调用| K8s
+    ContainerScheduler -->|直接访问| Docker
+    ContainerScheduler -->|上报结果| ControlPlane
+
     style SandboxPlatform fill:#e1f5ff
     style External fill:#fff4e6
 ```
@@ -58,19 +55,19 @@ graph TB
         Monitor["监控探针<br/>(Health Probe)"]
         ResultStore["结果存储<br/>(Result Store)"]
     end
-    
-    subgraph RuntimePool["运行时池 (Runtime Pool)"]
-        DockerRuntime["Docker 运行时"]
-        K8sRuntime["K8s 运行时"]
+
+    subgraph ContainerScheduler["Container Scheduler 模块"]
+        DockerRuntime["Docker Scheduler"]
+        K8sRuntime["K8s Scheduler"]
         WarmPool["预热池<br/>(Warm Pool)"]
     end
-    
+
     subgraph Sandbox["沙箱实例"]
         Container["容器<br/>(Docker/Pod)"]
         BubbleWrap["Bubblewrap<br/>(进程隔离)"]
         Executor["执行器<br/>(Code Executor)"]
     end
-    
+
     subgraph Storage["存储层"]
         MariaDB["MariaDB<br/>(会话状态/模板)"]
         S3["对象存储 S3<br/>(workspace 文件)"]
@@ -88,18 +85,18 @@ graph TB
     Monitor --> DockerRuntime
     Monitor --> K8sRuntime
     ResultStore --> S3
-    
+
     DockerRuntime --> Container
     K8sRuntime --> Container
     WarmPool --> Container
     Container --> BubbleWrap
     BubbleWrap --> Executor
     Executor -->|上报结果| API
-    
+
     TemplateMgr --> Etcd
-    
+
     style ControlPlane fill:#bbdefb
-    style RuntimePool fill:#c8e6c9
+    style ContainerScheduler fill:#c8e6c9
     style Sandbox fill:#fff9c4
     style Storage fill:#f8bbd0
 ```
@@ -108,7 +105,7 @@ graph TB
 - API Gateway: 统一入口，基于 FastAPI 实现
 - 调度器: 智能任务分发和资源调度
 - 会话管理器: 会话生命周期管理
-- 运行时池: Docker/K8s 运行时实例管理
+- Container Scheduler: Docker/K8s 运行时实例管理
 - 存储层：
   - MariaDB（会话状态/模板/执行记录）
   - S3 对象存储（workspace 文件，通过 Volume 挂载到容器）
@@ -310,7 +307,7 @@ class ExecutionResult(BaseModel):
 
 #### 2.1.2 调度器 (Scheduler)
 
-调度器负责为会话请求选择最优的运行时节点。系统采用**无状态架构**，容器本身不存储任何数据，所有状态存储在外部 S3 workspace 中。
+调度器负责为会话请求选择最优的容器节点。系统采用**无状态架构**，容器本身不存储任何数据，所有状态存储在外部 S3 workspace 中。
 
 **无状态架构说明**：
 
@@ -642,7 +639,7 @@ class SessionManager:
             if not session_db:
                 raise ValueError(f"Session {session_id} not found")
 
-            # 获取运行时节点信息
+            # 获取容器节点信息
             runtime_node = await self.scheduler.get_node(session_db.runtime_node)
 
             # 调用运行时清理资源
@@ -847,7 +844,7 @@ class HealthProbe:
             await asyncio.sleep(10)
 ```
 
-### 2.2 运行时 (Runtime)
+### 2.2 Container Scheduler 模块
 
 运行时负责管理沙箱容器的生命周期。系统采用容器隔离 + Bubblewrap 进程隔离的双层安全机制。
 
@@ -1647,7 +1644,7 @@ sequenceDiagram
     Scheduler->>WarmPool: acquire(template_id)
     alt 预热实例可用
         WarmPool-->>Scheduler: 返回预热实例
-        Scheduler-->>SessionMgr: 返回运行时节点
+        Scheduler-->>SessionMgr: 返回容器节点
     else 无预热实例
         Scheduler->>Runtime: 选择最优节点
         Runtime-->>Scheduler: 返回节点信息
@@ -1716,7 +1713,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Probe as 监控探针
-    participant Runtime as 运行时节点
+    participant Runtime as 容器节点
     participant Scheduler as 调度器
     participant SessionMgr as 会话管理器
     
@@ -1868,7 +1865,7 @@ PUT    /api/v1/templates/{id}                     # 更新模板
 DELETE /api/v1/templates/{id}                     # 删除模板
 
 # 运行时管理
-GET    /api/v1/runtimes                           # 列出运行时节点
+GET    /api/v1/runtimes                           # 列出容器节点
 GET    /api/v1/runtimes/{id}/health               # 获取节点健康状态
 GET    /api/v1/runtimes/{id}/metrics              # 获取节点指标
 ```
@@ -1960,22 +1957,9 @@ POST /internal/executions/{execution_id}/result
 **安全说明**: 内部 API 应该：
 - 仅在内网/容器网络中可访问
 - 使用认证机制（如 JWT token 或 API Key）
-- 限制仅运行时节点可访问
+- 限制仅容器节点可访问
 
-#### 4.2.3 运行时 API（由 Control Plane 调用）
-
-**说明**: 控制平面调用运行时节点（Docker/K8s Runtime）的接口。
-
-```
-# 运行时会话管理
-POST   /runtime/sessions                          # 在运行时节点创建会话容器
-DELETE /runtime/sessions/{session_id}             # 销毁会话容器
-GET    /runtime/sessions/{session_id}/status      # 查询会话容器状态
-
-# 运行时健康检查
-GET    /runtime/health                            # 运行时节点健康检查
-GET    /runtime/metrics                           # 运行时节点资源指标（CPU/内存/容器数）
-```
+**说明**: Container Scheduler 作为 Control Plane 内部模块，通过 SDK 直接调用 Docker/K8s API，无需独立的 HTTP API。
 
 ### 4.3 执行语义与幂等性模型
 
@@ -2285,7 +2269,7 @@ flowchart TD
 2. **运行时连接恢复**:
    ```python
    async def reconnect_runtime_nodes():
-       """重新连接所有运行时节点"""
+       """重新连接所有容器节点"""
        nodes = await db.query(SELECT * FROM runtime_nodes)
 
        for node in nodes:
@@ -2377,13 +2361,13 @@ flowchart TD
 
 **场景 3: 网络分区**
 
-网络分区可能导致 Control Plane 与 Runtime 节点、Executor 之间通信中断。
+网络分区可能导致 Control Plane 与 容器节点、Executor 之间通信中断。
 
 ```mermaid
 flowchart TD
     A[网络分区发生] --> B{哪些节点受影响?}
 
-    B -->|Runtime 节点不可达| C[标记节点为 unhealthy]
+    B -->|容器节点不可达| C[标记节点为 unhealthy]
     B -->|Executor 心跳丢失| D[标记执行为 crashed]
     B -->|Control Plane 不可达| E[Executor 本地持久化结果]
 
@@ -2560,7 +2544,7 @@ flowchart TD
 **最佳实践建议**:
 
 1. **定期健康检查**:
-   - 每 10 秒检查一次 Runtime 节点健康状态
+   - 每 10 秒检查一次 容器节点健康状态
    - 每 5 秒检查一次 Executor 心跳
    - 使用 Kubernetes liveness/readiness probe
 

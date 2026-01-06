@@ -12,10 +12,12 @@ This is a **Sandbox Platform** designed for secure code execution in AI agent ap
 
 ### High-Level Design
 
-The system uses a **Control Plane + Runtime** separated architecture:
+The system uses a **Control Plane + Container Scheduler** architecture:
 
 - **Control Plane (管理中心)**: FastAPI-based management service handling API requests, scheduling, session management, and monitoring
-- **Runtime (运行时)**: Container execution environment supporting both Docker and Kubernetes modes
+- **Container Scheduler (容器调度器)**: Internal module that directly calls Docker/K8s APIs
+  - **Docker Scheduler**: Accesses Docker socket directly via aiodocker SDK
+  - **K8s Scheduler**: Accesses Kubernetes API via ServiceAccount and python client
 - **Dual-Layer Isolation**: Container isolation (first layer) + Bubblewrap process isolation (second layer)
 
 ### Key Components
@@ -25,12 +27,12 @@ The system uses a **Control Plane + Runtime** separated architecture:
    - Scheduler with intelligent task distribution (supports ephemeral and persistent session modes)
    - Session Manager with Redis-backed state
    - Template Manager for sandbox environment definitions
-   - Health Probe for runtime monitoring
+   - Health Probe for container monitoring
    - Warm Pool for fast instance startup
 
-2. **Runtime Components**:
-   - Docker Runtime for local container management
-   - Kubernetes Runtime for orchestrated pod management
+2. **Container Scheduler Components**:
+   - Docker Scheduler for direct Docker socket access (aiodocker)
+   - K8s Scheduler for Kubernetes API access (python client)
    - Executor (sandbox-executor) - HTTP daemon running inside containers that receives execution requests and spawns Bubblewrap-isolated processes
 
 3. **CLI Tool** (`sandbox-run`):
@@ -47,7 +49,7 @@ The system supports two session modes with different scheduling strategies:
 
 ### Protocol Design
 
-The Control Plane and Runtime communicate via RESTful API:
+The Control Plane exposes RESTful API to external clients, while Container Scheduler directly calls Docker/K8s SDKs:
 
 ```
 # Session Management
@@ -59,6 +61,11 @@ DELETE /api/v1/sessions/{id}            # Terminate session
 POST   /api/v1/sessions/{id}/execute    # Submit execution task
 GET    /api/v1/sessions/{id}/status     # Query execution status
 GET    /api/v1/sessions/{id}/result     # Get execution results
+
+# Container Management
+GET    /api/v1/containers               # List containers
+GET    /api/v1/containers/{id}          # Get container details
+GET    /api/v1/containers/{id}/logs     # Get container logs
 
 # Template Management
 POST   /api/v1/templates                # Create template
@@ -77,7 +84,9 @@ Multi-layer isolation strategy:
 
 - **Language**: Python 3.11+
 - **API Framework**: FastAPI + Uvicorn (async)
-- **Container Runtime**: Docker SDK / Kubernetes Python Client
+- **Container Management**:
+  - Docker: aiodocker SDK with direct socket access
+  - Kubernetes: official Python client with ServiceAccount authentication
 - **State Storage**: Redis
 - **Result Storage**: S3-compatible object storage
 - **Configuration**: Etcd
@@ -144,11 +153,16 @@ sandbox/
 │   ├── api/               # API route handlers
 │   ├── scheduler/         # Task scheduling logic
 │   ├── session_manager/   # Session lifecycle management
-│   └── template_manager/  # Template CRUD operations
-├── runtime/               # Runtime container components
-│   ├── docker_runtime.py  # Docker runtime implementation
-│   ├── k8s_runtime.py     # Kubernetes runtime implementation
-│   └── executor/          # sandbox-executor daemon
+│   ├── template_manager/  # Template CRUD operations
+│   └── container_scheduler/  # Container Scheduler module
+│       ├── base.py        # Abstract scheduler interface
+│       ├── docker_scheduler.py  # Docker SDK wrapper
+│       ├── k8s_scheduler.py     # K8s client wrapper
+│       └── warm_pool.py   # Warm pool management
+├── executor/              # sandbox-executor daemon
+│   ├── http_server.py     # HTTP API server
+│   ├── executor.py        # Code execution logic
+│   └── isolation.py       # Bubblewrap wrapper
 ├── cli/                   # CLI tool (sandbox-run)
 │   ├── main.py           # CLI entry point
 │   ├── runner.py         # Execution wrapper
@@ -165,11 +179,11 @@ python -m control_plane.main
 
 # Testing (expected)
 pytest tests/
-pytest tests/test_scheduler.py -v
+pytest tests/test_container_scheduler.py -v
 
 # Linting (expected)
-black control_plane/ runtime/
-flake8 control_plane/ runtime/
+black control_plane/ executor/
+flake8 control_plane/ executor/
 ```
 
 ## Design Philosophy

@@ -31,7 +31,45 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+Review the proposed implementation against these core principles from `.specify/memory/constitution.md`:
+
+- **I. Security-First Development**: Does this feature affect isolation layers, container security, or privilege boundaries?
+  - [ ] Multi-layer isolation maintained (container + Bubblewrap)
+  - [ ] Least privilege enforced (non-privileged user, dropped capabilities)
+  - [ ] Input validation for all external inputs
+  - [ ] Security review required if isolation mechanisms change
+
+- **II. Test-Driven Quality**: Are tests planned for all user-facing functionality?
+  - [ ] Contract tests defined for API endpoints and inter-service communication
+  - [ ] Integration tests planned for session lifecycle and multi-component workflows
+  - [ ] Unit tests planned for business logic
+  - [ ] Test independence verified (each user story independently testable)
+
+- **III. Performance Standards**: Does this feature have performance requirements?
+  - [ ] Latency targets defined (if user-facing)
+  - [ ] Resource limits specified (if applicable)
+  - [ ] Performance testing planned for critical paths
+  - [ ] Timeout controls considered
+
+- **IV. Protocol-Driven Design**: Are communication protocols clearly defined?
+  - [ ] API contracts documented (request/response schemas)
+  - [ ] RESTful compliance verified
+  - [ ] Versioning strategy defined (if breaking changes)
+  - [ ] Error handling follows structured format
+
+- **V. Observability & Debugging**: Is the feature observable in production?
+  - [ ] Structured logging planned (JSON format with trace IDs)
+  - [ ] Metrics collection defined (Prometheus)
+  - [ ] Error messages actionable and user-friendly
+  - [ ] Debug mode considered
+
+- **VI. User Experience Consistency**: Is the interface consistent with platform standards?
+  - [ ] CLI follows Unix conventions (if applicable)
+  - [ ] SDK provides high-level and low-level APIs (if applicable)
+  - [ ] Documentation complete (docstrings, examples, quickstart)
+  - [ ] Error messages actionable
+
+**Complexity Tracking**: If any principle cannot be fully satisfied, document in the Complexity Tracking table below with justification.
 
 ## Project Structure
 

@@ -12,7 +12,7 @@
 - 代码执行：提交执行任务并获取结果
 - 文件操作：上传/下载会话工作目录中的文件
 - 模板管理：管理沙箱环境模板
-- 运行时管理：监控运行时节点状态
+- 容器管理：监控容器状态和资源使用
 
 **调用方**:
 - AI Agent 应用
@@ -33,7 +33,6 @@
 
 **调用方**:
 - sandbox-executor (容器内守护进程)
-- 运行时节点代理
 
 **基础路径**: `/internal`
 
@@ -42,22 +41,30 @@
 - 使用 INTERNAL_API_TOKEN 认证
 - 建议配置 NetworkPolicy 限制访问
 
-### 3. [runtime-api.yaml](./runtime-api.yaml)
-**运行时 API** - 由 Control Plane 调用运行时节点的接口
+## 架构说明
 
-**主要功能**:
-- 会话容器管理：创建、查询、更新、销毁容器
-- 容器操作：执行代码、获取日志、执行命令
-- 健康检查：节点健康状态监控
-- 指标查询：资源使用情况查询
-- 预热池管理：查询和调整预热池状态
+### 容器调度架构
 
-**调用方**:
-- Control Plane（管理中心）
-- 调度器 (Scheduler)
-- 会话管理器 (Session Manager)
+沙箱平台采用 **Container Scheduler** 作为 Control Plane 的内部模块，直接调用 Docker/K8s API 管理容器生命周期：
 
-**基础路径**: `/runtime`
+```
+Control Plane
+  └─ Container Scheduler (模块)
+      ├─ K8s Scheduler (kubernetes python client)
+      └─ Docker Scheduler (aiodocker SDK)
+          ↓ 直接调用
+      Container Runtime (K8s Pod / Docker Container)
+          ↓
+      Executor (sandbox-executor 守护进程)
+          ↓ HTTP
+      Control Plane (结果上报)
+```
+
+### 关键组件
+
+- **Container Scheduler**: 容器调度器模块，负责根据模板选择运行时类型并构造容器配置
+- **Container Runtime**: 真正的运行时环境（K8s Pod 或 Docker Container）
+- **Executor**: 运行在容器内的 HTTP 守护进程，接收执行请求并调用 Bubblewrap 隔离用户代码
 
 ## 接口分类
 
@@ -67,7 +74,6 @@
 |---------|------|--------|------|
 | 控制平面 API | control-plane-api.yaml | AI Agent / 上层服务 | 提交执行任务、管理会话 |
 | 内部 API | internal-api.yaml | Executor | 上报执行结果和状态 |
-| 运行时 API | runtime-api.yaml | Control Plane | 管理容器生命周期 |
 
 ### 按功能分类
 
@@ -93,10 +99,10 @@
 - `PUT /api/v1/templates/{id}` - 更新模板
 - `DELETE /api/v1/templates/{id}` - 删除模板
 
-#### 运行时监控
-- `GET /api/v1/runtimes` - 列出运行时节点
-- `GET /api/v1/runtimes/{id}/health` - 获取节点健康状态
-- `GET /api/v1/runtimes/{id}/metrics` - 获取节点指标
+#### 容器监控
+- `GET /api/v1/containers` - 列出容器
+- `GET /api/v1/containers/{id}/status` - 获取容器状态
+- `GET /api/v1/containers/{id}/logs` - 获取容器日志
 
 ## 公共规范
 
@@ -110,11 +116,6 @@ Authorization: Bearer ACCESS_TOKEN
 #### 内部 API
 ```
 Authorization: Bearer INTERNAL_API_TOKEN
-```
-
-#### 运行时 API
-```
-Authorization: Bearer CONTROL_PLANE_API_TOKEN
 ```
 
 ### 公共请求头
@@ -154,13 +155,6 @@ Authorization: Bearer CONTROL_PLANE_API_TOKEN
 - `Internal.InvalidExecution` - 执行记录不存在
 - `Internal.StateConflict` - 状态冲突
 - `Internal.InternalError` - 内部错误
-
-#### 运行时 API 错误码
-- `Runtime.Unauthorized` - 认证失败
-- `Runtime.CapacityExceeded` - 节点容量不足
-- `Runtime.ContainerNotFound` - 容器不存在
-- `Runtime.TemplateNotFound` - 模板镜像不存在
-- `Runtime.InternalError` - 运行时内部错误
 
 ### HTTP 状态码
 

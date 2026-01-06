@@ -43,8 +43,8 @@ tags:
     description: 管理会话工作目录中的文件
   - name: 模板管理
     description: 管理沙箱环境模板
-  - name: 运行时管理
-    description: 监控运行时节点状态
+  - name: 容器管理
+    description: 监控容器状态和资源使用
   - name: 自定义错误码汇总
     description: |
       自定义错误码汇总：
@@ -622,13 +622,33 @@ paths:
         '404':
           description: 模板不存在
 
-  /runtimes:
+  /containers:
     get:
       tags:
-        - 运行时管理
-      summary: 列出运行时节点
-      description: 查询所有运行时节点及其状态
-      operationId: listRuntimes
+        - 容器管理
+      summary: 列出容器
+      description: 查询所有容器及其状态
+      operationId: listContainers
+      parameters:
+        - name: status
+          in: query
+          description: 按状态过滤
+          schema:
+            type: string
+            enum: [creating, running, completed, failed, timeout, terminated]
+        - name: runtime_type
+          in: query
+          description: 按运行时类型过滤
+          schema:
+            type: string
+            enum: [docker, kubernetes]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
       responses:
         '200':
           description: 查询成功
@@ -637,54 +657,72 @@ paths:
               schema:
                 type: object
                 properties:
-                  runtimes:
+                  containers:
                     type: array
                     items:
-                      $ref: '#/components/schemas/RuntimeNode'
+                      $ref: '#/components/schemas/ContainerInfo'
                   total:
                     type: integer
 
-  /runtimes/{id}/health:
+  /containers/{id}:
     get:
       tags:
-        - 运行时管理
-      summary: 获取节点健康状态
-      operationId: getRuntimeHealth
+        - 容器管理
+      summary: 获取容器详情
+      description: 获取指定容器的详细信息
+      operationId: getContainer
       parameters:
         - name: id
           in: path
           required: true
-          description: 节点 ID
+          description: 容器 ID 或 Pod 名称
           schema:
             type: string
       responses:
         '200':
-          description: 健康状态
+          description: 查询成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RuntimeHealth'
+                $ref: '#/components/schemas/ContainerInfo'
+        '404':
+          description: 容器不存在
 
-  /runtimes/{id}/metrics:
+  /containers/{id}/logs:
     get:
       tags:
-        - 运行时管理
-      summary: 获取节点指标
-      description: 获取运行时节点的资源使用指标
-      operationId: getRuntimeMetrics
+        - 容器管理
+      summary: 获取容器日志
+      description: 获取容器的标准输出和标准错误日志
+      operationId: getContainerLogs
       parameters:
         - name: id
           in: path
           required: true
+          description: 容器 ID 或 Pod 名称
           schema:
             type: string
+        - name: tail
+          in: query
+          description: 返回最后 N 行日志
+          schema:
+            type: integer
+            default: 100
+        - name: since
+          in: query
+          description: 返回指定时间之后的日志
+          schema:
+            type: string
+            format: date-time
       responses:
         '200':
-          description: 指标数据
+          description: 日志内容
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/RuntimeMetrics'
+                type: string
+        '404':
+          description: 容器不存在
 
 components:
   parameters:
@@ -1139,86 +1177,46 @@ components:
           type: string
           format: date-time
 
-    RuntimeNode:
+    ContainerInfo:
       type: object
       required:
-        - id
-        - type
+        - container_id
+        - runtime_type
         - status
       properties:
-        id:
+        container_id:
           type: string
-          example: k8s-node-1
-        type:
+          description: 容器 ID 或 Pod 名称
+          example: abc123def456
+        pod_name:
+          type: string
+          description: Pod 名称（Kubernetes 模式）
+          example: sandbox-sess-abc123
+        runtime_type:
           type: string
           enum: [docker, kubernetes]
+          example: kubernetes
         status:
           type: string
-          enum: [healthy, unhealthy, draining]
-        cpu_usage:
-          type: number
-          format: float
-          minimum: 0
-          maximum: 1
-          example: 0.65
-        mem_usage:
-          type: number
-          format: float
-          minimum: 0
-          maximum: 1
-          example: 0.72
-        session_count:
-          type: integer
-          example: 15
-        max_sessions:
-          type: integer
-          example: 50
-        cached_templates:
-          type: array
-          items:
-            type: string
-          example:
-            - python-basic
-            - python-datascience
-        last_heartbeat:
+          enum: [creating, running, completed, failed, timeout, terminated]
+        session_id:
+          type: string
+          example: sess_abc123def4567890
+        template_id:
+          type: string
+          example: python-datascience
+        node_name:
+          type: string
+          description: 节点名称（Kubernetes）
+          example: k8s-node-1
+        resources:
+          $ref: '#/components/schemas/ResourceLimit'
+        created_at:
           type: string
           format: date-time
-
-    RuntimeHealth:
-      type: object
-      required:
-        - status
-      properties:
-        status:
-          type: string
-          enum: [healthy, unhealthy]
-        last_check:
-          type: string
-          format: date-time
-
-    RuntimeMetrics:
-      type: object
-      required:
-        - cpu_usage
-        - memory_usage
-        - session_count
-      properties:
-        cpu_usage:
-          type: number
-          format: float
-          description: CPU 使用率（0-1）
-        memory_usage:
-          type: number
-          format: float
-          description: 内存使用率（0-1）
-        session_count:
-          type: integer
-        available_capacity:
-          type: integer
-          description: 可用容量
         uptime_seconds:
           type: integer
-          description: 运行时长（秒）
+          description: 容器运行时长（秒）
 
     Error:
       type: object
