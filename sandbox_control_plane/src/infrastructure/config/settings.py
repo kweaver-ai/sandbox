@@ -32,22 +32,12 @@ class Settings(BaseSettings):
     workers: int = Field(default=4)
 
     # ============== 数据库配置 ==============
-    db_host: str = Field(default="localhost")
-    db_port: int = Field(default=3306)
-    db_user: str = Field(default="sandbox")
-    db_password: str = Field(default="password")
-    db_name: str = Field(default="sandbox")
+    database_url: str = Field(
+        default="mysql+aiomysql://sandbox:password@localhost:3306/sandbox"
+    )
     db_pool_size: int = Field(default=20)
     db_max_overflow: int = Field(default=40)
     db_pool_recycle: int = Field(default=3600)
-
-    @property
-    def database_url(self) -> str:
-        """构建数据库连接 URL"""
-        return (
-            f"mysql+aiomysql://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
 
     # ============== Redis 配置 ==============
     redis_host: str = Field(default="localhost")

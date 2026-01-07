@@ -3,6 +3,7 @@
 
 定义容器监控相关的 HTTP 端点。
 """
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional, List
 
@@ -14,10 +15,11 @@ from sandbox_control_plane.src.interfaces.rest.schemas.response import Container
 router = APIRouter(prefix="/containers", tags=["containers"])
 
 
-async def get_container_service() -> ContainerService:
+async def get_container_service(
+    request: fastapi.Request
+) -> ContainerService:
     """依赖注入：获取容器服务"""
-    # TODO: 从依赖注入容器获取
-    pass
+    return request.app.state.container_service
 
 
 @router.get("", response_model=List[ContainerResponse])

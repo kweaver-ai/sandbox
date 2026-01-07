@@ -3,6 +3,7 @@
 
 定义执行相关的 HTTP 端点。
 """
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional
 
@@ -20,10 +21,11 @@ from sandbox_control_plane.src.interfaces.rest.schemas.response import (
 router = APIRouter(prefix="/executions", tags=["executions"])
 
 
-async def get_session_service() -> SessionService:
+async def get_session_service(
+    request: fastapi.Request
+) -> SessionService:
     """依赖注入：获取会话服务"""
-    # TODO: 从依赖注入容器获取
-    pass
+    return request.app.state.session_service
 
 
 @router.post("/sessions/{session_id}/execute", response_model=ExecuteCodeResponse, status_code=status.HTTP_201_CREATED)

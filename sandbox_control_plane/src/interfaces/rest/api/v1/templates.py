@@ -4,7 +4,7 @@
 定义模板相关的 HTTP 端点。
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import Optional, List
+from typing import List
 
 from sandbox_control_plane.src.application.services.template_service import TemplateService
 from sandbox_control_plane.src.application.commands.create_template import CreateTemplateCommand
@@ -13,20 +13,15 @@ from sandbox_control_plane.src.application.queries.get_template import GetTempla
 from sandbox_control_plane.src.application.dtos.template_dto import TemplateDTO
 from sandbox_control_plane.src.interfaces.rest.schemas.request import CreateTemplateRequest, UpdateTemplateRequest
 from sandbox_control_plane.src.interfaces.rest.schemas.response import TemplateResponse, ErrorResponse
+from sandbox_control_plane.src.infrastructure.dependencies import get_template_service_db
 
 router = APIRouter(prefix="/templates", tags=["templates"])
-
-
-async def get_template_service() -> TemplateService:
-    """依赖注入：获取模板服务"""
-    # TODO: 从依赖注入容器获取
-    pass
 
 
 @router.post("", response_model=TemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_template(
     request: CreateTemplateRequest,
-    service: TemplateService = Depends(get_template_service)
+    service: TemplateService = Depends(get_template_service_db)
 ):
     """
     创建模板
@@ -82,7 +77,7 @@ async def create_template(
 async def list_templates(
     limit: int = 50,
     offset: int = 0,
-    service: TemplateService = Depends(get_template_service)
+    service: TemplateService = Depends(get_template_service_db)
 ):
     """列出所有模板"""
     try:
@@ -119,7 +114,7 @@ async def list_templates(
 @router.get("/{template_id}", response_model=TemplateResponse)
 async def get_template(
     template_id: str,
-    service: TemplateService = Depends(get_template_service)
+    service: TemplateService = Depends(get_template_service_db)
 ):
     """获取模板详情"""
     try:
@@ -152,7 +147,7 @@ async def get_template(
 async def update_template(
     template_id: str,
     request: UpdateTemplateRequest,
-    service: TemplateService = Depends(get_template_service)
+    service: TemplateService = Depends(get_template_service_db)
 ):
     """更新模板"""
     try:
@@ -194,7 +189,7 @@ async def update_template(
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: str,
-    service: TemplateService = Depends(get_template_service)
+    service: TemplateService = Depends(get_template_service_db)
 ):
     """删除模板"""
     try:

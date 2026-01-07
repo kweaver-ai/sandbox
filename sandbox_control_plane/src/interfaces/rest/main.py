@@ -40,16 +40,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # 启动时执行
     logger.info("Starting Sandbox Control Plane")
+
+    # 初始化依赖注入
+    from sandbox_control_plane.src.infrastructure.dependencies import initialize_dependencies
+    initialize_dependencies(app)
+    logger.info("Dependencies initialized")
+
     # TODO: 初始化数据库连接
-    # TODO: 初始化调度器
     # TODO: 启动后台清理任务
 
     yield
 
     # 关闭时执行
     logger.info("Shutting down Sandbox Control Plane")
-    # TODO: 关闭数据库连接
-    # TODO: 停止后台任务
+    # 清理依赖项（包括关闭数据库连接）
+    from sandbox_control_plane.src.infrastructure.dependencies import cleanup_dependencies
+    await cleanup_dependencies(app)
 
 
 def create_app() -> FastAPI:
@@ -194,7 +200,7 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "src.interfaces.rest.main:app",
+        "sandbox_control_plane.src.interfaces.rest.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,

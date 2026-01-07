@@ -14,7 +14,7 @@ from sandbox_control_plane.src.domain.value_objects.execution_status import Sess
 from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
 from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
 from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.domain.services.scheduler import IScheduler
+from sandbox_control_plane.src.domain.services.scheduler import IScheduler, ScheduleRequest
 from sandbox_control_plane.src.application.commands.create_session import CreateSessionCommand
 from sandbox_control_plane.src.application.commands.execute_code import ExecuteCodeCommand
 from sandbox_control_plane.src.application.queries.get_session import GetSessionQuery
@@ -63,19 +63,25 @@ class SessionService:
         session_id = self._generate_session_id()
 
         # 3. 调用调度器
-        runtime_node = await self._scheduler.schedule(
+        schedule_request = ScheduleRequest(
             template_id=command.template_id,
-            resource_limit=command.resource_limit or ResourceLimit.default()
+            resource_limit=command.resource_limit or ResourceLimit.default(),
+            session_id=session_id
         )
+        runtime_node = await self._scheduler.schedule(schedule_request)
 
         # 4. 创建会话实体
+        # 从模板镜像推断运行时类型
+        runtime_type = self._infer_runtime_type(template.image)
+
         session = Session(
             id=session_id,
             template_id=command.template_id,
             status=SessionStatus.CREATING,
             resource_limit=command.resource_limit or ResourceLimit.default(),
             workspace_path=f"s3://sandbox-bucket/sessions/{session_id}",
-            runtime_type=runtime_node.type,
+            runtime_type=runtime_type,  # 使用推断的运行时类型
+            runtime_node=runtime_node.id,  # 存储运行时节点 ID
             env_vars=command.env_vars or {},
             timeout=command.timeout
         )
@@ -225,6 +231,21 @@ class SessionService:
         timestamp = datetime.now().strftime("%Y%m%d")
         unique = uuid.uuid4().hex[:8]
         return f"sess_{timestamp}_{unique}"
+
+    def _infer_runtime_type(self, image: str) -> str:
+        """从镜像名称推断运行时类型"""
+        image_lower = image.lower()
+        if "python" in image_lower or "python3" in image_lower:
+            return "python3.11"
+        elif "node" in image_lower or "nodejs" in image_lower:
+            return "nodejs20"
+        elif "java" in image_lower:
+            return "java17"
+        elif "go" in image_lower or "golang" in image_lower:
+            return "go1.21"
+        else:
+            # 默认使用 Python
+            return "python3.11"
 
     def _generate_execution_id(self) -> str:
         """生成执行 ID"""

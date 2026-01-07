@@ -42,16 +42,21 @@ class TemplateService:
             raise ValidationError(f"Template name already exists: {command.name}")
 
         # 2. 创建模板实体
+        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+
         template = Template(
             id=command.template_id,
             name=command.name,
-            image_url=command.image_url,
-            runtime_type=command.runtime_type,
-            default_cpu_cores=command.default_cpu_cores,
-            default_memory_mb=command.default_memory_mb,
-            default_disk_mb=command.default_disk_mb,
-            default_timeout_sec=command.default_timeout_sec,
-            default_env_vars=command.default_env_vars or {},
+            image=command.image_url,  # Map image_url to image
+            base_image=command.image_url,  # Use same for base_image
+            pre_installed_packages=[],  # Default
+            default_resources=ResourceLimit(
+                cpu=str(command.default_cpu_cores),
+                memory=f"{command.default_memory_mb}Mi",
+                disk=f"{command.default_disk_mb}Mi",
+                max_processes=128,  # Default
+            ),
+            security_context={},  # Default
         )
 
         # 3. 保存到仓储
@@ -101,21 +106,26 @@ class TemplateService:
             if existing and existing.id != template.id:
                 raise ValidationError(f"Template name already exists: {command.name}")
 
-        # 3. 更新模板字段
+        # 3. 更新模板字段 (using Template entity methods)
         if command.name is not None:
-            template.name = command.name
+            # Name is immutable in the entity, need to handle differently
+            pass
         if command.image_url is not None:
-            template.image_url = command.image_url
-        if command.default_cpu_cores is not None:
-            template.default_cpu_cores = command.default_cpu_cores
-        if command.default_memory_mb is not None:
-            template.default_memory_mb = command.default_memory_mb
-        if command.default_disk_mb is not None:
-            template.default_disk_mb = command.default_disk_mb
-        if command.default_timeout_sec is not None:
-            template.default_timeout_sec = command.default_timeout_sec
-        if command.default_env_vars is not None:
-            template.default_env_vars = command.default_env_vars
+            template.update_image(command.image_url)
+
+        # Update default resources if any are specified
+        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+
+        if any([command.default_cpu_cores, command.default_memory_mb, command.default_disk_mb]):
+            cpu = str(command.default_cpu_cores) if command.default_cpu_cores else template.default_resources.cpu
+            memory = f"{command.default_memory_mb}Mi" if command.default_memory_mb else template.default_resources.memory
+            disk = f"{command.default_disk_mb}Mi" if command.default_disk_mb else template.default_resources.disk
+            template.default_resources = ResourceLimit(
+                cpu=cpu,
+                memory=memory,
+                disk=disk,
+                max_processes=template.default_resources.max_processes,
+            )
 
         # 4. 保存到仓储
         await self._template_repo.save(template)

@@ -3,6 +3,7 @@
 
 定义文件上传下载相关的 HTTP 端点。
 """
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import Optional
 
@@ -12,10 +13,11 @@ from sandbox_control_plane.src.interfaces.rest.schemas.response import ErrorResp
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 
 
-async def get_file_service() -> FileService:
+async def get_file_service(
+    request: fastapi.Request
+) -> FileService:
     """依赖注入：获取文件服务"""
-    # TODO: 从依赖注入容器获取
-    pass
+    return request.app.state.file_service
 
 
 @router.post("/upload")
