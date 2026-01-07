@@ -56,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 # Start the executor daemon
 # The executor runs as PID 1 and manages its lifecycle
-CMD ["python", "-m", "executor.interfaces.rest"]
+CMD ["python", "-m", "executor.interfaces.http.rest"]

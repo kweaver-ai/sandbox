@@ -42,7 +42,7 @@ dev = [
 ]
 
 [project.scripts]
-sandbox-executor = "executor.interfaces.cli:main"
+sandbox-executor = "executor.interfaces.http.rest:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

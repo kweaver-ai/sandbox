@@ -8,6 +8,7 @@ Implements secure code execution using Bubblewrap for process isolation.
 import json
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import List, Optional
 import structlog
@@ -17,6 +18,50 @@ from executor.domain.value_objects import ExecutionResult, ExecutionStatus
 
 
 logger = structlog.get_logger(__name__)
+
+
+def check_bwrap_available() -> bool:
+    """
+    Check if Bubblewrap is available on the system.
+
+    Returns:
+        True if bwrap is available, False otherwise
+
+    Raises:
+        RuntimeError: If bwrap is not found
+    """
+    if not shutil.which("bwrap"):
+        raise RuntimeError("Bubblewrap (bwrap) is not installed or not in PATH")
+    return True
+
+
+def get_bwrap_version() -> str:
+    """
+    Get the Bubblewrap version.
+
+    Returns:
+        Version string (e.g., "1.7.0")
+
+    Raises:
+        RuntimeError: If bwrap is not available or version cannot be determined
+    """
+    try:
+        result = subprocess.run(
+            ["bwrap", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            # Extract version from output like "bwrap 1.7.0"
+            version = result.stdout.strip().split()[-1]
+            return version
+        raise RuntimeError("Failed to get bwrap version")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Timeout getting bwrap version")
+    except FileNotFoundError:
+        raise RuntimeError("bwrap not found")
+
 
 
 class BubblewrapRunner:

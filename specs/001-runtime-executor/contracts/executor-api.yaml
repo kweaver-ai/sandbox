@@ -1,0 +1,376 @@
+openapi: 3.0.3
+info:
+  title: Sandbox Executor API
+  version: 1.0.0
+  description: |
+    HTTP API exposed by sandbox-executor (running inside containers).
+
+    ## Purpose
+    The executor receives code execution requests from the Control Plane and returns
+    execution results. This is an internal API, only accessible within the container network.
+
+    ## Authentication
+    - No authentication required (internal container-to-container communication)
+    - Access controlled via NetworkPolicy (Kubernetes) or Docker network isolation
+
+    ## Security
+    - All code execution happens in Bubblewrap sandbox
+    - Namespace isolation enforced for every request
+    - Resource limits applied (timeout, memory, CPU)
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (executor container)
+
+tags:
+  - name: Execution
+    description: Code execution operations
+  - name: Health
+    description: Health check operations
+
+paths:
+  /execute:
+    post:
+      tags:
+        - Execution
+      summary: Execute code in sandbox
+      description: |
+        Executes code in a Bubblewrap-isolated environment and returns the result.
+
+        ## Execution Flow
+        1. Request validated (code size, timeout range, language whitelist)
+        2. Bubblewrap subprocess spawned with isolation flags
+        3. User code executed (Python: handler(event), JavaScript/Shell: direct)
+        4. Result captured (stdout, stderr, exit code, metrics, artifacts)
+        5. Result reported to Control Plane asynchronously via callback
+        6. Response returned immediately with execution status
+
+        ## Timeout Enforcement
+        - Subprocess killed if execution exceeds timeout
+        - Default timeout: 30 seconds
+        - Maximum timeout: 3600 seconds
+
+        ## Language Support
+        - `python`: AWS Lambda-style handler with event input
+        - `javascript`: Node.js script execution
+        - `shell`: Bash script execution
+
+      operationId: executeCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionRequest'
+            examples:
+              python:
+                summary: Python Lambda handler
+                value:
+                  code: "def handler(event):\n    return {'message': 'Hello', 'input': event.get('name', 'World')}"
+                  language: python
+                  timeout: 30
+                  stdin: '{"name": "Alice"}'
+                  execution_id: exec_20250106_abc12345
+              javascript:
+                summary: JavaScript code
+                value:
+                  code: "console.log('Hello from Node.js');"
+                  language: javascript
+                  timeout: 10
+                  stdin: ""
+                  execution_id: exec_20250106_def67890
+              shell:
+                summary: Shell script
+                value:
+                  code: "echo 'Hello from Bash'"
+                  language: shell
+                  timeout: 5
+                  stdin: ""
+                  execution_id: exec_20250106_ghi13579
+      responses:
+        '200':
+          description: Execution completed (success, failed, or timeout)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResult'
+              examples:
+                success:
+                  summary: Execution succeeded
+                  value:
+                    status: success
+                    stdout: "Processing complete.\n"
+                    stderr: ""
+                    exit_code: 0
+                    execution_time: 0.07523
+                    return_value:
+                      message: Hello
+                      input: Alice
+                    metrics:
+                      duration_ms: 75.23
+                      cpu_time_ms: 68.12
+                      peak_memory_mb: 42.5
+                    artifacts:
+                      - output/result.csv
+                failed:
+                  summary: Execution failed
+                  value:
+                    status: failed
+                    stdout: ""
+                    stderr: "NameError: name 'undefined_var' is not defined\n"
+                    exit_code: 1
+                    execution_time: 0.0123
+                    return_value: null
+                    metrics:
+                      duration_ms: 12.3
+                    artifacts: []
+                timeout:
+                  summary: Execution timed out
+                  value:
+                    status: timeout
+                    stdout: ""
+                    stderr: "Execution timeout after 30 seconds"
+                    exit_code: -1
+                    execution_time: 30.0
+                    return_value: null
+                    metrics:
+                      duration_ms: 30000
+                    artifacts: []
+        '400':
+          description: Invalid request (validation error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: Executor.ValidationError
+                description: Request validation failed
+                error_detail: Field 'timeout' must be between 1 and 3600
+                solution: Correct the request and retry
+        '500':
+          description: Internal executor error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: Executor.InternalError
+                description: Executor encountered an unexpected error
+                error_detail: Failed to execute code: bwrap not found
+                solution: Check executor logs for details
+        '503':
+          description: Executor queue full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: Executor.QueueFull
+                description: Maximum concurrent executions reached
+                error_detail: Executor has 10 queued executions
+                solution: Retry after current executions complete
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: |
+        Returns executor health status.
+
+        ## Use Cases
+        - Container readiness probes (Kubernetes)
+        - Container health checks (Docker)
+        - Load balancer health checks
+
+        ## Success Criteria
+        - HTTP API is listening on port 8080
+        - Bubblewrap binary is available
+        - Workspace directory is accessible
+        - Control Plane endpoint is reachable (optional)
+
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Executor is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - version
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                    example: healthy
+                  version:
+                    type: string
+                    example: 1.0.0
+                  uptime_seconds:
+                    type: number
+                    format: float
+                    example: 3600.5
+                  active_executions:
+                    type: integer
+                    example: 3
+        '503':
+          description: Executor is unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - reason
+                properties:
+                  status:
+                    type: string
+                    enum: [unhealthy]
+                  reason:
+                    type: string
+                    example: Bubblewrap binary not found
+
+components:
+  schemas:
+    ExecutionRequest:
+      type: object
+      required:
+        - code
+        - language
+        - timeout
+        - execution_id
+      properties:
+        code:
+          type: string
+          description: User code to execute
+          maxLength: 1048576
+          example: "def handler(event):\n    return {'result': 'ok'}"
+        language:
+          type: string
+          enum: [python, javascript, shell]
+          description: Programming language
+          example: python
+        timeout:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          description: Maximum execution time in seconds
+          default: 30
+          example: 30
+        stdin:
+          type: string
+          description: Standard input for the process (JSON string for event data)
+          example: '{"name": "Alice", "count": 5}'
+        execution_id:
+          type: string
+          pattern: '^exec_[0-9]{8}_[a-z0-9]{8}$'
+          description: Unique execution identifier
+          example: exec_20250106_abc12345
+
+    ExecutionResult:
+      type: object
+      required:
+        - status
+        - stdout
+        - stderr
+        - exit_code
+        - execution_time
+        - metrics
+        - artifacts
+      properties:
+        status:
+          type: string
+          enum: [success, failed, timeout, error]
+          description: Execution status
+        stdout:
+          type: string
+          description: Standard output (truncated at 10MB)
+        stderr:
+          type: string
+          description: Standard error (truncated at 10MB)
+        exit_code:
+          type: integer
+          description: Process exit code (-1 for timeout/error)
+          minimum: -1
+        execution_time:
+          type: number
+          format: float
+          description: Wall-clock execution time in seconds
+          minimum: 0
+        return_value:
+          type: object
+          description: Handler function return value (JSON-serializable)
+          nullable: true
+          additionalProperties: true
+        metrics:
+          $ref: '#/components/schemas/ExecutionMetrics'
+        artifacts:
+          type: array
+          description: Generated file paths (relative to workspace)
+          items:
+            type: string
+
+    ExecutionMetrics:
+      type: object
+      required:
+        - duration_ms
+      properties:
+        duration_ms:
+          type: number
+          format: float
+          description: Wall-clock time in milliseconds
+          minimum: 0
+        cpu_time_ms:
+          type: number
+          format: float
+          description: CPU time in milliseconds
+          minimum: 0
+        peak_memory_mb:
+          type: number
+          format: float
+          description: Peak memory usage in MB
+          minimum: 0
+        io_read_bytes:
+          type: integer
+          description: Bytes read from disk
+          minimum: 0
+        io_write_bytes:
+          type: integer
+          description: Bytes written to disk
+          minimum: 0
+
+    Error:
+      type: object
+      required:
+        - error_code
+        - description
+        - error_detail
+      properties:
+        error_code:
+          type: string
+          description: Error code (e.g., Executor.ValidationError)
+          example: Executor.ValidationError
+        description:
+          type: string
+          description: Human-readable error description
+          example: Request validation failed
+        error_detail:
+          type: string
+          description: Detailed error information
+          example: Field 'timeout' must be between 1 and 3600
+        solution:
+          type: string
+          description: Suggested fix (optional)
+          example: Correct the request and retry
+        request_id:
+          type: string
+          description: Request identifier for tracing
+          example: req_abc123
+
+x-tagGroups:
+  - name: Operations
+    tags:
+      - Execution
+      - Health

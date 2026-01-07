@@ -193,3 +193,9 @@ flake8 control_plane/ executor/
 - **Security-First**: Multiple isolation layers, defense-in-depth
 - **Performance**: Warm Pool, async processing, connection pooling
 - **Compatibility**: AWS Lambda handler specification for easy migration
+
+## Active Technologies
+- Python 3.11+ (aligned with Control Plane) (001-runtime-executor)
+
+## Recent Changes
+- 001-runtime-executor: Added Python 3.11+ (aligned with Control Plane)

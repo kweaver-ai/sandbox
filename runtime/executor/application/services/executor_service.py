@@ -14,7 +14,7 @@ import structlog
 from executor.domain.entities import Execution
 from executor.domain.value_objects import ExecutionResult, ExecutionStatus
 from executor.domain.services import ArtifactCollector
-from executor.infrastructure.bwrap import BubblewrapRunner
+from executor.infrastructure.isolation.bwrap import BubblewrapRunner
 from executor.infrastructure.result_reporter import ResultReporter
 
 
