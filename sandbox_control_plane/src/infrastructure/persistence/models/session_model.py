@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON
 from sqlalchemy.orm import DeclarativeBase
 
-from src.domain.value_objects.execution_status import SessionStatus
+from sandbox_control_plane.src.domain.value_objects.execution_status import SessionStatus
 
 
 class Base(DeclarativeBase):
@@ -47,8 +47,8 @@ class SessionModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from src.domain.entities.session import Session
-        from src.domain.value_objects.resource_limit import ResourceLimit
+        from sandbox_control_plane.src.domain.entities.session import Session
+        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
 
         return Session(
             id=self.id,

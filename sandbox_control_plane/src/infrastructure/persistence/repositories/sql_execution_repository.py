@@ -8,9 +8,9 @@ from datetime import datetime
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.repositories.execution_repository import IExecutionRepository
-from src.domain.entities.execution import Execution
-from src.infrastructure.persistence.models.execution_model import ExecutionModel
+from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
+from sandbox_control_plane.src.domain.entities.execution import Execution
+from sandbox_control_plane.src.infrastructure.persistence.models.execution_model import ExecutionModel
 
 
 class SqlExecutionRepository(IExecutionRepository):

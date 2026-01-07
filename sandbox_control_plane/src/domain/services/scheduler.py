@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
 
-from src.domain.value_objects.resource_limit import ResourceLimit
+from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
 
 
 @dataclass

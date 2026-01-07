@@ -1,8 +1,8 @@
 <!--
 Sync Impact Report
 ==================
-Version Change: 1.0.0 → 1.1.0
-Constitution Status: Minor amendment - enhanced existing principles
+Version Change: 1.1.0 → 1.2.0
+Constitution Status: Minor amendment - new principle added
 
 Modified Principles:
   - II. Test-Driven Quality (expanded with code quality requirements)
@@ -10,20 +10,23 @@ Modified Principles:
   - VI. User Experience Consistency (expanded with interface standards)
 
 Added Sections:
-  - New quality gate: Code Coverage Enforcement
-  - New quality gate: Performance Baseline Testing
-  - Enhanced development workflow section
+  - VII. Hexagonal Architecture Compliance (NEW)
+  - New quality gate: Architecture Compliance Review
+  - Updated code review checklist with architecture verification
 
 Removed Sections: None
 
 Templates Requiring Updates:
-  ✅ plan-template.md - Already aligned with constitution principles
-  ✅ spec-template.md - Already aligned with quality and performance requirements
-  ✅ tasks-template.md - Already aligned with testing and quality standards
+  ⚠ plan-template.md - Must add hexagonal architecture section
+  ⚠ spec-template.md - Must reference architecture requirements
+  ⚠ tasks-template.md - Must include architecture validation tasks
   ⚠ agent-file-template.md - No updates needed (agent-agnostic)
-  ⚠ checklist-template.md - May need review for quality gates alignment
+  ⚠ checklist-template.md - Must add architecture compliance items
 
-Follow-up TODOs: None
+Follow-up TODOs:
+  - Refactor existing sandbox_control_plane/ to hexagonal structure
+  - Create architecture validation scripts
+  - Update PROJECT_STRUCTURE.md with dependency diagrams
 
 Date: 2026-01-06
 -->
@@ -202,6 +205,91 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 
 **Rationale**: The platform serves both developers (via SDK) and end users (via CLI). Inconsistent interfaces increase learning curve and support burden. Professional-quality UX builds user trust and reduces support costs.
 
+### VII. Hexagonal Architecture Compliance
+
+All code MUST strictly follow the hexagonal architecture (Ports and Adapters pattern) as defined in `docs/PROJECT_STRUCTURE.md`:
+
+- **Mandatory Four-Layer Structure**:
+  - **Domain Layer** (`src/domain/`): Core business logic, entities, value objects, repository interfaces (Ports), domain services, and domain events. This layer MUST NOT depend on any outer layer.
+  - **Application Layer** (`src/application/`): Use case orchestration, commands, queries, DTOs, application services, and command/query handlers. Coordinates domain objects to fulfill use cases.
+  - **Infrastructure Layer** (`src/infrastructure/`): Technical implementations including persistence (ORM models, repository implementations), messaging, external service adapters (runtime, storage, HTTP clients), logging, and configuration.
+  - **Interfaces Layer** (`src/interfaces/`): External communication including REST API (FastAPI routes, schemas, middlewares), CLI, gRPC, WebSocket, and any other interface adapters.
+
+- **Dependency Rule MANDATORY**: Dependencies MUST ONLY point inward toward the domain core:
+  - Domain → ZERO dependencies (pure Python business logic)
+  - Application → MAY depend on Domain
+  - Infrastructure → MAY depend on Domain and Application
+  - Interfaces → MAY depend on Domain and Application
+  - **VIOLATION**: Domain MUST NEVER depend on Infrastructure or Interfaces
+  - **VIOLATION**: Application MUST NEVER depend on Infrastructure or Interfaces
+
+- **Repository Pattern ENFORCEMENT**:
+  - Repository interfaces MUST be defined in `src/domain/repositories/`
+  - Repository implementations MUST be in `src/infrastructure/persistence/repositories/`
+  - Domain layer interacts ONLY with repository interfaces, never concrete implementations
+  - Infrastructure layer implements domain interfaces using specific technologies (SQLAlchemy, aiodocker, etc.)
+
+- **Separation of Concerns**:
+  - **Domain**: Business rules, invariants, entity behaviors (no FastAPI, no SQLAlchemy, no aiodocker)
+  - **Application**: Use case workflows, transaction coordination, DTO transformations (no HTTP, no database specifics)
+  - **Infrastructure**: External systems integration, persistence, messaging (no business logic)
+  - **Interfaces**: Request/response handling, serialization, middleware (no business logic, no direct database access)
+
+- **Package Organization MANDATORY**:
+  ```
+  src/
+  ├── domain/
+  │   ├── entities/          # Business entities (e.g., Session, Template, Execution)
+  │   ├── value_objects/     # Immutable value types (e.g., ResourceLimits, Timeout)
+  │   ├── repositories/      # Repository interfaces (Ports)
+  │   ├── services/          # Domain services (business logic not fitting in entities)
+  │   └── events/            # Domain events (e.g., SessionCreated, ExecutionCompleted)
+  ├── application/
+  │   ├── commands/          # Command DTOs (write operations)
+  │   ├── queries/           # Query DTOs (read operations)
+  │   ├── dtos/              # Data transfer objects
+  │   ├── services/          # Application services (use case orchestration)
+  │   └── handlers/          # Command/query handlers
+  ├── infrastructure/
+  │   ├── persistence/
+  │   │   ├── models/        # ORM models (SQLAlchemy, etc.)
+  │   │   └── repositories/  # Repository implementations
+  │   ├── messaging/         # Message brokers, event handlers
+  │   ├── external/          # External service adapters (runtime, storage, http)
+  │   ├── logging/           # Logging configuration and handlers
+  │   └── config/            # Configuration loading (env vars, config files)
+  └── interfaces/
+      ├── rest/
+      │   ├── api/           # FastAPI routes
+      │   ├── schemas/       # Pydantic request/response models
+      │   └── middlewares/   # Custom middleware
+      ├── cli/               # CLI commands
+      ├── grpc/              # gRPC service implementations
+      └── websocket/         # WebSocket handlers
+  ```
+
+- **Testing Structure MANDATORY**: Tests MUST mirror the source structure:
+  - `tests/unit/domain/` - Test domain entities, value objects, domain services
+  - `tests/unit/application/` - Test application services, handlers
+  - `tests/integration/infrastructure/` - Test repository implementations, external adapters
+  - `tests/integration/interfaces/` - Test API endpoints, CLI commands
+  - `tests/contract/` - Contract tests for API schemas, protocol compliance
+
+- **Import Restrictions ENFORCED**:
+  - Domain entities MUST NOT import from `infrastructure` or `interfaces`
+  - Application services MUST NOT import from `infrastructure` or `interfaces`
+  - Infrastructure MAY import from `domain` and `application`
+  - Interfaces MAY import from `domain` and `application`
+  - Use dependency injection to provide infrastructure implementations to application layer
+
+- **Module Boundaries**:
+  - Each module MUST have clear responsibility per hexagonal architecture
+  - No bypassing layers (e.g., interfaces directly calling infrastructure without application layer)
+  - No business logic in interfaces or infrastructure layers
+  - No technical details (FastAPI, SQLAlchemy) in domain or application layers
+
+**Rationale**: Hexagonal architecture enables independent evolution of business logic, technical infrastructure, and external interfaces. Clear layer boundaries prevent coupling between business rules and implementation details, making the codebase testable, maintainable, and adaptable to change. Violating these boundaries creates technical debt that accumulates exponentially.
+
 ## Quality Gates
 
 ### Pre-Commit Requirements
@@ -222,6 +310,7 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 - Performance tests MUST pass if latency or resource usage affected
 - Code complexity MUST be within limits (cyclomatic complexity ≤ 10)
 - All new features MUST have associated documentation
+- Architecture compliance MUST be verified (hexagonal layers, dependency direction)
 
 ### Code Review Standards
 
@@ -231,6 +320,7 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 - Reviewers MUST check for protocol compliance and error handling
 - Reviewers MUST reject changes that lack sufficient logging or metrics
 - Reviewers MUST verify code quality standards (complexity, length, naming)
+- Reviewers MUST verify hexagonal architecture compliance (layer boundaries, dependency direction)
 - Complex code MUST be justified against constitution principles
 - All comments MUST be clear and add value (no "what" comments, only "why")
 
@@ -250,14 +340,16 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 
 1. **Specification**: Write feature spec with user stories, acceptance criteria, and success metrics
 2. **Planning**: Create implementation plan with technical context and constitution compliance check
-3. **Testing**: Write contract and integration tests FIRST. Verify tests FAIL.
-4. **Implementation**: Write code to make tests pass
+3. **Architecture Design**: Design hexagonal layer structure before implementation
+4. **Testing**: Write contract and integration tests FIRST. Verify tests FAIL.
+5. **Implementation**: Write code to make tests pass
+   - Follow hexagonal architecture (domain → application → infrastructure → interfaces)
    - Follow code quality standards (complexity, length, naming)
    - Add type hints and docstrings
    - Add logging and metrics
-5. **Review**: Code review MUST verify constitution compliance
-6. **Documentation**: Update API docs, runbooks, and architecture diagrams
-7. **Validation**: Run quickstart guide to verify user experience
+6. **Review**: Code review MUST verify constitution compliance
+7. **Documentation**: Update API docs, runbooks, and architecture diagrams
+8. **Validation**: Run quickstart guide to verify user experience
 
 ### Code Review Checklist
 
@@ -266,6 +358,7 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 - [ ] Coverage: Meets minimum thresholds (80% critical, 60% non-critical)
 - [ ] Performance: No regressions, performance tests pass if applicable
 - [ ] Quality: Code complexity ≤ 10, function length ≤ 50 lines, proper naming
+- [ ] Architecture: Hexagonal layers respected, dependencies point inward, no layer violations
 - [ ] Documentation: Docstrings present, API docs updated, examples provided
 - [ ] Observability: Structured logging, metrics collection, error handling
 - [ ] Protocol: RESTful compliance, versioned APIs, structured errors
@@ -321,4 +414,4 @@ Consistency across interfaces reduces cognitive load and ensures professional qu
 - This document MUST be taught to all new contributors
 - Compliance MUST be verified in regular code audits
 
-**Version**: 1.1.0 | **Ratified**: 2026-01-06 | **Last Amended**: 2026-01-06
+**Version**: 1.2.0 | **Ratified**: 2026-01-06 | **Last Amended**: 2026-01-06

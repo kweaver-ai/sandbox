@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Float
 from sqlalchemy.orm import relationship
 
-from src.infrastructure.persistence.models.session_model import Base
+from sandbox_control_plane.src.infrastructure.persistence.models.session_model import Base
 
 
 class ExecutionModel(Base):
@@ -42,9 +42,9 @@ class ExecutionModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from src.domain.entities.execution import Execution
-        from src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
-        from src.domain.value_objects.artifact import Artifact, ArtifactType
+        from sandbox_control_plane.src.domain.entities.execution import Execution
+        from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
+        from sandbox_control_plane.src.domain.value_objects.artifact import Artifact, ArtifactType
 
         return Execution(
             id=self.id,

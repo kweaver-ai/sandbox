@@ -13,8 +13,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from structlog import get_logger
 
-from src.interfaces.rest.api.v1.sessions import router as sessions_router
-from src.interfaces.rest.schemas.response import HealthResponse
+# 导入所有路由
+from sandbox_control_plane.src.interfaces.rest.api.v1 import (
+    sessions,
+    executions,
+    templates,
+    containers,
+    health,
+    files,
+)
+from sandbox_control_plane.src.interfaces.rest.schemas.response import HealthResponse
 
 logger = get_logger(__name__)
 
@@ -75,11 +83,11 @@ def create_app() -> FastAPI:
     # 注册异常处理器
     _register_exception_handlers(app)
 
-    # 注册路由
-    _register_routes(app)
-
     # 注册中间件
     _register_middleware(app)
+
+    # 注册路由
+    _register_routes(app)
 
     return app
 
@@ -113,21 +121,35 @@ def _register_exception_handlers(app: FastAPI) -> None:
 def _register_routes(app: FastAPI) -> None:
     """注册路由"""
 
-    # 健康检查
-    @app.get("/health", response_model=HealthResponse, tags=["health"])
-    async def health_check() -> HealthResponse:
-        """健康检查端点"""
-        return HealthResponse(
-            status="healthy",
-            version="2.1.0",
-            uptime=time.time() - _start_time,
-        )
+    # 注册所有 API 路由
+    app.include_router(health.router, prefix="/api/v1")
+    app.include_router(sessions.router, prefix="/api/v1")
+    app.include_router(executions.router, prefix="/api/v1")
+    app.include_router(templates.router, prefix="/api/v1")
+    app.include_router(containers.router, prefix="/api/v1")
+    app.include_router(files.router, prefix="/api/v1")
 
-    # API 路由
-    app.include_router(
-        sessions_router,
-        prefix="/api/v1",
-    )
+    # 根端点
+    @app.get("/", tags=["root"])
+    async def root() -> dict:
+        """根端点"""
+        return {
+            "name": "Sandbox Control Plane",
+            "version": "2.1.0",
+            "status": "operational",
+            "features": [
+                "session_management",
+                "code_execution",
+                "template_management",
+                "file_operations",
+                "container_monitoring",
+            ],
+            "documentation": {
+                "swagger": "/docs",
+                "redoc": "/redoc",
+                "openapi": "/openapi.json",
+            },
+        }
 
 
 def _register_middleware(app: FastAPI) -> None:

@@ -193,6 +193,143 @@ As a platform operator, I need to monitor container status, resource usage, and 
 - **Artifact**: Represents a file generated during execution with path, size, mime_type, and metadata
 - **RuntimeNode**: Represents a container runtime node (Docker or Kubernetes) with health status, resource capacity, and cached templates
 
+### Architecture Requirements
+
+**MANDATORY**: This implementation MUST follow the **Hexagonal Architecture** (Ports and Adapters pattern) as defined in `.specify/memory/constitution.md` Principle VII and `docs/PROJECT_STRUCTURE.md`.
+
+#### Four-Layer Structure
+
+The codebase MUST be organized into four distinct layers with strict dependency rules:
+
+1. **Domain Layer** (`src/domain/`):
+   - **Purpose**: Core business logic, entities, value objects, repository interfaces (Ports), domain services, and domain events
+   - **Dependencies**: ZERO (pure Python business logic, no external dependencies)
+   - **Contains**:
+     - `entities/` - Business entities (Session, Execution, Template, Container, Artifact, RuntimeNode)
+     - `value_objects/` - Immutable value types (ResourceLimit, Timeout, SessionStatus, ExecutionStatus)
+     - `repositories/` - Repository interfaces (Ports) only, NO implementations
+     - `services/` - Domain services for business logic not fitting in entities
+     - `events/` - Domain events (SessionCreated, ExecutionCompleted, ContainerExited)
+
+2. **Application Layer** (`src/application/`):
+   - **Purpose**: Use case orchestration, commands, queries, DTOs, application services
+   - **Dependencies**: MAY depend on Domain layer ONLY
+   - **Contains**:
+     - `commands/` - Command DTOs for write operations (CreateSessionCommand, ExecuteCodeCommand)
+     - `queries/` - Query DTOs for read operations (GetSessionQuery, ListSessionsQuery)
+     - `dtos/` - Data transfer objects for layer boundaries
+     - `services/` - Application services that orchestrate domain objects
+     - `handlers/` - Command/query handlers that implement use cases
+
+3. **Infrastructure Layer** (`src/infrastructure/`):
+   - **Purpose**: Technical implementations, persistence, external services
+   - **Dependencies**: MAY depend on Domain and Application layers
+   - **Contains**:
+     - `persistence/models/` - ORM models (SQLAlchemy models for MariaDB)
+     - `persistence/repositories/` - Repository implementations (SQLAlchemy-based)
+     - `external/runtime/` - Container runtime adapters (Docker/Kubernetes clients)
+     - `external/storage/` - S3 storage adapter
+     - `external/http/` - HTTP client for executor communication
+     - `messaging/` - Message brokers (if needed)
+     - `logging/` - Logging configuration and handlers
+     - `config/` - Configuration loading (environment variables, settings)
+
+4. **Interfaces Layer** (`src/interfaces/`):
+   - **Purpose**: External communication, REST API, CLI
+   - **Dependencies**: MAY depend on Domain and Application layers ONLY
+   - **Contains**:
+     - `rest/api/` - FastAPI route handlers
+     - `rest/schemas/` - Pydantic request/response models
+     - `rest/middlewares/` - Custom middleware (request ID, error handling, CORS)
+     - `cli/` - CLI commands (if any)
+
+#### Dependency Rules (MANDATORY)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Interfaces Layer                     │
+│  (REST API, CLI)                                        │
+│  ↓ Dependencies: Domain, Application                    │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────┐
+│                   Application Layer                      │
+│  (Use Cases, Commands, Queries, Services)               │
+│  ↓ Dependencies: Domain ONLY                            │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────┐
+│                     Domain Layer                         │
+│  (Entities, Value Objects, Repository Interfaces)       │
+│  ↓ Dependencies: NONE (pure business logic)             │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│                  Infrastructure Layer                    │
+│  (ORM, Repositories, External Services)                 │
+│  ↓ Dependencies: Domain, Application                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**VIOLATIONS** (MUST NOT happen):
+- Domain → Infrastructure or Interfaces (domain must be pure)
+- Application → Infrastructure or Interfaces (application uses dependency injection)
+- Interfaces → Infrastructure (interfaces go through application layer)
+
+#### Repository Pattern Enforcement
+
+```python
+# ✅ CORRECT: Interface in Domain
+# src/domain/repositories/session_repository.py
+from abc import ABC, abstractmethod
+from src.domain.entities.session import Session
+
+class SessionRepository(ABC):
+    @abstractmethod
+    async def save(self, session: Session) -> None: ...
+
+    @abstractmethod
+    async def find_by_id(self, session_id: str) -> Session | None: ...
+
+# ✅ CORRECT: Implementation in Infrastructure
+# src/infrastructure/persistence/repositories/sql_session_repository.py
+from src.domain.repositories.session_repository import SessionRepository
+from src.infrastructure.persistence.models.session_model import SessionModel
+
+class SQLSessionRepository(SessionRepository):
+    async def save(self, session: Session) -> None:
+        # SQLAlchemy implementation
+        ...
+
+# ❌ WRONG: Domain importing Infrastructure
+# src/domain/entities/session.py
+from src.infrastructure.persistence.models.session_model import SessionModel  # VIOLATION!
+```
+
+#### Testing Structure (MANDATORY)
+
+Tests MUST mirror the source structure:
+```
+tests/
+├── unit/domain/           # Test domain entities, value objects, domain services
+├── unit/application/      # Test application services, handlers
+├── integration/infrastructure/  # Test repository implementations, external adapters
+├── integration/interfaces/      # Test API endpoints
+└── contract/              # Test API schemas, protocol compliance
+```
+
+#### Compliance Verification
+
+Every pull request MUST verify:
+1. [ ] No imports from `infrastructure` or `interfaces` in `domain` layer
+2. [ ] No imports from `infrastructure` or `interfaces` in `application` layer
+3. [ ] Repository interfaces defined in `domain/repositories/`
+4. [ ] Repository implementations in `infrastructure/persistence/repositories/`
+5. [ ] No business logic in `interfaces` or `infrastructure` layers
+6. [ ] No technical details (FastAPI, SQLAlchemy) in `domain` or `application` layers
+
+**Reference**: See `.specify/memory/constitution.md` Principle VII for full requirements.
+
 ### Assumptions
 
 1. **Database**: MariaDB 11.2+ with async driver support (aiomysql) is available and configured

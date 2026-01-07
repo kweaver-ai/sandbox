@@ -6,8 +6,8 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
-from src.domain.value_objects.artifact import Artifact
+from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
+from sandbox_control_plane.src.domain.value_objects.artifact import Artifact
 
 
 @dataclass

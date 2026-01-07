@@ -9,13 +9,13 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from redis.asyncio import Redis
 
-from src.infrastructure.config.settings import get_settings, Settings
-from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
-from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
-from src.domain.repositories.session_repository import ISessionRepository
-from src.domain.repositories.execution_repository import IExecutionRepository
-from src.application.services.session_service import SessionService
-from src.application.services.execution_service import ExecutionService
+from sandbox_control_plane.src.infrastructure.config.settings import get_settings, Settings
+from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
+from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
+from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
+from sandbox_control_plane.src.application.services.session_service import SessionService
+from sandbox_control_plane.src.application.services.execution_service import ExecutionService
 
 
 # ============== 数据库 ==============
