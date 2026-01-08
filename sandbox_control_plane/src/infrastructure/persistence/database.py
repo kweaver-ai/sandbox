@@ -44,6 +44,14 @@ class DatabaseManager:
             expire_on_commit=False,
         )
 
+    async def create_tables(self) -> None:
+        """创建所有数据库表"""
+        if self._engine is None:
+            raise RuntimeError("DatabaseManager not initialized. Call initialize() first.")
+
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """

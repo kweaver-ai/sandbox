@@ -22,6 +22,8 @@ class Execution:
     code: str
     language: str
     state: ExecutionState
+    timeout: int = 300  # 超时时间（秒）
+    event_data: dict | None = None  # 事件数据（handler 函数输入）
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     execution_time: float | None = None  # 执行耗时（秒）

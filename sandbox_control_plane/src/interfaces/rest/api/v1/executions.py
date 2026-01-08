@@ -17,22 +17,26 @@ from sandbox_control_plane.src.interfaces.rest.schemas.response import (
     ExecuteCodeResponse,
     ErrorResponse
 )
+from sandbox_control_plane.src.infrastructure.dependencies import (
+    USE_SQL_REPOSITORIES,
+    get_session_service_db,
+    get_session_service as get_mock_session_service,
+)
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
 
-async def get_session_service(
-    request: fastapi.Request
-) -> SessionService:
-    """依赖注入：获取会话服务"""
-    return request.app.state.session_service
+# 根据模式选择依赖注入函数
+# SQL 模式：使用 get_session_service_db（带 Depends() 注入仓储）
+# Mock 模式：使用 get_mock_session_service（从 app.state 获取）
+_get_session_service = get_session_service_db if USE_SQL_REPOSITORIES else get_mock_session_service
 
 
 @router.post("/sessions/{session_id}/execute", response_model=ExecuteCodeResponse, status_code=status.HTTP_201_CREATED)
 async def submit_execution(
     session_id: str,
     request: ExecuteCodeRequest,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(_get_session_service)
 ):
     """
     提交代码执行
@@ -70,7 +74,7 @@ async def submit_execution(
 @router.get("/{execution_id}/status", response_model=ExecutionResponse)
 async def get_execution_status(
     execution_id: str,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(_get_session_service)
 ):
     """获取执行状态"""
     try:
@@ -99,7 +103,7 @@ async def get_execution_status(
 @router.get("/{execution_id}/result", response_model=ExecutionResponse)
 async def get_execution_result(
     execution_id: str,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(_get_session_service)
 ):
     """获取执行结果"""
     try:
@@ -136,7 +140,7 @@ async def list_executions(
     status_filter: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(_get_session_service)
 ):
     """列出会话的所有执行"""
     try:

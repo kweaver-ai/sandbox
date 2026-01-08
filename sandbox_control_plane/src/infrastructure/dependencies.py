@@ -23,7 +23,7 @@ from sandbox_control_plane.src.domain.services.storage import IStorageService
 from sandbox_control_plane.src.infrastructure.persistence.database import db_manager
 
 # Configuration flag to switch between Mock and SQL repositories
-USE_SQL_REPOSITORIES = False  # Set to False to use Mock repositories
+USE_SQL_REPOSITORIES = True  # Set to False to use Mock repositories
 
 # Configuration flag to switch between Mock and Docker scheduler
 USE_DOCKER_SCHEDULER = False  # Set to False to use Mock scheduler
@@ -348,16 +348,79 @@ def initialize_dependencies(app: FastAPI):
     # Initialize database manager
     db_manager.initialize()
 
-    # 创建仓储实例
-    session_repo = MockSessionRepository()
-    execution_repo = MockExecutionRepository()
-    template_repo = MockTemplateRepository()
-    container_repo = MockContainerRepository()
+    # 创建仓储实例（根据配置选择 Mock 或 SQL）
+    if USE_SQL_REPOSITORIES:
+        # SQL 模式：仓储在请求时通过 Depends() 注入
+        # 存储仓储工厂函数引用到 app.state
+        app.state.get_session_repository = get_session_repository
+        app.state.get_execution_repository = get_execution_repository
+        app.state.get_template_repository = get_template_repository
+        app.state.get_container_repository = get_container_repository
 
-    # 创建领域服务实例
-    storage_service = MockStorageService()
+        # SessionService 也需要动态创建
+        app.state.get_session_service = get_session_service_db
+        app.state.get_template_service = get_template_service_db
+        app.state.get_container_service = get_container_service_db
+        app.state.get_file_service = get_file_service_db
 
-    # 创建容器调度器和预热池管理器（模块级单例）
+        # 对于向后兼容，也设置仓储实例（用于可能直接访问的情况）
+        app.state.session_repo = None  # 使用工厂函数
+        app.state.execution_repo = None
+        app.state.template_repo = None
+        app.state.container_repo = None
+
+        # 服务也使用工厂函数
+        app.state.session_service = None
+        app.state.template_service = None
+        app.state.container_service = None
+        app.state.file_service = None
+    else:
+        # Mock 模式：直接创建实例
+        session_repo = MockSessionRepository()
+        execution_repo = MockExecutionRepository()
+        template_repo = MockTemplateRepository()
+        container_repo = MockContainerRepository()
+
+        # 创建领域服务实例
+        storage_service = MockStorageService()
+
+        # 创建 Mock 调度器
+        scheduler = MockScheduler()
+
+        # 创建应用服务实例
+        session_service = SessionService(
+            session_repo=session_repo,
+            execution_repo=execution_repo,
+            template_repo=template_repo,
+            scheduler=scheduler,
+        )
+
+        template_service = TemplateService(
+            template_repo=template_repo,
+        )
+
+        container_service = ContainerService(
+            container_repo=container_repo,
+        )
+
+        file_service = FileService(
+            session_repo=session_repo,
+            storage_service=storage_service,
+        )
+
+        # 存储到应用状态
+        app.state.session_service = session_service
+        app.state.template_service = template_service
+        app.state.container_service = container_service
+        app.state.file_service = file_service
+
+        # 也存储仓储（可能需要）
+        app.state.session_repo = session_repo
+        app.state.execution_repo = execution_repo
+        app.state.template_repo = template_repo
+        app.state.container_repo = container_repo
+
+    # 创建容器调度器和预热池管理器（模块级单例，仅在 Docker 调度模式下）
     global _container_scheduler_singleton, _warm_pool_manager_singleton
 
     if USE_DOCKER_SCHEDULER:
@@ -373,43 +436,6 @@ def initialize_dependencies(app: FastAPI):
             idle_timeout_seconds=1800,
             max_pool_size_per_template=3,
         )
-
-        scheduler = None  # 将在请求时动态创建
-    else:
-        scheduler = MockScheduler()
-
-    # 创建应用服务实例
-    session_service = SessionService(
-        session_repo=session_repo,
-        execution_repo=execution_repo,
-        template_repo=template_repo,
-        scheduler=scheduler or MockScheduler(),  # 如果为 None，使用 MockScheduler 占位
-    )
-
-    template_service = TemplateService(
-        template_repo=template_repo,
-    )
-
-    container_service = ContainerService(
-        container_repo=container_repo,
-    )
-
-    file_service = FileService(
-        session_repo=session_repo,
-        storage_service=storage_service,
-    )
-
-    # 存储到应用状态
-    app.state.session_service = session_service
-    app.state.template_service = template_service
-    app.state.container_service = container_service
-    app.state.file_service = file_service
-
-    # 也存储仓储（可能需要）
-    app.state.session_repo = session_repo
-    app.state.execution_repo = execution_repo
-    app.state.template_repo = template_repo
-    app.state.container_repo = container_repo
 
 
 async def cleanup_dependencies(app: FastAPI):

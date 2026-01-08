@@ -6,7 +6,7 @@ SQLAlchemy 模型定义，用于数据库持久化。
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Column, String, Enum, DateTime, Integer, ForeignKey, Numeric, Index
+from sqlalchemy import Column, String, Enum, DateTime, Integer, Numeric, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
@@ -24,7 +24,7 @@ class ContainerModel(Base):
     # Primary fields
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     session_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
+        String(64), nullable=False
     )
 
     # Runtime type
@@ -35,7 +35,7 @@ class ContainerModel(Base):
 
     # Node assignment
     node_id = Column(
-        String(64), ForeignKey("runtime_nodes.node_id", ondelete="CASCADE"), nullable=False
+        String(64), nullable=False
     )
 
     # Container information

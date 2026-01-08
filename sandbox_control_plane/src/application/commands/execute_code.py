@@ -16,6 +16,7 @@ class ExecuteCodeCommand:
     async_mode: bool = False
     stdin: Optional[str] = None
     timeout: int = 30
+    event_data: Optional[dict] = None
 
     def __post_init__(self):
         """初始化后验证"""

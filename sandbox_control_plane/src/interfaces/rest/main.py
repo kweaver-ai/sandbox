@@ -21,6 +21,7 @@ from sandbox_control_plane.src.interfaces.rest.api.v1 import (
     containers,
     health,
     files,
+    internal,
 )
 from sandbox_control_plane.src.interfaces.rest.schemas.response import HealthResponse
 
@@ -134,6 +135,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(templates.router, prefix="/api/v1")
     app.include_router(containers.router, prefix="/api/v1")
     app.include_router(files.router, prefix="/api/v1")
+    app.include_router(internal.router, prefix="/api/v1")  # 内部 API
 
     # 根端点
     @app.get("/", tags=["root"])

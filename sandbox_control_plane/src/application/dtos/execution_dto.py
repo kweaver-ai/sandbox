@@ -40,6 +40,7 @@ class ExecutionDTO:
     session_id: str
     code: str
     language: str
+    timeout: int  # 超时时间（秒）
     status: str
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
@@ -49,8 +50,11 @@ class ExecutionDTO:
     artifacts: List[ArtifactDTO] = None
     retry_count: int = 0
     created_at: datetime = None
+    started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     last_heartbeat_at: Optional[datetime] = None
+    return_value: Optional[dict] = None  # handler 函数返回值
+    metrics: Optional[dict] = None  # 性能指标
 
     def __post_init__(self):
         """初始化默认值"""
@@ -67,6 +71,7 @@ class ExecutionDTO:
             session_id=execution.session_id,
             code=execution.code,
             language=execution.language,
+            timeout=execution.timeout,
             status=execution.state.status.value,
             exit_code=execution.state.exit_code,
             error_message=execution.state.error_message,
@@ -79,6 +84,9 @@ class ExecutionDTO:
             ],
             retry_count=execution.retry_count,
             created_at=execution.created_at,
+            started_at=None,  # Not tracked in domain entity
             completed_at=execution.completed_at,
             last_heartbeat_at=execution.last_heartbeat_at,
+            return_value=execution.return_value,
+            metrics=execution.metrics,
         )

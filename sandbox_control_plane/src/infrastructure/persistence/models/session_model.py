@@ -7,7 +7,7 @@ SQLAlchemy 模型定义，用于数据库持久化。
 from datetime import datetime
 from sqlalchemy import func
 
-from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, ForeignKey, Index
+from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from sandbox_control_plane.src.infrastructure.persistence.database import Base
@@ -24,7 +24,7 @@ class SessionModel(Base):
 
     # Primary fields
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    template_id: Mapped[str] = mapped_column(String(64), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False)
+    template_id: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # Status
     status = Column(

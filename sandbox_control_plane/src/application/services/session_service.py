@@ -184,6 +184,8 @@ class SessionService:
         execution_id = self._generate_execution_id()
 
         # 3. 创建执行实体
+        from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionState
+
         execution = Execution(
             id=execution_id,
             session_id=command.session_id,
@@ -191,7 +193,7 @@ class SessionService:
             language=command.language,
             timeout=command.timeout,
             event_data=command.event_data or {},
-            status=ExecutionStatus.PENDING
+            state=ExecutionState(status=ExecutionStatus.PENDING)
         )
 
         # 4. 保存到仓储

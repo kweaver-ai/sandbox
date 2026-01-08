@@ -5,7 +5,7 @@ SQLAlchemy 模型定义，用于数据库持久化。
 """
 from datetime import datetime
 
-from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, ForeignKey, Index
+from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
@@ -23,7 +23,7 @@ class ExecutionModel(Base):
     # Primary fields
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     session_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
+        String(64), nullable=False
     )
 
     # Status
@@ -87,6 +87,8 @@ class ExecutionModel(Base):
             session_id=self.session_id,
             code=self.code,
             language=self.language,
+            timeout=self.timeout_sec,
+            event_data=self.event_data,
             state=ExecutionState(
                 status=ExecutionStatus(self.status),
                 exit_code=self.exit_code,
@@ -107,15 +109,16 @@ class ExecutionModel(Base):
     @classmethod
     def from_entity(cls, execution):
         """从领域实体创建 ORM 模型"""
+        from datetime import datetime
         return cls(
             id=execution.id,
             session_id=execution.session_id,
             status=execution.state.status.value,
             code=execution.code,
             language=execution.language,
+            timeout_sec=execution.timeout,
             entrypoint=None,  # Not in domain entity
-            event_data=None,  # Not in domain entity
-            timeout_sec=300,  # Default, not in domain entity
+            event_data=execution.event_data,
             return_value=execution.return_value,
             stdout=execution.stdout,
             stderr=execution.stderr,
@@ -125,5 +128,5 @@ class ExecutionModel(Base):
             started_at=None,  # Not tracked in domain entity
             completed_at=execution.completed_at,
             created_at=execution.created_at,
-            updated_at=None,  # Not tracked in domain entity
+            updated_at=datetime.now(),  # Set current time for new records
         )

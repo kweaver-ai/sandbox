@@ -9,3 +9,4 @@ from sandbox_control_plane.src.interfaces.rest.api.v1 import templates
 from sandbox_control_plane.src.interfaces.rest.api.v1 import containers
 from sandbox_control_plane.src.interfaces.rest.api.v1 import health
 from sandbox_control_plane.src.interfaces.rest.api.v1 import files
+from sandbox_control_plane.src.interfaces.rest.api.v1 import internal
