@@ -16,6 +16,7 @@ import structlog
 
 from executor.domain.entities import Execution
 from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
+from executor.infrastructure.isolation.result_parser import remove_markers_from_output
 
 
 logger = structlog.get_logger(__name__)
@@ -144,6 +145,9 @@ class MacSeatbeltRunner:
             if execution.language.lower() == "python":
                 return_value = self._parse_return_value(result.stdout)
 
+            # Clean stdout by removing return value markers
+            clean_stdout = remove_markers_from_output(result.stdout)
+
             # Collect performance metrics
             metrics = ExecutionMetrics(
                 duration_ms=round(duration_ms, 2),
@@ -152,7 +156,7 @@ class MacSeatbeltRunner:
 
             execution_result = ExecutionResult(
                 status=ExecutionStatus.COMPLETED if result.returncode == 0 else ExecutionStatus.FAILED,
-                stdout=result.stdout,
+                stdout=clean_stdout,
                 stderr=result.stderr,
                 exit_code=result.returncode,
                 execution_time_ms=duration_ms,
@@ -172,9 +176,10 @@ class MacSeatbeltRunner:
         except subprocess.TimeoutExpired as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning("Sandbox execution timeout", execution_id=execution.execution_id)
+            clean_stdout = remove_markers_from_output(e.stdout) if e.stdout else ""
             return ExecutionResult(
                 status=ExecutionStatus.TIMEOUT,
-                stdout=e.stdout if e.stdout else "",
+                stdout=clean_stdout,
                 stderr=e.stderr if e.stderr else "Execution timeout",
                 exit_code=-1,
                 execution_time_ms=duration_ms,

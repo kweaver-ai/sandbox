@@ -111,19 +111,36 @@ class CallbackClient(ICallbackPort):
             - Max 5 retry attempts
             - Retries on: network errors, 5xx responses
         """
-        url = f"{self.control_plane_url}/internal/executions/{execution_id}/result"
+        url = f"{self.control_plane_url}/api/v1/internal/executions/{execution_id}/result"
 
         # Build request payload
+        # Convert execution_time_ms to execution_time (seconds)
+        execution_time = result.execution_time_ms / 1000.0 if result.execution_time_ms else 0.0
+
+        # Map internal ExecutionStatus to Control Plane API status values
+        # Internal: "completed" → API: "success"
+        # Internal: "failed" → API: "failed"
+        # Internal: "timeout" → API: "timeout"
+        # Internal: "crashed" → API: "crashed"
+        status_mapping = {
+            "completed": "success",
+            "failed": "failed",
+            "timeout": "timeout",
+            "crashed": "crashed",
+        }
+        api_status = status_mapping.get(result.status.value, result.status.value)
+
         payload = {
-            "status": result.status.value,
+            "status": api_status,
             "stdout": result.stdout,
             "stderr": result.stderr,
             "exit_code": result.exit_code,
-            "execution_time_ms": result.execution_time_ms,
+            "execution_time": execution_time,
             "return_value": result.return_value,
             "metrics": result.metrics.to_dict() if result.metrics else None,
             "artifacts": [a.to_dict() for a in result.artifacts],
         }
+        print("report body:",payload)
 
         # Headers with auth and idempotency
         headers = {
@@ -144,6 +161,15 @@ class CallbackClient(ICallbackPort):
                     execution_id=execution_id,
                     attempt=attempt + 1,
                     max_retries=self.max_retries,
+                )
+
+                # Log the payload for debugging
+                logger.info(
+                    "Sending execution result to Control Plane",
+                    execution_id=execution_id,
+                    internal_status=result.status.value,
+                    api_status=api_status,
+                    exit_code=result.exit_code,
                 )
 
                 response = await client.post(url, json=payload, headers=headers)
