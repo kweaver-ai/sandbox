@@ -4,8 +4,8 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from sandbox_control_plane.api.main import app
-from sandbox_control_plane.config.settings import get_settings
+from sandbox_control_plane.src.interfaces.rest.main import app
+from sandbox_control_plane.src.infrastructure.config.settings import get_settings
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ async def db_session() -> AsyncSession:
     )
     
     # Create tables
-    from sandbox_control_plane.db.models import Base
+    from sandbox_control_plane.src.infrastructure.persistence.database import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
