@@ -416,6 +416,50 @@ async def seed_default_templates():
         print(f"✓ Seeded {len(templates)} default templates")
 
 
+async def seed_default_runtime_nodes():
+    """插入默认运行时节点"""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    database_url = "mysql+aiomysql://root:12345678@127.0.0.1:3308/sandbox_control_plane"
+    engine = create_async_engine(database_url, echo=False)
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with async_session() as session:
+        # 检查是否已有节点
+        from sqlalchemy import select
+        result = await session.execute(select(RuntimeNode).limit(1))
+        if result.scalar_one_or_none():
+            print("✓ Runtime nodes already exist, skipping seed")
+            return
+
+        # 创建默认运行时节点
+        nodes = [
+            RuntimeNode(
+                node_id="node-1",
+                hostname="localhost",
+                runtime_type="docker",
+                ip_address="127.0.0.1",
+                api_endpoint="unix:///var/run/docker.sock",
+                status="online",
+                total_cpu_cores=Decimal("4.0"),
+                total_memory_mb=8192,
+                allocated_cpu_cores=Decimal("0"),
+                allocated_memory_mb=0,
+                running_containers=0,
+                max_containers=50,
+                cached_images=["python:3.11-slim", "node:20-slim", "python:3.11-datascience"],
+                labels={"environment": "development", "zone": "local"},
+            ),
+        ]
+
+        for node in nodes:
+            session.add(node)
+
+        await session.commit()
+        print(f"✓ Seeded {len(nodes)} default runtime nodes")
+
+
 async def main():
     """主函数"""
     print("=" * 60)
@@ -433,6 +477,7 @@ async def main():
     # 3. 插入默认数据
     print("\n[Step 3/3] Seeding default data...")
     await seed_default_templates()
+    await seed_default_runtime_nodes()
 
     print("\n" + "=" * 60)
     print("✅ Database initialization completed!")

@@ -78,3 +78,40 @@ class RuntimeNodeModel(Base):
     __table_args__ = (
         Index("ix_runtime_nodes_status", "status"),
     )
+
+    def to_runtime_node(self):
+        """转换为领域 RuntimeNode 值对象"""
+        from sandbox_control_plane.src.domain.services.scheduler import RuntimeNode
+
+        # 计算资源使用率
+        cpu_usage = (
+            float(self.allocated_cpu_cores) / float(self.total_cpu_cores)
+            if self.total_cpu_cores > 0
+            else 0.0
+        )
+        mem_usage = (
+            self.allocated_memory_mb / self.total_memory_mb
+            if self.total_memory_mb > 0
+            else 0.0
+        )
+
+        # 将状态映射到 RuntimeNode 的状态
+        status_mapping = {
+            "online": "healthy",
+            "offline": "unhealthy",
+            "draining": "draining",
+            "maintenance": "unhealthy",
+        }
+        status = status_mapping.get(self.status, "unhealthy")
+
+        return RuntimeNode(
+            id=self.node_id,
+            type=self.runtime_type,
+            url=self.api_endpoint or f"http://{self.ip_address}:2375",
+            status=status,
+            cpu_usage=cpu_usage,
+            mem_usage=mem_usage,
+            session_count=self.running_containers,
+            max_sessions=self.max_containers,
+            cached_templates=self.cached_images or [],
+        )

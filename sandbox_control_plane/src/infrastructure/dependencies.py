@@ -23,7 +23,13 @@ from sandbox_control_plane.src.domain.services.storage import IStorageService
 from sandbox_control_plane.src.infrastructure.persistence.database import db_manager
 
 # Configuration flag to switch between Mock and SQL repositories
-USE_SQL_REPOSITORIES = True  # Set to False to use Mock repositories
+USE_SQL_REPOSITORIES = False  # Set to False to use Mock repositories
+
+# Configuration flag to switch between Mock and Docker scheduler
+USE_DOCKER_SCHEDULER = False  # Set to False to use Mock scheduler
+
+# Docker configuration
+DOCKER_URL = "unix:///Users/guochenguang/.docker/run/docker.sock"  # Docker Desktop for Mac
 
 
 # Mock implementations for development
@@ -234,6 +240,78 @@ class MockScheduler(IScheduler):
         return None
 
 
+class MockRuntimeNodeRepository:
+    """Mock 运行时节点仓储（用于开发测试）"""
+
+    class _NodeModel:
+        def __init__(self, id, type, url, status, **kwargs):
+            self.id = id
+            self.type = type
+            self.url = url
+            self.status = status
+            self.cpu_usage = kwargs.get('cpu_usage', 0.3)
+            self.mem_usage = kwargs.get('mem_usage', 0.4)
+            self.session_count = kwargs.get('session_count', 0)
+            self.max_sessions = kwargs.get('max_sessions', 100)
+            self.cached_templates = kwargs.get('cached_templates', [])
+
+        def to_runtime_node(self):
+            from sandbox_control_plane.src.domain.services.scheduler import RuntimeNode
+            return RuntimeNode(
+                id=self.id,
+                type=self.type,
+                url=self.url,
+                status=self.status,
+                cpu_usage=self.cpu_usage,
+                mem_usage=self.mem_usage,
+                session_count=self.session_count,
+                max_sessions=self.max_sessions,
+                cached_templates=self.cached_templates,
+            )
+
+    def __init__(self):
+        # 默认有一个 Docker 节点
+        self._nodes = {
+            "docker-local": self._NodeModel(
+                id="docker-local",
+                type="docker",
+                url="unix:///Users/guochenguang/.docker/run/docker.sock",
+                status="online",
+                cpu_usage=0.3,
+                mem_usage=0.4,
+                session_count=0,
+                max_sessions=100,
+                cached_templates=[],
+            )
+        }
+
+    async def find_by_id(self, node_id: str):
+        return self._nodes.get(node_id)
+
+    async def find_by_status(self, status: str):
+        return [n for n in self._nodes.values() if n.status == status]
+
+    async def save(self, node):
+        self._nodes[node.id] = node
+
+    async def update_status(self, node_id: str, status: str) -> None:
+        if node_id in self._nodes:
+            self._nodes[node_id].status = status
+
+    async def increment_session_count(self, node_id: str) -> None:
+        if node_id in self._nodes:
+            self._nodes[node_id].session_count += 1
+
+    async def decrement_session_count(self, node_id: str) -> None:
+        if node_id in self._nodes:
+            self._nodes[node_id].session_count = max(0, self._nodes[node_id].session_count - 1)
+
+    async def add_cached_template(self, node_id: str, template_id: str) -> None:
+        if node_id in self._nodes:
+            if template_id not in self._nodes[node_id].cached_templates:
+                self._nodes[node_id].cached_templates.append(template_id)
+
+
 class MockStorageService(IStorageService):
     """Mock 存储服务（用于开发测试）"""
 
@@ -259,6 +337,11 @@ class MockStorageService(IStorageService):
         return []
 
 
+# Module-level singletons for shared components
+_container_scheduler_singleton = None
+_warm_pool_manager_singleton = None
+
+
 def initialize_dependencies(app: FastAPI):
     """初始化所有依赖项并存储到应用状态中"""
 
@@ -272,15 +355,35 @@ def initialize_dependencies(app: FastAPI):
     container_repo = MockContainerRepository()
 
     # 创建领域服务实例
-    scheduler = MockScheduler()
     storage_service = MockStorageService()
+
+    # 创建容器调度器和预热池管理器（模块级单例）
+    global _container_scheduler_singleton, _warm_pool_manager_singleton
+
+    if USE_DOCKER_SCHEDULER:
+        from sandbox_control_plane.src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
+        from sandbox_control_plane.src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
+
+        # 创建容器调度器（模块级单例）
+        _container_scheduler_singleton = DockerScheduler(docker_url=DOCKER_URL)
+
+        # 创建预热池管理器（模块级单例，持有 in-memory 状态）
+        _warm_pool_manager_singleton = WarmPoolManager(
+            container_scheduler=_container_scheduler_singleton,
+            idle_timeout_seconds=1800,
+            max_pool_size_per_template=3,
+        )
+
+        scheduler = None  # 将在请求时动态创建
+    else:
+        scheduler = MockScheduler()
 
     # 创建应用服务实例
     session_service = SessionService(
         session_repo=session_repo,
         execution_repo=execution_repo,
         template_repo=template_repo,
-        scheduler=scheduler,
+        scheduler=scheduler or MockScheduler(),  # 如果为 None，使用 MockScheduler 占位
     )
 
     template_service = TemplateService(
@@ -385,8 +488,53 @@ def get_container_repository(
 
 
 def get_scheduler() -> IScheduler:
-    """获取调度器（始终使用 Mock）"""
+    """获取调度器（Mock 或 Docker）"""
+    if USE_DOCKER_SCHEDULER:
+        from sandbox_control_plane.src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+        # 需要通过 Depends() 获取运行时节点仓储和容器调度器
+        # 这里暂时返回 Mock，实际使用时需要通过 session-scoped 依赖
+        return MockScheduler()
     return MockScheduler()
+
+
+def get_runtime_node_repository(
+    session = Depends(get_db_session)
+):
+    """获取运行时节点仓储（SQL 或 Mock）"""
+    if USE_SQL_REPOSITORIES:
+        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_runtime_node_repository import SqlRuntimeNodeRepository
+        return SqlRuntimeNodeRepository(session)
+    return MockRuntimeNodeRepository()
+
+
+def get_container_scheduler():
+    """获取容器调度器"""
+    from sandbox_control_plane.src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
+    return DockerScheduler(docker_url=DOCKER_URL)
+
+
+def get_docker_scheduler_service(
+    runtime_node_repo = Depends(get_runtime_node_repository),
+    template_repo = Depends(get_template_repository),
+) -> IScheduler:
+    """获取 Docker 调度服务（共享预热池管理器单例）"""
+    if not USE_DOCKER_SCHEDULER:
+        return MockScheduler()
+
+    from sandbox_control_plane.src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+
+    # 使用模块级单例
+    container_scheduler = _container_scheduler_singleton
+    warm_pool_manager = _warm_pool_manager_singleton
+
+    # 为每个请求创建新的 DockerSchedulerService 实例
+    # 但使用共享的 container_scheduler 和 warm_pool_manager
+    return DockerSchedulerService(
+        runtime_node_repo=runtime_node_repo,
+        container_scheduler=container_scheduler,
+        template_repo=template_repo,
+        warm_pool_manager=warm_pool_manager,  # 共享的预热池管理器
+    )
 
 
 def get_storage_service() -> IStorageService:
@@ -398,9 +546,9 @@ def get_session_service_db(
     session_repo: ISessionRepository = Depends(get_session_repository),
     execution_repo: IExecutionRepository = Depends(get_execution_repository),
     template_repo: ITemplateRepository = Depends(get_template_repository),
-    scheduler: IScheduler = Depends(get_scheduler),
+    scheduler: IScheduler = Depends(get_docker_scheduler_service),
 ) -> SessionService:
-    """获取会话服务（使用数据库仓储）"""
+    """获取会话服务（使用数据库仓储和 Docker 调度器）"""
     return SessionService(
         session_repo=session_repo,
         execution_repo=execution_repo,

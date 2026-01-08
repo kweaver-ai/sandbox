@@ -53,6 +53,8 @@ class SessionService:
         3. 调用调度器选择运行时节点
         4. 创建会话实体
         5. 保存到仓储
+        6. 创建 Docker 容器
+        7. 更新会话状态为 running
         """
         # 1. 验证模板
         template = await self._template_repo.find_by_id(command.template_id)
@@ -74,14 +76,17 @@ class SessionService:
         # 从模板镜像推断运行时类型
         runtime_type = self._infer_runtime_type(template.image)
 
+        resource_limit = command.resource_limit or ResourceLimit.default()
+        workspace_path = f"s3://sandbox-bucket/sessions/{session_id}"
+
         session = Session(
             id=session_id,
             template_id=command.template_id,
             status=SessionStatus.CREATING,
-            resource_limit=command.resource_limit or ResourceLimit.default(),
-            workspace_path=f"s3://sandbox-bucket/sessions/{session_id}",
-            runtime_type=runtime_type,  # 使用推断的运行时类型
-            runtime_node=runtime_node.id,  # 存储运行时节点 ID
+            resource_limit=resource_limit,
+            workspace_path=workspace_path,
+            runtime_type=runtime_type,
+            runtime_node=runtime_node.id,
             env_vars=command.env_vars or {},
             timeout=command.timeout
         )
@@ -89,8 +94,28 @@ class SessionService:
         # 5. 保存到仓储
         await self._session_repo.save(session)
 
-        # 6. 异步创建容器（后台任务）
-        # await runtime_node.create_container(session)
+        # 6. 创建 Docker 容器（如果调度器支持）
+        container_id = None
+        try:
+            if hasattr(self._scheduler, 'create_container_for_session'):
+                container_id = await self._scheduler.create_container_for_session(
+                    session_id=session_id,
+                    template_id=command.template_id,
+                    image=template.image,
+                    resource_limit=resource_limit,
+                    env_vars=session.env_vars,
+                    workspace_path=workspace_path,
+                )
+
+                # 更新会话的容器 ID
+                session.container_id = container_id
+                session.status = SessionStatus.RUNNING
+                await self._session_repo.save(session)
+        except Exception as e:
+            # 容器创建失败，标记会话为失败状态
+            session.status = SessionStatus.FAILED
+            await self._session_repo.save(session)
+            raise ValidationError(f"Failed to create container: {e}")
 
         return SessionDTO.from_entity(session)
 
@@ -109,7 +134,7 @@ class SessionService:
         流程：
         1. 查找会话
         2. 验证状态
-        3. 调用运行时销毁容器
+        3. 销毁 Docker 容器（如果调度器支持）
         4. 更新会话状态
         """
         session = await self._session_repo.find_by_id(session_id)
@@ -119,9 +144,16 @@ class SessionService:
         if session.is_terminated():
             return SessionDTO.from_entity(session)
 
-        # 调用运行时销毁容器
-        # runtime_node = await self._scheduler.get_node(session.runtime_node)
-        # await runtime_node.destroy_container(session_id, session.container_id)
+        # 销毁 Docker 容器（如果调度器支持且容器存在）
+        if session.container_id and hasattr(self._scheduler, 'destroy_container'):
+            try:
+                await self._scheduler.destroy_container(
+                    container_id=session.container_id
+                )
+            except Exception as e:
+                # 记录错误但不中断流程
+                import logging
+                logging.warning(f"Failed to destroy container {session.container_id}: {e}")
 
         # 更新会话状态
         session.mark_as_terminated()
@@ -218,8 +250,17 @@ class SessionService:
 
         for session in all_to_cleanup:
             if session.is_active():
-                # 销毁容器
-                # await self._destroy_container(session)
+                # 销毁容器（如果调度器支持且容器存在）
+                if session.container_id and hasattr(self._scheduler, 'destroy_container'):
+                    try:
+                        await self._scheduler.destroy_container(
+                            container_id=session.container_id
+                        )
+                    except Exception as e:
+                        # 记录错误但不中断流程
+                        import logging
+                        logging.warning(f"Failed to destroy container {session.container_id}: {e}")
+
                 session.mark_as_terminated()
                 await self._session_repo.save(session)
                 cleaned_count += 1
