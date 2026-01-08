@@ -4,7 +4,6 @@ Application Services
 Service classes for handling use cases.
 """
 
-from .executor_service import ExecutorService
 from .heartbeat_service import (
     HeartbeatService,
     get_heartbeat_service,
@@ -19,7 +18,6 @@ from .lifecycle_service import (
 )
 
 __all__ = [
-    "ExecutorService",
     "HeartbeatService",
     "LifecycleService",
     "get_heartbeat_service",

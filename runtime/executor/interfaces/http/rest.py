@@ -6,6 +6,7 @@ Runs inside the container and receives execution requests from Control Plane.
 """
 
 import os
+import platform
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -44,15 +45,47 @@ startup_time = time.time()
 
 # Request/Response Models
 class ExecuteRequest(BaseModel):
-    """Request model for code execution."""
+    """Request model for code execution following AWS Lambda handler specification."""
 
-    execution_id: str = Field(..., description="Unique execution identifier")
-    session_id: str = Field(..., description="Session identifier")
-    code: str = Field(..., description="Code to execute")
-    language: str = Field(..., description="Programming language")
-    stdin: str = Field(default="", description="Standard input")
-    timeout: int = Field(default=300, description="Timeout in seconds", ge=1, le=3600)
-    env_vars: dict = Field(default_factory=dict, description="Environment variables")
+    execution_id: str = Field(..., description="Unique execution identifier", example="exec_20240115_test0001")
+    session_id: str = Field(..., description="Session identifier", example="sess_test_001")
+    code: str = Field(
+        ...,
+        description="AWS Lambda handler function code",
+        example='def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}'
+    )
+    language: str = Field(..., description="Programming language", pattern="^(python|javascript|shell)$", example="python")
+    event: dict = Field(
+        default_factory=dict,
+        description="Business data passed to handler function",
+        example={"name": "World"}
+    )
+    timeout: int = Field(default=300, description="Timeout in seconds", ge=1, le=3600, example=10)
+    env_vars: dict = Field(default_factory=dict, description="Environment variables", example={})
+
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {
+                    "execution_id": "exec_20240115_test0001",
+                    "session_id": "sess_test_001",
+                    "code": 'def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}',
+                    "language": "python",
+                    "event": {"name": "World"},
+                    "timeout": 10,
+                    "env_vars": {}
+                },
+                {
+                    "execution_id": "exec_20240115_abc12345",
+                    "session_id": "sess_abc123def4567890",
+                    "code": 'def handler(event):\n    name = event.get("name", "World")\n    age = event.get("age", 0)\n    return {"message": f"Hello, {name}!", "age_doubled": age * 2}',
+                    "language": "python",
+                    "event": {"name": "Alice", "age": 25},
+                    "timeout": 30,
+                    "env_vars": {}
+                }
+            ]
+        }
 
 
 class ErrorResponse(BaseModel):
@@ -101,7 +134,6 @@ async def lifespan(app: FastAPI):
     - Verify bwrap availability
     - Verify workspace directory
     - Initialize services
-    - Register signal handlers
     - Send container_ready
 
     On shutdown:
@@ -109,6 +141,8 @@ async def lifespan(app: FastAPI):
     - Stop heartbeats
     - Send container_exited
     - Close connections
+
+    Note: Uvicorn handles SIGINT/SIGTERM and triggers this shutdown automatically.
     """
     global _execute_command, _heartbeat_service, _lifecycle_service, _callback_client, _metrics_collector
 
@@ -120,6 +154,10 @@ async def lifespan(app: FastAPI):
     pod_name = os.environ.get("POD_NAME", "unknown")
     executor_port = int(os.environ.get("EXECUTOR_PORT", str(settings.executor_port)))
 
+    # Detect operating system
+    is_macos = platform.system() == "Darwin"
+    is_linux = platform.system() == "Linux"
+
     logger.info(
         "Executor starting",
         version="1.0.0",
@@ -128,45 +166,73 @@ async def lifespan(app: FastAPI):
         control_plane_url=control_plane_url,
         container_id=container_id,
         pod_name=pod_name,
+        platform=platform.system(),
+        is_development_mode=is_macos,  # macOS is considered development mode
     )
 
     # T055 [US3]: Add bwrap availability check in startup
-    try:
-        from executor.infrastructure.isolation.bwrap import check_bwrap_available, get_bwrap_version
+    # Only check Bubblewrap on Linux (not available on macOS)
+    if is_linux:
+        try:
+            from executor.infrastructure.isolation.bwrap import check_bwrap_available, get_bwrap_version
 
-        check_bwrap_available()
-        bwrap_version = get_bwrap_version()
-        logger.info("Bubblewrap verified", version=bwrap_version)
+            check_bwrap_available()
+            bwrap_version = get_bwrap_version()
+            logger.info("Bubblewrap verified", version=bwrap_version)
 
-    except RuntimeError as e:
-        logger.error("Bubblewrap check failed", error=str(e))
-        # For development, continue without bwrap
-        # In production, this should exit with error
-        logger.warning("Continuing without Bubblewrap (development mode)")
+        except RuntimeError as e:
+            logger.error("Bubblewrap check failed", error=str(e))
+            # In production on Linux, this should exit with error
+            logger.warning("Continuing without Bubblewrap (development mode)")
+    else:
+        logger.info("Skipping Bubblewrap check on macOS (Bubblewrap is Linux-only)")
+        logger.warning("Code execution features will be limited on macOS")
 
     # T056 [US3]: Add workspace availability check
     # Create workspace if it doesn't exist
     if not workspace_path.exists():
-        logger.info("Creating workspace directory", workspace_path=str(workspace_path))
-        workspace_path.mkdir(parents=True, exist_ok=True)
-
-    # Check workspace is writable
-    if not os.access(workspace_path, os.W_OK):
-        logger.error("Workspace directory is not writable", workspace_path=str(workspace_path))
-        # In production, this should exit with error
-        logger.warning("Continuing with read-only workspace (development mode)")
+        try:
+            logger.info("Creating workspace directory", workspace_path=str(workspace_path))
+            workspace_path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("Failed to create workspace directory", workspace_path=str(workspace_path), error=str(e))
+            logger.warning("Continuing without workspace (development mode)")
     else:
-        logger.info("Workspace directory verified", workspace_path=str(workspace_path))
+        # Check workspace is writable
+        if not os.access(workspace_path, os.W_OK):
+            logger.warning("Workspace directory is not writable", workspace_path=str(workspace_path))
+            logger.warning("Continuing with read-only workspace (development mode)")
+        else:
+            logger.info("Workspace directory verified", workspace_path=str(workspace_path))
 
     # Initialize infrastructure services
-    bwrap_runner = BubblewrapRunner(workspace_path=workspace_path)
-    artifact_scanner = ArtifactScanner(workspace_path=workspace_path)
+    # Linux uses Bubblewrap, macOS uses Seatbelt sandbox
+    if is_linux:
+        try:
+            bwrap_runner = BubblewrapRunner(workspace_path=workspace_path)
+            logger.info("Using BubblewrapRunner for Linux isolation")
+        except Exception as e:
+            logger.warning("Failed to initialize BubblewrapRunner", error=str(e))
+            bwrap_runner = None
+    else:
+        # macOS: Use Seatbelt sandbox (sandbox-exec)
+        try:
+            from executor.infrastructure.isolation.macseatbelt import MacSeatbeltRunner
+            bwrap_runner = MacSeatbeltRunner(workspace_path=workspace_path)
+            logger.info("Using MacSeatbeltRunner with sandbox-exec", sandbox_version=bwrap_runner.get_version())
+        except Exception as e:
+            logger.error("Failed to initialize MacSeatbeltRunner", error=str(e))
+            bwrap_runner = None
+
+    # ArtifactScanner doesn't need workspace_path in constructor
+    artifact_scanner = ArtifactScanner()
+
     metrics_collector = MetricsCollector()
 
     # Initialize callback client
     callback_client = CallbackClient(
-        base_url=control_plane_url,
-        internal_api_token=internal_api_token,
+        control_plane_url=control_plane_url,
+        api_token=internal_api_token,
     )
     _callback_client = callback_client
 
@@ -179,31 +245,15 @@ async def lifespan(app: FastAPI):
 
     lifecycle_service = LifecycleService(
         callback_port=callback_client,
-        container_id=container_id,
-        pod_name=pod_name,
         executor_port=executor_port,
         heartbeat_port=heartbeat_service,
     )
     _lifecycle_service = lifecycle_service
 
     # Register signal handlers
-    import signal
-
-    def signal_handler(signum, frame):
-        logger.info("Signal received", signal=signum)
-        # Create asyncio task to handle shutdown
-        import asyncio
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(lifecycle_service.shutdown(signum))
-        except RuntimeError:
-            # No event loop running
-            asyncio.run(lifecycle_service.shutdown(signum))
-
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    logger.info("Signal handlers registered")
+    # Note: Uvicorn handles SIGINT/SIGTERM by default and will trigger lifespan shutdown
+    # We don't need custom signal handlers - let Uvicorn handle it
+    logger.info("Signal handlers will be managed by Uvicorn")
 
     # Initialize execute command
     execute_command = ExecuteCodeCommand(
@@ -219,9 +269,14 @@ async def lifespan(app: FastAPI):
     logger.info("Executor startup complete")
 
     # T076 [US5]: Send container_ready after HTTP server starts listening
+    # Use asyncio.wait_for to avoid long timeout in development mode
+    import asyncio
     try:
-        await lifecycle_service.send_container_ready()
+        # Timeout after 2 seconds if control plane is not available
+        await asyncio.wait_for(lifecycle_service.send_container_ready(), timeout=2.0)
         logger.info("Container ready signal sent")
+    except asyncio.TimeoutError:
+        logger.warning("Container ready signal timeout (control plane not available - development mode)")
     except Exception as e:
         logger.error("Failed to send container_ready", error=str(e))
 
@@ -353,7 +408,9 @@ def create_app() -> FastAPI:
         ## Health checks:
         - HTTP API is listening
         - Workspace directory is accessible
-        - Bubblewrap binary is available
+        - Isolation mechanism is available:
+          - Linux: Bubblewrap binary
+          - macOS: sandbox-exec binary (Seatbelt)
         """
         try:
             # Calculate uptime
@@ -362,34 +419,54 @@ def create_app() -> FastAPI:
             # Get active execution count
             active_count = _execute_command.get_active_count() if _execute_command else 0
 
-            # Check bwrap availability
-            from executor.infrastructure.isolation.bwrap import check_bwrap_available
+            # Check isolation availability based on platform
+            is_macos = platform.system() == "Darwin"
+            if is_macos:
+                # macOS: Check sandbox-exec availability
+                from executor.infrastructure.isolation.macseatbelt import check_sandbox_available
+                try:
+                    check_sandbox_available()
+                except RuntimeError:
+                    logger.warning("Health check failed: sandbox-exec not available")
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "status": "unhealthy",
+                            "reason": "sandbox-exec binary not found",
+                        },
+                    )
+            else:
+                # Linux: Check bwrap availability
+                from executor.infrastructure.isolation.bwrap import check_bwrap_available
+                try:
+                    check_bwrap_available()
+                except RuntimeError:
+                    logger.warning("Health check failed: bwrap not available")
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "status": "unhealthy",
+                            "reason": "Bubblewrap binary not found",
+                        },
+                    )
 
-            try:
-                check_bwrap_available()
-            except RuntimeError:
-                logger.warning("Health check failed: bwrap not available")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "status": "unhealthy",
-                        "reason": "Bubblewrap binary not found",
-                    },
-                )
+            # Check workspace availability (only on Linux)
+            is_macos = platform.system() == "Darwin"
+            if not is_macos:
+                workspace_path = Path(os.environ.get("WORKSPACE_PATH", str(settings.workspace_path)))
+                workspace_accessible = workspace_path.exists() and os.access(workspace_path, os.W_OK)
 
-            # Check workspace availability
-            workspace_path = Path(os.environ.get("WORKSPACE_PATH", str(settings.workspace_path)))
-            workspace_accessible = workspace_path.exists() and os.access(workspace_path, os.W_OK)
-
-            if not workspace_accessible:
-                logger.warning("Health check failed: workspace not accessible")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "status": "unhealthy",
-                        "reason": f"Workspace directory {workspace_path} is not accessible",
-                    },
-                )
+                if not workspace_accessible:
+                    logger.warning("Health check failed: workspace not accessible")
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "status": "unhealthy",
+                            "reason": f"Workspace directory {workspace_path} is not accessible",
+                        },
+                    )
+            else:
+                logger.debug("Skipping workspace health check on macOS")
 
             return HealthResponse(
                 status="healthy",
@@ -427,7 +504,7 @@ def create_app() -> FastAPI:
         """
         Execute code in a sandboxed environment.
 
-        - Accepts ExecutionRequest with code, language, timeout, and stdin
+        - Accepts ExecutionRequest with code, language, timeout, and event
         - Executes code in isolation (with or without Bubblewrap)
         - Returns ExecutionResult with status, output, metrics, and artifacts
         - Supports Python Lambda handlers, JavaScript, and Shell scripts
@@ -444,6 +521,7 @@ def create_app() -> FastAPI:
             language=request.language,
             timeout=request.timeout,
             code_length=len(request.code),
+            event_keys=list(request.event.keys()) if request.event else [],
         )
 
         command = get_execute_command()
@@ -454,7 +532,7 @@ def create_app() -> FastAPI:
             session_id=request.session_id,
             code=request.code,
             language=request.language,
-            stdin=request.stdin,
+            event=request.event,
             timeout=request.timeout,
             env_vars=request.env_vars,
         )

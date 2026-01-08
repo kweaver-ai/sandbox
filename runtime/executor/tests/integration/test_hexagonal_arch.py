@@ -98,7 +98,6 @@ class TestHexagonalExecutionFlow:
             code="print('hello world')",
             language="python",
             timeout=10,
-            stdin="",
             env_vars={},
         )
 
@@ -129,7 +128,6 @@ class TestHexagonalExecutionFlow:
             code="import time; time.sleep(60)",
             language="python",
             timeout=1,
-            stdin="",
             env_vars={},
         )
 
@@ -175,7 +173,6 @@ class TestHexagonalExecutionFlow:
             code="# test",
             language="python",
             timeout=10,
-            stdin="",
             env_vars={},
         )
 

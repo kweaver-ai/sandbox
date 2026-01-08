@@ -207,7 +207,7 @@ class ExecutionContext:
         execution_id: Execution identifier
         control_plane_url: URL of control plane for callbacks
         env_vars: Environment variables to inject
-        stdin: Standard input for the execution
+        event: Business data passed to handler function
     """
 
     workspace_path: Path
@@ -215,7 +215,7 @@ class ExecutionContext:
     execution_id: str
     control_plane_url: str
     env_vars: Dict[str, str] = field(default_factory=dict)
-    stdin: str = ""
+    event: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -290,10 +290,10 @@ class ExecutionRequest:
     Moved from models.py to domain layer as value object.
 
     Attributes:
-        code: User code to execute (max 1MB)
+        code: User code to execute (AWS Lambda handler function, max 1MB)
         language: Programming language (python/javascript/shell)
         timeout: Maximum execution time in seconds (1-3600)
-        stdin: Standard input for the process (JSON string)
+        event: Business data passed to handler function
         execution_id: Unique execution identifier (pattern: exec_[0-9]{8}_[a-z0-9]{8})
         session_id: Session identifier
         env_vars: Environment variables to inject
@@ -304,7 +304,7 @@ class ExecutionRequest:
     timeout: int
     execution_id: str
     session_id: Optional[str] = None
-    stdin: str = ""
+    event: Dict[str, Any] = field(default_factory=dict)
     env_vars: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -334,6 +334,6 @@ class ExecutionRequest:
             session_id=self.session_id or self.execution_id,
             execution_id=self.execution_id,
             control_plane_url=control_plane_url,
-            stdin=self.stdin,
+            event=self.event,
             env_vars=self.env_vars,
         )

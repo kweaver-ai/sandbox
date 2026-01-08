@@ -131,7 +131,6 @@ class ExecuteCodeCommand:
 
             # Report result (fire-and-forget, don't block response)
             asyncio.create_task(self._report_result(execution.execution_id, result))
-
             return result
 
         except asyncio.TimeoutError:

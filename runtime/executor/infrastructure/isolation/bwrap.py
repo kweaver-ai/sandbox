@@ -14,7 +14,7 @@ from typing import List, Optional
 import structlog
 
 from executor.domain.entities import Execution
-from executor.domain.value_objects import ExecutionResult, ExecutionStatus
+from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
 
 
 logger = structlog.get_logger(__name__)
@@ -140,17 +140,25 @@ class BubblewrapRunner:
         )
 
         try:
-            # Build language-specific command
-            cmd = self._build_command(execution)
+            # Build language-specific command and environment
+            cmd, env_args = self._build_command(execution)
+
+            # Prepare environment with event data
+            env = {}
+            if execution.context.event:
+                env["EVENT_JSON"] = json.dumps(execution.context.event)
+            if execution.context.env_vars:
+                env.update(execution.context.env_vars)
+            env.update(env_args)
 
             # Execute
             result = subprocess.run(
                 cmd,
-                input=execution.context.stdin,
                 capture_output=True,
                 text=True,
                 timeout=None,  # Timeout handled by asyncio.wait_for
                 cwd=str(self.workspace_path),
+                env=env if env else None,
             )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -162,10 +170,10 @@ class BubblewrapRunner:
                 return_value = self._parse_return_value(result.stdout)
 
             # Collect performance metrics
-            metrics = {
-                "duration_ms": round(duration_ms, 2),
-                "cpu_time_ms": round(cpu_time_ms, 2),
-            }
+            metrics = ExecutionMetrics(
+                duration_ms=round(duration_ms, 2),
+                cpu_time_ms=round(cpu_time_ms, 2),
+            )
 
             # Try to collect memory metrics
             # Note: This is a placeholder - actual implementation would monitor /proc/{pid}/status
@@ -199,7 +207,7 @@ class BubblewrapRunner:
                 stderr=e.stderr if e.stderr else "Execution timeout",
                 exit_code=-1,
                 execution_time_ms=duration_ms,
-                metrics={"duration_ms": round(duration_ms, 2)},
+                metrics=ExecutionMetrics(duration_ms=round(duration_ms, 2), cpu_time_ms=0),
             )
 
         except Exception as e:
@@ -216,7 +224,7 @@ class BubblewrapRunner:
                 exit_code=-1,
                 execution_time_ms=duration_ms,
                 error=str(e),
-                metrics={"duration_ms": round(duration_ms, 2)},
+                metrics=ExecutionMetrics(duration_ms=round(duration_ms, 2), cpu_time_ms=0),
             )
 
     def _generate_wrapper_code(self, user_code: str) -> str:
@@ -232,14 +240,15 @@ class BubblewrapRunner:
         return f"""
 import json
 import sys
+import os
 
 # User code
 {user_code}
 
-# Read event from stdin
+# Read event from environment variable
 try:
-    input_data = sys.stdin.read()
-    event = json.loads(input_data) if input_data.strip() else {{}}
+    event_json = os.environ.get("EVENT_JSON", "{{}}")
+    event = json.loads(event_json) if event_json.strip() else {{}}
 except json.JSONDecodeError as e:
     print(f"Error parsing event JSON: {{e}}", file=sys.stderr)
     sys.exit(1)
@@ -287,7 +296,7 @@ except Exception as e:
             logger.warning("Failed to parse return value", error=str(e))
         return None
 
-    def _build_command(self, execution: Execution) -> List[str]:
+    def _build_command(self, execution: Execution) -> tuple[List[str], dict]:
         """
         Build the complete command for executing code.
 
@@ -295,7 +304,7 @@ except Exception as e:
             execution: Execution entity
 
         Returns:
-            Complete command list for subprocess
+            Tuple of (command list, environment variables dict)
         """
         lang = execution.language.lower()
 
@@ -308,7 +317,7 @@ except Exception as e:
         else:
             raise ValueError(f"Unsupported language: {execution.language}")
 
-    def _build_python_command(self, execution: Execution) -> List[str]:
+    def _build_python_command(self, execution: Execution) -> tuple[List[str], dict]:
         """
         Build command for Python execution using fileless approach.
 
@@ -323,13 +332,25 @@ except Exception as e:
             "-c",
             wrapper_code,
         ]
-        return cmd
+        return cmd, {}
 
-    def _build_node_command(self, execution: Execution) -> List[str]:
+    def _build_node_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for Node.js execution."""
+        # Wrap user code in AWS Lambda handler pattern
+        wrapper_code = f'''
+{execution.code}
+
+const eventJson = process.env.EVENT_JSON || '{{}}';
+const event = JSON.parse(eventJson);
+
+const result = handler(event, {{}});
+
+console.log('===SANDBOX_RESULT===' + JSON.stringify(result) + '===SANDBOX_RESULT_END===');
+'''
+
         # Write code to temporary file
         code_file = self.workspace_path / "user_code.js"
-        code_file.write_text(execution.code)
+        code_file.write_text(wrapper_code)
 
         cmd = self._base_args + [
             "--ro-bind", str(code_file), "/workspace/user_code.js",
@@ -337,9 +358,9 @@ except Exception as e:
             "node",
             "/workspace/user_code.js",
         ]
-        return cmd
+        return cmd, {}
 
-    def _build_shell_command(self, execution: Execution) -> List[str]:
+    def _build_shell_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for shell execution."""
         cmd = self._base_args + [
             "--",
@@ -347,4 +368,4 @@ except Exception as e:
             "-c",
             execution.code,
         ]
-        return cmd
+        return cmd, {}

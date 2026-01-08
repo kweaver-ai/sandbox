@@ -5,7 +5,6 @@ Orchestrates domain objects to execute use cases.
 Contains commands, services, and DTOs.
 """
 
-from .services.executor_service import ExecutorService
 from .commands.execute_code import ExecuteCodeCommand
 from .services.heartbeat_service import (
     HeartbeatService,
@@ -21,8 +20,6 @@ from .services.lifecycle_service import (
 )
 
 __all__ = [
-    # Existing
-    "ExecutorService",
     # Commands
     "ExecuteCodeCommand",
     # Services

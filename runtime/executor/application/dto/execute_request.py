@@ -16,9 +16,9 @@ class ExecuteRequestDTO(BaseModel):
 
     execution_id: str = Field(..., description="Unique execution identifier")
     session_id: str = Field(..., description="Session identifier")
-    code: str = Field(..., description="Code to execute")
+    code: str = Field(..., description="AWS Lambda handler function code")
     language: str = Field(..., description="Programming language")
-    stdin: str = Field(default="", description="Standard input")
+    event: dict = Field(default_factory=dict, description="Business data passed to handler")
     timeout: int = Field(default=300, description="Timeout in seconds", ge=1, le=3600)
     env_vars: dict = Field(default_factory=dict, description="Environment variables")
 
@@ -37,7 +37,7 @@ class ExecuteRequestDTO(BaseModel):
             timeout=self.timeout,
             execution_id=self.execution_id,
             session_id=self.session_id,
-            stdin=self.stdin,
+            event=self.event,
             env_vars=self.env_vars,
         )
 
