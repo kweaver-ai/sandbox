@@ -8,9 +8,9 @@ from datetime import datetime
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.repositories.session_repository import ISessionRepository
-from src.domain.entities.session import Session
-from src.infrastructure.persistence.models.session_model import SessionModel
+from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
+from sandbox_control_plane.src.domain.entities.session import Session
+from sandbox_control_plane.src.infrastructure.persistence.models.session_model import SessionModel
 
 
 class SqlSessionRepository(ISessionRepository):

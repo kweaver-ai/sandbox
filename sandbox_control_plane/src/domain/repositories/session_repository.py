@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime
 
-from src.domain.entities.session import Session
+from sandbox_control_plane.src.domain.entities.session import Session
 
 
 class ISessionRepository(ABC):

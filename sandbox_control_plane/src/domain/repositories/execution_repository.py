@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime
 
-from src.domain.entities.execution import Execution
+from sandbox_control_plane.src.domain.entities.execution import Execution
 
 
 class IExecutionRepository(ABC):

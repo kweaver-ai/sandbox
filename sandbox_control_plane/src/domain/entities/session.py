@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List
 
-from src.domain.value_objects.resource_limit import ResourceLimit
-from src.domain.value_objects.execution_status import SessionStatus
-from src.domain.entities.execution import Execution
+from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+from sandbox_control_plane.src.domain.value_objects.execution_status import SessionStatus
+from sandbox_control_plane.src.domain.entities.execution import Execution
 
 
 @dataclass

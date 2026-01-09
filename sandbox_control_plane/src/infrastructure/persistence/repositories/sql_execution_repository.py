@@ -8,9 +8,9 @@ from datetime import datetime
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.repositories.execution_repository import IExecutionRepository
-from src.domain.entities.execution import Execution
-from src.infrastructure.persistence.models.execution_model import ExecutionModel
+from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
+from sandbox_control_plane.src.domain.entities.execution import Execution
+from sandbox_control_plane.src.infrastructure.persistence.models.execution_model import ExecutionModel
 
 
 class SqlExecutionRepository(IExecutionRepository):
@@ -51,6 +51,9 @@ class SqlExecutionRepository(IExecutionRepository):
             model.retry_count = execution.retry_count
             model.last_heartbeat_at = execution.last_heartbeat_at
             model.completed_at = execution.completed_at
+            model.return_value = execution.return_value
+            model.metrics = execution.metrics
+            model.error_message = execution.state.error_message
         else:
             # 创建新记录
             model = ExecutionModel.from_entity(execution)

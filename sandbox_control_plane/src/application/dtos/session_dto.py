@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from src.domain.value_objects.resource_limit import ResourceLimit
-from src.domain.value_objects.execution_status import SessionStatus
+from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+from sandbox_control_plane.src.domain.value_objects.execution_status import SessionStatus
 
 
 @dataclass

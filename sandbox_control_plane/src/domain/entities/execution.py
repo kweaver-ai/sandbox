@@ -6,8 +6,8 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
-from src.domain.value_objects.artifact import Artifact
+from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
+from sandbox_control_plane.src.domain.value_objects.artifact import Artifact
 
 
 @dataclass
@@ -22,6 +22,8 @@ class Execution:
     code: str
     language: str
     state: ExecutionState
+    timeout: int = 300  # 超时时间（秒）
+    event_data: dict | None = None  # 事件数据（handler 函数输入）
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     execution_time: float | None = None  # 执行耗时（秒）

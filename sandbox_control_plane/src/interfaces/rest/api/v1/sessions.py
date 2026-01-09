@@ -6,31 +6,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 
-from src.application.services.session_service import SessionService
-from src.application.commands.create_session import CreateSessionCommand
-from src.application.commands.execute_code import ExecuteCodeCommand
-from src.application.dtos.session_dto import SessionDTO
-from src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
-from src.interfaces.rest.schemas.response import (
+from sandbox_control_plane.src.application.services.session_service import SessionService
+from sandbox_control_plane.src.application.commands.create_session import CreateSessionCommand
+from sandbox_control_plane.src.application.commands.execute_code import ExecuteCodeCommand
+from sandbox_control_plane.src.application.dtos.session_dto import SessionDTO
+from sandbox_control_plane.src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
+from sandbox_control_plane.src.interfaces.rest.schemas.response import (
     SessionResponse,
     ExecuteCodeResponse,
     ErrorResponse
 )
+from sandbox_control_plane.src.infrastructure.dependencies import get_session_service_db
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-
-async def get_session_service() -> SessionService:
-    """依赖注入：获取会话服务"""
-    # 这里应该从依赖注入容器获取
-    # 示例：return request.app.state.session_service
-    pass
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     request: CreateSessionRequest,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(get_session_service_db)
 ):
     """
     创建会话
@@ -42,7 +36,7 @@ async def create_session(
     - **disk**: 磁盘限制，如 "1Gi", "10Gi"
     - **env_vars**: 环境变量字典
     """
-    from src.domain.value_objects.resource_limit import ResourceLimit
+    from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
 
     try:
         # 转换请求为命令
@@ -90,10 +84,10 @@ async def create_session(
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(get_session_service_db)
 ):
     """获取会话详情"""
-    from src.application.queries.get_session import GetSessionQuery
+    from sandbox_control_plane.src.application.queries.get_session import GetSessionQuery
 
     try:
         query = GetSessionQuery(session_id=session_id)
@@ -127,7 +121,7 @@ async def get_session(
 @router.delete("/{session_id}", response_model=SessionResponse)
 async def terminate_session(
     session_id: str,
-    service: SessionService = Depends(get_session_service)
+    service: SessionService = Depends(get_session_service_db)
 ):
     """终止会话"""
     try:
