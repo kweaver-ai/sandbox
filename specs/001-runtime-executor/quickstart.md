@@ -302,7 +302,7 @@ docker logs sandbox-executor
 
 # Common issues:
 # 1. Bubblewrap not installed → Verify Dockerfile includes bwrap
-# 2. Port already in use → Change port mapping: -p 8081:8080
+# 2. Port already in use → Change port mapping: -p 8080:8080
 # 3. Missing environment variables → Verify CONTROL_PLANE_URL and INTERNAL_API_TOKEN
 ```
 
