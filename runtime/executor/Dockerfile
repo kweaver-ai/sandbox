@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Create workspace directory
 # This will be mounted as a volume for S3/ephemeral storage
 RUN mkdir -p /workspace && \
-    chown sandbox:sandbox /workspace
+    chown -R sandbox:sandbox /app /workspace
 
 # Switch to non-privileged user
 USER sandbox

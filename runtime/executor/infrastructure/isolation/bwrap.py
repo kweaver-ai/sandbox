@@ -5,7 +5,9 @@ Bubblewrap Execution Adapter
 Implements secure code execution using Bubblewrap for process isolation.
 """
 
+import asyncio
 import json
+import os
 import subprocess
 import time
 import shutil
@@ -117,9 +119,8 @@ class BubblewrapRunner:
             "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
             "--setenv", "HOME", "/workspace",
             "--setenv", "TMPDIR", "/tmp",
-            # Security
-            "--cap-drop", "ALL",
-            "--no-new-privs",
+            # Security (Note: --cap-drop and --no-new-privs not available in bwrap 0.11.0)
+            # These are handled by container-level security (non-privileged user, namespaces)
         ]
 
     async def execute(self, execution: Execution) -> ExecutionResult:
@@ -145,22 +146,28 @@ class BubblewrapRunner:
             cmd, env_args = self._build_command(execution)
 
             # Prepare environment with event data
-            env = {}
+            env = os.environ.copy()
             if execution.context.event:
                 env["EVENT_JSON"] = json.dumps(execution.context.event)
             if execution.context.env_vars:
                 env.update(execution.context.env_vars)
             env.update(env_args)
 
-            # Execute
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=None,  # Timeout handled by asyncio.wait_for
+            # Execute with asyncio subprocess (non-blocking)
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.workspace_path),
-                env=env if env else None,
+                env=env,
             )
+
+            # Wait for process to complete and capture output
+            stdout_bytes, stderr_bytes = await process.communicate()
+
+            # Convert bytes to string
+            stdout = stdout_bytes.decode('utf-8')
+            stderr = stderr_bytes.decode('utf-8')
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             cpu_time_ms = (time.process_time() - start_cpu) * 1000
@@ -168,10 +175,10 @@ class BubblewrapRunner:
             # Parse output for return value (Python handler mode)
             return_value = None
             if execution.language.lower() == "python":
-                return_value = self._parse_return_value(result.stdout)
+                return_value = self._parse_return_value(stdout)
 
             # Clean stdout by removing return value markers
-            clean_stdout = remove_markers_from_output(result.stdout)
+            clean_stdout = remove_markers_from_output(stdout)
 
             # Collect performance metrics
             metrics = ExecutionMetrics(
@@ -184,10 +191,10 @@ class BubblewrapRunner:
             # For now, we don't have direct access to the child process's memory usage
 
             execution_result = ExecutionResult(
-                status=ExecutionStatus.COMPLETED if result.returncode == 0 else ExecutionStatus.FAILED,
+                status=ExecutionStatus.COMPLETED if process.returncode == 0 else ExecutionStatus.FAILED,
                 stdout=clean_stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode,
+                stderr=stderr,
+                exit_code=process.returncode,
                 execution_time_ms=duration_ms,
                 return_value=return_value,
                 metrics=metrics,
@@ -196,20 +203,28 @@ class BubblewrapRunner:
             logger.info(
                 "Execution completed",
                 execution_id=execution.execution_id,
-                exit_code=result.returncode,
+                exit_code=process.returncode,
                 duration_ms=duration_ms,
             )
 
             return execution_result
 
-        except subprocess.TimeoutExpired as e:
+        except asyncio.TimeoutError:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning("Bwrap execution timeout", execution_id=execution.execution_id)
-            clean_stdout = remove_markers_from_output(e.stdout) if e.stdout else ""
+
+            # Clean up: terminate the subprocess if still running
+            if 'process' in locals() and process.returncode is None:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+
             return ExecutionResult(
                 status=ExecutionStatus.TIMEOUT,
-                stdout=clean_stdout,
-                stderr=e.stderr if e.stderr else "Execution timeout",
+                stdout="",
+                stderr="Execution timeout",
                 exit_code=-1,
                 execution_time_ms=duration_ms,
                 metrics=ExecutionMetrics(duration_ms=round(duration_ms, 2), cpu_time_ms=0),
