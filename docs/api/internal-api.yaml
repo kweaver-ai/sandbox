@@ -31,6 +31,8 @@ tags:
     description: Executor 上报执行结果和状态
   - name: 心跳上报
     description: Executor 定时上报心跳
+  - name: Executor API
+    description: Executor 容器内 HTTP API（Runtime 调用 Executor）
   - name: 自定义错误码汇总
     description: |
       内部 API 错误码：
@@ -398,6 +400,174 @@ paths:
         '401':
           $ref: '#/components/responses/UnauthorizedError'
 
+  /execute:
+    post:
+      tags:
+        - Executor API
+      summary: 提交代码执行任务
+      description: |
+        Runtime 调用 Executor 执行代码
+
+        ## 执行流程
+        1. Runtime 调用此接口提交执行请求
+        2. Executor 立即返回（任务已接收）
+        3. Executor 异步执行代码
+        4. 执行完成后通过 `/executions/{execution_id}/result` 回调上报结果
+
+        ## 异步执行模式
+        - 此接口为异步执行，立即返回 `submitted` 状态
+        - 实际执行结果通过回调接口上报
+        - Runtime 可通过查询接口获取最终结果
+
+        ## 安全说明
+        - 容器网络内部调用
+        - 使用 INTERNAL_API_TOKEN 认证
+        - 通过 NetworkPolicy 限制访问
+      operationId: executeCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutorExecuteRequest'
+            examples:
+              simple_test:
+                summary: Simple Test - Quick Hello
+                description: |
+                  简单的测试用例 - 快速验证接口是否正常工作
+
+                  可以在 Swagger UI 中直接点击 "Try it out" 执行测试
+                value:
+                  execution_id: exec_20240115_test0001
+                  session_id: sess_test_001
+                  code: |
+                    def handler(event):
+                        name = event.get('name', 'World')
+                        return {'message': f'Hello, {name}!'}
+                  language: python
+                  event:
+                    name: World
+                  timeout: 10
+              python_handler:
+                summary: Python Handler with event
+                value:
+                  execution_id: exec_20240115_abc12345
+                  session_id: sess_abc123def4567890
+                  code: |
+                    def handler(event):
+                        name = event.get('name', 'World')
+                        age = event.get('age', 0)
+                        return {
+                            'message': f'Hello, {name}!',
+                            'age_doubled': age * 2
+                        }
+                  language: python
+                  event:
+                    name: Alice
+                    age: 25
+                  timeout: 30
+              javascript_handler:
+                summary: JavaScript Handler with event
+                value:
+                  execution_id: exec_20240115_def67890
+                  session_id: sess_abc123def4567890
+                  code: |
+                    exports.handler = function(event, context) {
+                        const name = event.name || 'World';
+                        const age = event.age || 0;
+                        return {
+                            message: `Hello, ${name}!`,
+                            ageDoubled: age * 2
+                        };
+                    };
+                  language: javascript
+                  event:
+                    name: Bob
+                    age: 30
+                  timeout: 10
+              shell_script:
+                summary: Shell Script with event
+                value:
+                  execution_id: exec_20240115_xyz99999
+                  session_id: sess_abc123def4567890
+                  code: |
+                    #!/bin/bash
+                    # event is available as EVENT_JSON environment variable
+                    name=$(echo "$EVENT_JSON" | jq -r '.name // "World"')
+                    age=$(echo "$EVENT_JSON" | jq -r '.age // 0')
+                    echo "{\"message\": \"Hello, $name!\", \"age_doubled\": $((age * 2))}"
+                  language: shell
+                  event:
+                    name: Charlie
+                    age: 35
+                  timeout: 5
+      responses:
+        '200':
+          description: 执行任务已提交
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutorExecuteResponse'
+              example:
+                execution_id: exec_20240115_abc12345
+                status: submitted
+                message: Execution submitted
+                submitted_at: '2025-01-04T10:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          description: Executor 队列已满或服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: Internal.ServiceUnavailable
+                description: Executor queue full
+                error_detail: Maximum concurrent executions reached
+                solution: Retry later or reduce concurrent requests
+
+  /health:
+    get:
+      tags:
+        - Executor API
+      summary: 健康检查
+      description: |
+        Executor 健康检查接口
+
+        用于容器就绪探针和健康检查
+
+        ## 检查项
+        - HTTP API 可访问
+        - 工作区目录可访问
+        - 隔离机制可用（Bubblewrap/Linux 或 sandbox-exec/macOS）
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Executor 健康
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                status: healthy
+                version: 1.0.0
+                uptime_seconds: 123.45
+                active_executions: 2
+                platform: linux
+                isolation: Bubblewrap 1.7.0
+        '503':
+          description: Executor 不健康
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                status: unhealthy
+                reason: Bubblewrap binary not found
+
 components:
   parameters:
     ExecutionId:
@@ -544,6 +714,116 @@ components:
         download_url:
           type: string
           description: 预签名 S3 URL（可选）
+
+    ExecutorExecuteRequest:
+      type: object
+      required:
+        - execution_id
+        - session_id
+        - code
+        - language
+      properties:
+        execution_id:
+          type: string
+          pattern: '^exec_[0-9]{8}_[a-z0-9]{8}$'
+          description: 执行 ID（格式：exec_YYYYMMDD_XXXXXXXX）
+          example: exec_20240115_abc12345
+        session_id:
+          type: string
+          description: 会话 ID
+          example: sess_abc123def4567890
+        code:
+          type: string
+          maxLength: 1048576
+          description: |
+            AWS Lambda 规范的 handler 函数代码
+
+            ## Python Handler 规范
+            - 必须定义 `def handler(event):` 函数
+            - event: 业务输入数据（字典类型）
+            - 返回值必须支持 JSON 序列化
+
+            ## JavaScript Handler 规范
+            - 导出 `exports.handler = function(event, context) {}`
+            - event: 业务输入数据（对象类型）
+
+            ## Shell 规范
+            - 直接执行的 shell 脚本
+            - 通过 event 对象接收输入（JSON 格式通过环境变量传入）
+          example: |
+            def handler(event):
+                name = event.get('name', 'World')
+                return {'message': f'Hello, {name}!'}
+        language:
+          type: string
+          enum: [python, javascript, shell]
+          description: 编程语言
+          example: python
+        event:
+          type: object
+          description: |
+            传递给 handler 函数的业务数据
+
+            ## Python
+            - 作为 `handler(event)` 的 event 参数传入
+
+            ## JavaScript
+            - 作为 handler(event, context) 的 event 参数传入
+
+            ## Shell
+            - 通过环境变量 `EVENT_JSON` 传入（JSON 格式化）
+          additionalProperties: true
+          example:
+            name: Alice
+            age: 25
+            data:
+              - item1
+              - item2
+        timeout:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 300
+          description: 执行超时时间（秒）
+          example: 30
+        env_vars:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+          default: {}
+          description: 环境变量
+          example:
+            PATH: /usr/bin:/bin
+            CUSTOM_VAR: custom_value
+
+    ExecutorExecuteResponse:
+      type: object
+      required:
+        - execution_id
+        - status
+        - message
+      properties:
+        execution_id:
+          type: string
+          description: 执行 ID
+          example: exec_20240115_abc12345
+        status:
+          type: string
+          enum: [submitted]
+          description: 执行状态（异步执行，立即返回 submitted）
+          example: submitted
+        message:
+          type: string
+          description: 执行消息
+          example: Execution submitted
+        submitted_at:
+          type: string
+          format: date-time
+          description: 提交时间
+          example: '2025-01-04T10:30:00Z'
 
     Error:
       type: object

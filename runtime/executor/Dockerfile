@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Create workspace directory
 # This will be mounted as a volume for S3/ephemeral storage
 RUN mkdir -p /workspace && \
-    chown sandbox:sandbox /workspace
+    chown -R sandbox:sandbox /app /workspace
 
 # Switch to non-privileged user
 USER sandbox
@@ -56,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 # Start the executor daemon
 # The executor runs as PID 1 and manages its lifecycle
-CMD ["python", "-m", "executor.interfaces.rest"]
+CMD ["python", "-m", "executor.interfaces.http.rest"]

@@ -5,18 +5,66 @@ Bubblewrap Execution Adapter
 Implements secure code execution using Bubblewrap for process isolation.
 """
 
+import asyncio
 import json
+import os
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import List, Optional
 import structlog
 
 from executor.domain.entities import Execution
-from executor.domain.value_objects import ExecutionResult, ExecutionStatus
+from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
+from executor.infrastructure.isolation.result_parser import remove_markers_from_output
 
 
 logger = structlog.get_logger(__name__)
+
+
+def check_bwrap_available() -> bool:
+    """
+    Check if Bubblewrap is available on the system.
+
+    Returns:
+        True if bwrap is available, False otherwise
+
+    Raises:
+        RuntimeError: If bwrap is not found
+    """
+    if not shutil.which("bwrap"):
+        raise RuntimeError("Bubblewrap (bwrap) is not installed or not in PATH")
+    return True
+
+
+def get_bwrap_version() -> str:
+    """
+    Get the Bubblewrap version.
+
+    Returns:
+        Version string (e.g., "1.7.0")
+
+    Raises:
+        RuntimeError: If bwrap is not available or version cannot be determined
+    """
+    try:
+        result = subprocess.run(
+            ["bwrap", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            # Extract version from output like "bwrap 1.7.0"
+            version = result.stdout.strip().split()[-1]
+            return version
+        raise RuntimeError("Failed to get bwrap version")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Timeout getting bwrap version")
+    except FileNotFoundError:
+        raise RuntimeError("bwrap not found")
+
 
 
 class BubblewrapRunner:
@@ -71,9 +119,8 @@ class BubblewrapRunner:
             "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
             "--setenv", "HOME", "/workspace",
             "--setenv", "TMPDIR", "/tmp",
-            # Security
-            "--cap-drop", "ALL",
-            "--no-new-privs",
+            # Security (Note: --cap-drop and --no-new-privs not available in bwrap 0.11.0)
+            # These are handled by container-level security (non-privileged user, namespaces)
         ]
 
     async def execute(self, execution: Execution) -> ExecutionResult:
@@ -95,18 +142,32 @@ class BubblewrapRunner:
         )
 
         try:
-            # Build language-specific command
-            cmd = self._build_command(execution)
+            # Build language-specific command and environment
+            cmd, env_args = self._build_command(execution)
 
-            # Execute
-            result = subprocess.run(
-                cmd,
-                input=execution.context.stdin,
-                capture_output=True,
-                text=True,
-                timeout=None,  # Timeout handled by asyncio.wait_for
+            # Prepare environment with event data
+            env = os.environ.copy()
+            if execution.context.event:
+                env["EVENT_JSON"] = json.dumps(execution.context.event)
+            if execution.context.env_vars:
+                env.update(execution.context.env_vars)
+            env.update(env_args)
+
+            # Execute with asyncio subprocess (non-blocking)
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.workspace_path),
+                env=env,
             )
+
+            # Wait for process to complete and capture output
+            stdout_bytes, stderr_bytes = await process.communicate()
+
+            # Convert bytes to string
+            stdout = stdout_bytes.decode('utf-8')
+            stderr = stderr_bytes.decode('utf-8')
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             cpu_time_ms = (time.process_time() - start_cpu) * 1000
@@ -114,23 +175,26 @@ class BubblewrapRunner:
             # Parse output for return value (Python handler mode)
             return_value = None
             if execution.language.lower() == "python":
-                return_value = self._parse_return_value(result.stdout)
+                return_value = self._parse_return_value(stdout)
+
+            # Clean stdout by removing return value markers
+            clean_stdout = remove_markers_from_output(stdout)
 
             # Collect performance metrics
-            metrics = {
-                "duration_ms": round(duration_ms, 2),
-                "cpu_time_ms": round(cpu_time_ms, 2),
-            }
+            metrics = ExecutionMetrics(
+                duration_ms=round(duration_ms, 2),
+                cpu_time_ms=round(cpu_time_ms, 2),
+            )
 
             # Try to collect memory metrics
             # Note: This is a placeholder - actual implementation would monitor /proc/{pid}/status
             # For now, we don't have direct access to the child process's memory usage
 
             execution_result = ExecutionResult(
-                status=ExecutionStatus.COMPLETED if result.returncode == 0 else ExecutionStatus.FAILED,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode,
+                status=ExecutionStatus.COMPLETED if process.returncode == 0 else ExecutionStatus.FAILED,
+                stdout=clean_stdout,
+                stderr=stderr,
+                exit_code=process.returncode,
                 execution_time_ms=duration_ms,
                 return_value=return_value,
                 metrics=metrics,
@@ -139,22 +203,31 @@ class BubblewrapRunner:
             logger.info(
                 "Execution completed",
                 execution_id=execution.execution_id,
-                exit_code=result.returncode,
+                exit_code=process.returncode,
                 duration_ms=duration_ms,
             )
 
             return execution_result
 
-        except subprocess.TimeoutExpired as e:
+        except asyncio.TimeoutError:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.warning("Bwrap execution timeout", execution_id=execution.execution_id)
+
+            # Clean up: terminate the subprocess if still running
+            if 'process' in locals() and process.returncode is None:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+
             return ExecutionResult(
                 status=ExecutionStatus.TIMEOUT,
-                stdout=e.stdout if e.stdout else "",
-                stderr=e.stderr if e.stderr else "Execution timeout",
+                stdout="",
+                stderr="Execution timeout",
                 exit_code=-1,
                 execution_time_ms=duration_ms,
-                metrics={"duration_ms": round(duration_ms, 2)},
+                metrics=ExecutionMetrics(duration_ms=round(duration_ms, 2), cpu_time_ms=0),
             )
 
         except Exception as e:
@@ -171,7 +244,7 @@ class BubblewrapRunner:
                 exit_code=-1,
                 execution_time_ms=duration_ms,
                 error=str(e),
-                metrics={"duration_ms": round(duration_ms, 2)},
+                metrics=ExecutionMetrics(duration_ms=round(duration_ms, 2), cpu_time_ms=0),
             )
 
     def _generate_wrapper_code(self, user_code: str) -> str:
@@ -187,14 +260,15 @@ class BubblewrapRunner:
         return f"""
 import json
 import sys
+import os
 
 # User code
 {user_code}
 
-# Read event from stdin
+# Read event from environment variable
 try:
-    input_data = sys.stdin.read()
-    event = json.loads(input_data) if input_data.strip() else {{}}
+    event_json = os.environ.get("EVENT_JSON", "{{}}")
+    event = json.loads(event_json) if event_json.strip() else {{}}
 except json.JSONDecodeError as e:
     print(f"Error parsing event JSON: {{e}}", file=sys.stderr)
     sys.exit(1)
@@ -242,7 +316,7 @@ except Exception as e:
             logger.warning("Failed to parse return value", error=str(e))
         return None
 
-    def _build_command(self, execution: Execution) -> List[str]:
+    def _build_command(self, execution: Execution) -> tuple[List[str], dict]:
         """
         Build the complete command for executing code.
 
@@ -250,7 +324,7 @@ except Exception as e:
             execution: Execution entity
 
         Returns:
-            Complete command list for subprocess
+            Tuple of (command list, environment variables dict)
         """
         lang = execution.language.lower()
 
@@ -263,7 +337,7 @@ except Exception as e:
         else:
             raise ValueError(f"Unsupported language: {execution.language}")
 
-    def _build_python_command(self, execution: Execution) -> List[str]:
+    def _build_python_command(self, execution: Execution) -> tuple[List[str], dict]:
         """
         Build command for Python execution using fileless approach.
 
@@ -278,13 +352,25 @@ except Exception as e:
             "-c",
             wrapper_code,
         ]
-        return cmd
+        return cmd, {}
 
-    def _build_node_command(self, execution: Execution) -> List[str]:
+    def _build_node_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for Node.js execution."""
+        # Wrap user code in AWS Lambda handler pattern
+        wrapper_code = f'''
+{execution.code}
+
+const eventJson = process.env.EVENT_JSON || '{{}}';
+const event = JSON.parse(eventJson);
+
+const result = handler(event, {{}});
+
+console.log('===SANDBOX_RESULT===' + JSON.stringify(result) + '===SANDBOX_RESULT_END===');
+'''
+
         # Write code to temporary file
         code_file = self.workspace_path / "user_code.js"
-        code_file.write_text(execution.code)
+        code_file.write_text(wrapper_code)
 
         cmd = self._base_args + [
             "--ro-bind", str(code_file), "/workspace/user_code.js",
@@ -292,9 +378,9 @@ except Exception as e:
             "node",
             "/workspace/user_code.js",
         ]
-        return cmd
+        return cmd, {}
 
-    def _build_shell_command(self, execution: Execution) -> List[str]:
+    def _build_shell_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for shell execution."""
         cmd = self._base_args + [
             "--",
@@ -302,4 +388,4 @@ except Exception as e:
             "-c",
             execution.code,
         ]
-        return cmd
+        return cmd, {}

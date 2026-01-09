@@ -186,27 +186,85 @@ sandbox/
 │
 ├── runtime/                      # 运行时模块
 │   ├── executor/                 # 执行器（容器内守护进程）
-│   │   ├── domain/               # 领域层
+│   │   │
+│   │   ├── domain/               # 领域层（核心）
 │   │   │   ├── __init__.py
-│   │   │   ├── entities.py       # Execution 实体
-│   │   │   ├── value_objects.py  # ExecutionResult, Artifact, ExecutionContext
-│   │   │   └── services.py       # ArtifactCollector 领域服务
-│   │   ├── application/          # 应用层
+│   │   │   ├── entities.py       # Execution 实体（状态机）
+│   │   │   ├── value_objects.py  # 值对象（ExecutionResult, Artifact, HeartbeatSignal等）
+│   │   │   ├── services.py       # 领域服务（ArtifactCollector）
+│   │   │   └── ports/            # 领域端口（Port 接口）
+│   │   │       ├── __init__.py
+│   │   │       ├── executor_port.py           # IExecutorPort
+│   │   │       ├── callback_port.py           # ICallbackPort
+│   │   │       ├── isolation_port.py          # IIsolationPort
+│   │   │       ├── artifact_scanner_port.py   # IArtifactScannerPort
+│   │   │       ├── heartbeat_port.py          # IHeartbeatPort
+│   │   │       └── lifecycle_port.py          # ILifecyclePort
+│   │   │
+│   │   ├── application/          # 应用层（用例编排）
 │   │   │   ├── __init__.py
-│   │   │   └── services.py       # ExecutorService
-│   │   ├── infrastructure/       # 基础设施层
+│   │   │   ├── commands/         # 命令处理器
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── execute_code.py # ExecuteCodeCommand（主用例）
+│   │   │   ├── services/         # 应用服务
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── executor_service.py     # ExecutorService
+│   │   │   │   ├── heartbeat_service.py    # HeartbeatService（实现IHeartbeatPort）
+│   │   │   │   └── lifecycle_service.py    # LifecycleService（实现ILifecyclePort）
+│   │   │   └── dto/             # 数据传输对象
+│   │   │       ├── __init__.py
+│   │   │       └── execute_request.py
+│   │   │
+│   │   ├── infrastructure/       # 基础设施层（Adapter 实现）
 │   │   │   ├── __init__.py
-│   │   │   ├── bwrap.py          # BubblewrapRunner 适配器
-│   │   │   └── result_reporter.py # ResultReporter HTTP 客户端
-│   │   ├── interfaces/           # 接口层
+│   │   │   ├── isolation/        # 进程隔离适配器
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── bwrap.py               # BubblewrapRunner（实现IIsolationPort）
+│   │   │   │   ├── code_wrapper.py        # Python代码包装器
+│   │   │   │   └── result_parser.py       # 返回值解析器
+│   │   │   ├── http/             # HTTP通信适配器
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── callback_client.py      # CallbackClient（实现ICallbackPort）
+│   │   │   ├── persistence/      # 持久化适配器
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── artifact_scanner.py    # ArtifactScanner（实现IArtifactScannerPort）
+│   │   │   ├── monitoring/       # 监控适配器
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── metrics.py              # MetricsCollector
+│   │   │   ├── config/           # 配置管理
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── config.py               # Settings
+│   │   │   ├── logging/          # 日志适配器
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── logging_config.py       # Structured logging
+│   │   │   ├── result_reporter.py # ResultReporter（遗留，待重构）
+│   │   │   └── bwrap.py           # 遗留文件（已迁移至isolation/）
+│   │   │
+│   │   ├── interfaces/           # 接口层（Driving Adapter）
 │   │   │   ├── __init__.py
-│   │   │   └── rest.py           # FastAPI 应用（容器入口）
+│   │   │   └── http/             # HTTP接口
+│   │   │       ├── __init__.py
+│   │   │       └── rest.py       # FastAPI应用（容器入口）
+│   │   │
+│   │   ├── tests/                # 测试目录
+│   │   │   ├── unit/             # 单元测试
+│   │   │   │   ├── domain/       # 领域层测试
+│   │   │   │   │   ├── test_entities.py
+│   │   │   │   │   ├── test_value_objects.py
+│   │   │   │   │   └── test_ports.py
+│   │   │   │   ├── application/  # 应用层测试
+│   │   │   │   │   └── test_services.py
+│   │   │   │   └── infrastructure/ # 基础设施层测试
+│   │   │   ├── contract/         # 契约测试
+│   │   │   └── integration/      # 集成测试
+│   │   │
 │   │   ├── pyproject.toml        # 执行器模块配置
-│   │   ├── requirements.txt      # Python 依赖
-│   │   └── Dockerfile            # 执行器镜像定义
+│   │   ├── requirements.txt      # Python依赖
+│   │   ├── Dockerfile            # 执行器Docker镜像
+│   │   └── README.md             # 执行器文档
 │   │
-│   ├── docker_runtime.py         # Docker 运行时适配器
-│   └── k8s_runtime.py            # Kubernetes 运行时适配器
+│   ├── docker_runtime.py         # Docker运行时适配器
+│   └── k8s_runtime.py            # Kubernetes运行时适配器
 │
 ├── images/                       # 镜像定义
 │   ├── base/                     # 基础镜像
@@ -514,7 +572,7 @@ async def create_session(
 
 ### 执行器的六边形架构
 
-执行器也采用六边形架构，与 Control Plane 保持一致：
+执行器也采用六边形架构，与 Control Plane 保持一致。最新的架构引入了明确的 Port 接口定义：
 
 ```
 ┌─────────────────────────────────────────┐
@@ -530,30 +588,73 @@ async def create_session(
 ┌─────────────────────────────────────────┐
 │       Application Layer                 │
 │  ┌────────────────────────────────────┐ │
-│  │  ExecutorService                   │ │
-│  │  - execute() 用例编排              │ │
+│  │  ExecuteCodeCommand (主用例)      │ │
+│  │  - 协调执行流程                    │ │
 │  │  - 处理超时、重试、错误            │ │
 │  └────────────┬───────────────────────┘ │
+│  ┌────────────────────────────────────┐ │
+│  │  HeartbeatService                 │ │
+│  │  LifecycleService                 │ │
+│  └────────────────────────────────────┘ │
 └───────────────┼───────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────┐
-│         Domain Layer                    │
+│         Domain Layer (Core)             │
 │  ┌──────────┐  ┌──────────────────────┐ │
 │  │Execution │  │ArtifactCollector     │ │
 │  │(Entity)  │  │(Domain Service)      │ │
 │  └──────────┘  └──────────────────────┘ │
+│  ┌────────────────────────────────────┐ │
+│  │  Value Objects                    │ │
+│  │  - ExecutionRequest, Result       │ │
+│  │  - Artifact, HeartbeatSignal       │ │
+│  │  - ContainerLifecycleEvent        │ │
+│  └────────────────────────────────────┘ │
+│  ┌────────────────────────────────────┐ │
+│  │  Ports (Interfaces)                │ │
+│  │  - IExecutorPort                   │ │
+│  │  - ICallbackPort                   │ │
+│  │  - IIsolationPort                  │ │
+│  │  - IArtifactScannerPort            │ │
+│  │  - IHeartbeatPort                  │ │
+│  │  - ILifecyclePort                  │ │
+│  └────────────────────────────────────┘ │
 └───────────────┬───────────────────────────┘
                 │ Ports
                 ▼
 ┌─────────────────────────────────────────┐
 │      Infrastructure Layer (Adapters)    │
 │  ┌─────────────────┐  ┌──────────────┐ │
-│  │BubblewrapRunner │  │ResultReporter│ │
-│  │(bwrap adapter)  │  │(HTTP client)  │ │
+│  │BubblewrapRunner │  │CallbackClient│ │
+│  │(IIsolationPort) │  │(ICallbackPort)│ │
+│  └─────────────────┘  └──────────────┘ │
+│  ┌─────────────────┐  ┌──────────────┐ │
+│  │ArtifactScanner  │  │HeartbeatSvc  │ │
+│  │(IArtifactScanner│  │(IHeartbeatPort)│ │
+│  │Port)           │  │              │ │
+│  └─────────────────┘  └──────────────┘ │
+│  ┌─────────────────┐  ┌──────────────┐ │
+│  │LifecycleService │  │MetricsCollector│ │
+│  │(ILifecyclePort) │  │              │ │
 │  └─────────────────┘  └──────────────┘ │
 └─────────────────────────────────────────┘
 ```
+
+### 关键设计原则
+
+1. **Port 与 Adapter 分离**
+   - Port（端口）：在 domain/ports/ 中定义抽象接口
+   - Adapter（适配器）：在 infrastructure/ 中实现具体技术
+   - 依赖注入：Application 层依赖 Port 接口，不依赖具体实现
+
+2. **不可变值对象**
+   - 所有值对象使用 `@dataclass(frozen=True)` 确保不可变性
+   - 在 `__post_init__` 中进行验证（如路径安全检查）
+
+3. **依赖反转**
+   - 高层模块（Application）不依赖低层模块（Infrastructure）
+   - 两者都依赖抽象（Domain Ports）
 
 ### 镜像构建流程
 
@@ -652,10 +753,21 @@ POST /internal/executions/{execution_id}/heartbeat # 心跳保活
 cd runtime/executor
 export WORKSPACE_PATH=/tmp/workspace
 export CONTROL_PLANE_URL=http://localhost:8000
-python -m executor.interfaces.rest
+PYTHONPATH=../runtime python -m executor.interfaces.http.rest
 
-# 运行单元测试
-pytest runtime/executor/tests/unit/
+# 运行单元测试（按层级）
+cd runtime/executor
+pytest tests/unit/domain/ -v        # 领域层测试
+pytest tests/unit/application/ -v   # 应用层测试
+pytest tests/unit/infrastructure/ -v # 基础设施层测试
+
+# 运行所有测试
+pytest tests/ -v
+
+# 运行特定标记的测试
+pytest -m unit              # 仅单元测试
+pytest -m integration       # 仅集成测试
+pytest -m contract          # 仅契约测试
 
 # 构建并测试容器镜像
 docker build -t sandbox-executor:test -f runtime/executor/Dockerfile .
@@ -665,3 +777,124 @@ docker run -p 8080:8080 \
   -v $(pwd)/test_workspace:/workspace \
   sandbox-executor:test
 ```
+
+### 测试策略
+
+执行器采用分层测试策略，遵循六边形架构原则：
+
+#### 1. Domain 层测试（tests/unit/domain/）
+
+- **test_entities.py**: 测试实体行为
+  - Execution 状态转换
+  - 生命周期管理
+  - 重试计数
+
+- **test_value_objects.py**: 测试值对象
+  - 不可变性验证
+  - 数据验证逻辑
+  - 类型安全
+
+- **test_ports.py**: 测试 Port 接口
+  - 接口定义完整性
+  - 抽象方法签名
+  - 可实现性验证
+
+#### 2. Application 层测试（tests/unit/application/）
+
+- **test_services.py**: 测试应用服务
+  - HeartbeatService 心跳管理
+  - LifecycleService 生命周期处理
+  - ExecuteCodeCommand 用例编排
+  - 使用 Mock Port 进行隔离测试
+
+#### 3. Infrastructure 层测试（tests/unit/infrastructure/）
+
+- 测试 Adapter 实现
+- 验证 Port 接口正确实现
+- 使用 Fake/Mock 避免真实依赖
+
+#### 4. 契约测试（tests/contract/）
+
+- 验证各层之间的契约
+- API 契约测试
+- 数据格式验证
+
+#### 5. 集成测试（tests/integration/）
+
+- 端到端执行流程
+- 真实 Bubblewrap 隔离
+- HTTP 回调集成
+
+### 测试示例
+
+#### Domain 层测试示例
+
+```python
+# tests/unit/domain/test_entities.py
+@pytest.mark.unit
+def test_execution_state_transition():
+    """测试 Execution 状态转换"""
+    context = ExecutionContext(...)
+    execution = Execution(...)
+
+    # PENDING → RUNNING
+    execution.mark_as_running()
+    assert execution.status == ExecutionStatus.RUNNING
+
+    # RUNNING → SUCCESS
+    result = ExecutionResult(...)
+    execution.mark_as_completed(result)
+    assert execution.status == ExecutionStatus.SUCCESS
+```
+
+#### Application 层测试示例
+
+```python
+# tests/unit/application/test_services.py
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_heartbeat_service():
+    """测试 HeartbeatService"""
+    mock_callback = AsyncMock(spec=ICallbackPort)
+    service = HeartbeatService(
+        callback_port=mock_callback,
+        interval=1.0,
+    )
+
+    await service.start_heartbeat("exec_001")
+    await asyncio.sleep(2.5)
+
+    # 应该至少发送2次心跳
+    assert mock_callback.report_heartbeat.call_count >= 2
+
+    await service.stop_heartbeat("exec_001")
+```
+
+### 迁移记录
+
+#### 2025-01-07: 完成六边形架构迁移
+
+**迁移范围**:
+- 从 `executor/` 迁移到 `runtime/executor/`
+- 引入 Port 接口定义（domain/ports/）
+- 重构 Application 层为命令模式（application/commands/）
+- 重组 Infrastructure 层为适配器模式
+
+**新增组件**:
+- `domain/ports/` - 6个Port接口定义
+- `application/commands/` - 命令处理器
+- `application/services/` - 应用服务（HeartbeatService, LifecycleService）
+- `infrastructure/{config,http,isolation,logging,monitoring,persistence}/` - 适配器模块
+- `tests/unit/domain/` - 领域层单元测试
+- `tests/unit/application/` - 应用层单元测试
+
+**清理**:
+- 删除旧的 `executor/` 目录
+- 移除 `services.py` 与 `services/` 目录冲突
+- 更新所有导入为相对导入
+
+**验证**:
+- ✅ 所有模块导入成功
+- ✅ 13个测试文件已迁移
+- ✅ Dockerfile 配置已更新
+- ✅ pyproject.toml 入口点已更新

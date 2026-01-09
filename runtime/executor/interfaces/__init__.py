@@ -1,9 +1,10 @@
 """
 Interfaces Layer
 
-Handles external communication via REST API.
+Driving adapters that initiate interactions with the system.
+Contains HTTP endpoints and other interface implementations.
 """
 
-from executor.interfaces.rest import create_app
+from .http import app
 
-__all__ = ["create_app"]
+__all__ = ["app"]
