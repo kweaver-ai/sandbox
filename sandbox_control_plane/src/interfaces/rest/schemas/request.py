@@ -29,12 +29,30 @@ class CreateSessionRequest(BaseModel):
 
 class ExecuteCodeRequest(BaseModel):
     """执行代码请求"""
-    code: str = Field(..., min_length=1, max_length=102400, description="要执行的代码")
+    code: str = Field(..., min_length=1, max_length=102400, description="要执行的代码（必须符合 AWS Lambda handler 格式）")
     language: Literal["python", "javascript", "shell"] = Field(
         ..., description="编程语言"
     )
     timeout: int = Field(30, ge=1, le=3600, description="执行超时（秒）")
     event: Optional[Dict] = Field(None, description="事件数据")
+
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {
+                    "code": 'def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}',
+                    "language": "python",
+                    "timeout": 10,
+                    "event": {"name": "World"}
+                },
+                {
+                    "code": 'def handler(event):\n    name = event.get("name", "World")\n    age = event.get("age", 0)\n    return {"message": f"Hello, {name}!", "age_doubled": age * 2}',
+                    "language": "python",
+                    "timeout": 30,
+                    "event": {"name": "Alice", "age": 25}
+                }
+            ]
+        }
 
 
 class TerminateSessionRequest(BaseModel):

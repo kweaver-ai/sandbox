@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List
 
-from sandbox_control_plane.src.domain.value_objects.artifact import Artifact
+from src.domain.value_objects.artifact import Artifact
 
 
 @dataclass

@@ -6,17 +6,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 
-from sandbox_control_plane.src.application.services.session_service import SessionService
-from sandbox_control_plane.src.application.commands.create_session import CreateSessionCommand
-from sandbox_control_plane.src.application.commands.execute_code import ExecuteCodeCommand
-from sandbox_control_plane.src.application.dtos.session_dto import SessionDTO
-from sandbox_control_plane.src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
-from sandbox_control_plane.src.interfaces.rest.schemas.response import (
+from src.application.services.session_service import SessionService
+from src.application.commands.create_session import CreateSessionCommand
+from src.application.commands.execute_code import ExecuteCodeCommand
+from src.application.dtos.session_dto import SessionDTO
+from src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
+from src.interfaces.rest.schemas.response import (
     SessionResponse,
     ExecuteCodeResponse,
     ErrorResponse
 )
-from sandbox_control_plane.src.infrastructure.dependencies import get_session_service_db
+from src.infrastructure.dependencies import get_session_service_db
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -36,7 +36,7 @@ async def create_session(
     - **disk**: 磁盘限制，如 "1Gi", "10Gi"
     - **env_vars**: 环境变量字典
     """
-    from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+    from src.domain.value_objects.resource_limit import ResourceLimit
 
     try:
         # 转换请求为命令
@@ -87,7 +87,7 @@ async def get_session(
     service: SessionService = Depends(get_session_service_db)
 ):
     """获取会话详情"""
-    from sandbox_control_plane.src.application.queries.get_session import GetSessionQuery
+    from src.application.queries.get_session import GetSessionQuery
 
     try:
         query = GetSessionQuery(session_id=session_id)

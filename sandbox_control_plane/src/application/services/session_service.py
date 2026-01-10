@@ -7,21 +7,22 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 import uuid
 
-from sandbox_control_plane.src.domain.entities.session import Session
-from sandbox_control_plane.src.domain.entities.execution import Execution
-from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
-from sandbox_control_plane.src.domain.value_objects.execution_status import SessionStatus, ExecutionStatus
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.domain.services.scheduler import IScheduler, ScheduleRequest
-from sandbox_control_plane.src.application.commands.create_session import CreateSessionCommand
-from sandbox_control_plane.src.application.commands.execute_code import ExecuteCodeCommand
-from sandbox_control_plane.src.application.queries.get_session import GetSessionQuery
-from sandbox_control_plane.src.application.queries.get_execution import GetExecutionQuery
-from sandbox_control_plane.src.application.dtos.session_dto import SessionDTO
-from sandbox_control_plane.src.application.dtos.execution_dto import ExecutionDTO
-from sandbox_control_plane.src.shared.errors.domain import NotFoundError, ValidationError
+from src.domain.entities.session import Session
+from src.domain.entities.execution import Execution
+from src.domain.value_objects.resource_limit import ResourceLimit
+from src.domain.value_objects.execution_status import SessionStatus, ExecutionStatus
+from src.domain.value_objects.execution_request import ExecutionRequest
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.execution_repository import IExecutionRepository
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.domain.services.scheduler import IScheduler, ScheduleRequest
+from src.application.commands.create_session import CreateSessionCommand
+from src.application.commands.execute_code import ExecuteCodeCommand
+from src.application.queries.get_session import GetSessionQuery
+from src.application.queries.get_execution import GetExecutionQuery
+from src.application.dtos.session_dto import SessionDTO
+from src.application.dtos.execution_dto import ExecutionDTO
+from src.shared.errors.domain import NotFoundError, ValidationError
 
 
 class SessionService:
@@ -98,7 +99,7 @@ class SessionService:
         container_id = None
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
-                container_id = await self._scheduler.create_container_for_session(
+                docker_container_id = await self._scheduler.create_container_for_session(
                     session_id=session_id,
                     template_id=command.template_id,
                     image=template.image,
@@ -107,10 +108,17 @@ class SessionService:
                     workspace_path=workspace_path,
                 )
 
-                # 更新会话的容器 ID
+                # 使用容器名称而不是 Docker 容器ID
+                # Executor 使用 HOSTNAME 环境变量（容器名称）作为 container_id
+                # 容器名称格式为 sandbox-{session_id}
+                container_id = f"sandbox-{session_id}"
+
+                # 立即保存容器 ID（但不改变状态），这样 executor 的 ready 回调可以找到会话
                 session.container_id = container_id
-                session.status = SessionStatus.RUNNING
                 await self._session_repo.save(session)
+
+                # 注意：状态将在 executor 调用 /containers/ready 回调时更新为 RUNNING
+                # 这是避免竞态条件：executor 可能在我们保存之前就调用 ready 回调
         except Exception as e:
             # 容器创建失败，标记会话为失败状态
             session.status = SessionStatus.FAILED
@@ -184,7 +192,7 @@ class SessionService:
         execution_id = self._generate_execution_id()
 
         # 3. 创建执行实体
-        from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionState
+        from src.domain.value_objects.execution_status import ExecutionState
 
         execution = Execution(
             id=execution_id,
@@ -199,10 +207,30 @@ class SessionService:
         # 4. 保存到仓储
         await self._execution_repo.save(execution)
 
+        # 4.5. 提交事务，确保执行记录在执行器回调之前可见
+        await self._execution_repo.commit()
+
         # 5. 提交到执行器
-        # TODO: 实现执行器调用
-        # executor_client = ExecutorClient(session.executor_url)
-        # await executor_client.submit_execution(execution_id, code, language, timeout, event_data)
+        if not session.container_id:
+            raise ValidationError(f"Session has no container: {command.session_id}")
+
+        # 构建执行请求
+        execution_request = ExecutionRequest(
+            code=command.code,
+            language=command.language,
+            event=command.event_data or {},
+            timeout=command.timeout or 300,
+            env_vars=session.env_vars,
+            execution_id=execution_id,
+            session_id=session.id,
+        )
+
+        # 通过调度器提交到执行器
+        await self._scheduler.execute(
+            session_id=session.id,
+            container_id=session.container_id,
+            execution_request=execution_request,
+        )
 
         return ExecutionDTO.from_entity(execution)
 

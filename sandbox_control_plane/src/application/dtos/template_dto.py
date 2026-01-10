@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict
 
-from sandbox_control_plane.src.domain.entities.template import Template
+from src.domain.entities.template import Template
 
 
 @dataclass

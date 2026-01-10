@@ -5,9 +5,9 @@
 """
 from typing import Dict
 
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.services.storage import IStorageService
-from sandbox_control_plane.src.shared.errors.domain import NotFoundError, ValidationError
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.services.storage import IStorageService
+from src.shared.errors.domain import NotFoundError, ValidationError
 
 
 class FileService:

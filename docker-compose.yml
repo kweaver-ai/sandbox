@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  control-plane:
+    build:
+      context: ./sandbox_control_plane
+      dockerfile: Dockerfile
+    container_name: sandbox-control-plane
+    ports:
+      - "8000:8000"  # Map to host for testing
+    networks:
+      - sandbox_network
+    volumes:
+      # Mount Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=mysql+aiomysql://root:password@mariadb:3306/sandbox
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - EXECUTOR_PORT=8080
+      - CONTROL_PLANE_URL=http://control-plane:8000
+      - DEFAULT_TIMEOUT=300
+      - MAX_TIMEOUT=3600
+      - WARM_POOL_ENABLED=false
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  mariadb:
+    image: mariadb:11.2
+    container_name: sandbox-mariadb
+    networks:
+      - sandbox_network
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=sandbox
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "root", "-ppassword", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  sandbox_network:
+    driver: bridge
+    name: sandbox_network
+
+volumes:
+  mariadb_data:

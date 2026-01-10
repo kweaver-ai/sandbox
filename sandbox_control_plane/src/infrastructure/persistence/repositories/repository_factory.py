@@ -6,16 +6,16 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sandbox_control_plane.src.infrastructure.persistence.database import db_manager
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_template_repository import SqlTemplateRepository
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
+from src.infrastructure.persistence.database import db_manager
+from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
+from src.infrastructure.persistence.repositories.sql_template_repository import SqlTemplateRepository
+from src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
 
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.domain.repositories.container_repository import IContainerRepository
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.execution_repository import IExecutionRepository
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.domain.repositories.container_repository import IContainerRepository
 
 
 class RepositoryFactory:

@@ -127,6 +127,7 @@ class CallbackClient(ICallbackPort):
             "failed": "failed",
             "timeout": "timeout",
             "crashed": "crashed",
+            "error": "failed",  # Map error status to failed
         }
         api_status = status_mapping.get(result.status.value, result.status.value)
 
@@ -282,7 +283,7 @@ class CallbackClient(ICallbackPort):
         Returns:
             True if report succeeded, False otherwise
         """
-        url = f"{self.control_plane_url}/internal/executions/{execution_id}/heartbeat"
+        url = f"{self.control_plane_url}/api/v1/internal/executions/{execution_id}/heartbeat"
 
         # Build heartbeat payload
         payload = {
@@ -338,7 +339,7 @@ class CallbackClient(ICallbackPort):
             True if report succeeded, False otherwise
         """
         event_type = event.event_type
-        url = f"{self.control_plane_url}/internal/containers/{event_type}"
+        url = f"{self.control_plane_url}/api/v1/internal/containers/{event_type}"
 
         # Build lifecycle payload
         payload = event.to_dict()

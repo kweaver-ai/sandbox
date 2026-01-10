@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sandbox_control_plane.src.domain.value_objects.container_status import ContainerStatus
+from src.domain.value_objects.container_status import ContainerStatus
 
 
 @dataclass

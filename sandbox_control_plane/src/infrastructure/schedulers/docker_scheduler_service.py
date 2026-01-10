@@ -9,18 +9,20 @@ import logging
 from typing import List, Optional
 from datetime import datetime
 
-from sandbox_control_plane.src.domain.services.scheduler import (
+from src.domain.services.scheduler import (
     IScheduler,
     RuntimeNode,
     ScheduleRequest,
 )
-from sandbox_control_plane.src.domain.repositories.runtime_node_repository import IRuntimeNodeRepository
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.infrastructure.container_scheduler.base import (
+from src.domain.repositories.runtime_node_repository import IRuntimeNodeRepository
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.domain.value_objects.execution_request import ExecutionRequest
+from src.infrastructure.container_scheduler.base import (
     IContainerScheduler,
     ContainerConfig,
 )
-from sandbox_control_plane.src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
+from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
+from src.infrastructure.executors import ExecutorClient
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +69,17 @@ class DockerSchedulerService(IScheduler):
         runtime_node_repo: IRuntimeNodeRepository,
         container_scheduler: IContainerScheduler,
         template_repo: ITemplateRepository,
+        executor_client: Optional[ExecutorClient] = None,
+        executor_port: int = 8080,
         warm_pool_manager: Optional[WarmPoolManager] = None,
+        control_plane_url: str = "http://host.docker.internal:8000",
     ):
         self._runtime_node_repo = runtime_node_repo
         self._container_scheduler = container_scheduler
         self._template_repo = template_repo
+        self._executor_client = executor_client or ExecutorClient()
+        self._executor_port = executor_port
+        self._control_plane_url = control_plane_url
         self._warm_pool_manager = warm_pool_manager or WarmPoolManager(
             container_scheduler=container_scheduler,
             idle_timeout_seconds=1800,  # 30 分钟
@@ -96,10 +104,11 @@ class DockerSchedulerService(IScheduler):
         预热池自动补充：
         - 如果是首次使用该模板，自动补充预热池到最小大小
         """
+        # 🔧 临时禁用预热池自动初始化
         # 首次使用模板时，自动初始化预热池
-        if request.template_id not in self._initialized_pools:
-            await self._ensure_warm_pool_initialized(request.template_id)
-            self._initialized_pools.add(request.template_id)
+        # if request.template_id not in self._initialized_pools:
+        #     await self._ensure_warm_pool_initialized(request.template_id)
+        #     self._initialized_pools.add(request.template_id)
 
         # 1. 检查预热池
         warm_entry = await self._warm_pool_manager.acquire(
@@ -215,6 +224,8 @@ class DockerSchedulerService(IScheduler):
                 **env_vars,
                 "SESSION_ID": session_id,
                 "WORKSPACE_PATH": workspace_path,
+                "CONTROL_PLANE_URL": self._control_plane_url,
+                "DISABLE_BWRAP": "true",  # 本地开发禁用 Bubblewrap
             },
             cpu_limit=resource_limit.cpu,
             memory_limit=resource_limit.memory,
@@ -311,7 +322,7 @@ class DockerSchedulerService(IScheduler):
         实现 IScheduler 接口的抽象方法。
         将已存在的容器添加到预热池中管理。
         """
-        from sandbox_control_plane.src.infrastructure.warm_pool.warm_pool_entry import WarmPoolEntry
+        from src.infrastructure.warm_pool.warm_pool_entry import WarmPoolEntry
 
         # 创建预热池条目
         entry = WarmPoolEntry(
@@ -445,3 +456,58 @@ class DockerSchedulerService(IScheduler):
             logger.info(f"Replenished warm pool for {template_id}")
         except Exception as e:
             logger.error(f"Failed to replenish warm pool for {template_id}: {e}")
+
+    async def execute(
+        self,
+        session_id: str,
+        container_id: str,
+        execution_request: ExecutionRequest,
+    ) -> str:
+        """
+        提交执行请求到容器内的执行器
+
+        通过 HTTP 与运行在容器内的 sandbox-executor 通信。
+
+        Args:
+            session_id: 会话 ID
+            container_id: 容器 ID
+            execution_request: 执行请求
+
+        Returns:
+            execution_id: 执行任务 ID
+
+        Raises:
+            ConnectionError: 无法连接到执行器
+            TimeoutError: 执行器响应超时
+        """
+        # 获取容器信息以构建执行器 URL
+        container_info = await self._container_scheduler.get_container_status(container_id)
+
+        # 构建执行器 URL
+        # 使用容器名称在 Docker 内部网络中进行通信
+        # 容器名称格式: sandbox-{session_id}
+        container_name = container_info.name
+        executor_url = f"http://{container_name}:{self._executor_port}"
+
+        logger.info(f"Submitting execution to executor: {executor_url}, session_id={session_id}, container_id={container_id}")
+
+        # 使用执行器客户端提交请求
+        try:
+            execution_id = await self._executor_client.submit_execution(
+                executor_url=executor_url,
+                execution_id=execution_request.execution_id or "",
+                session_id=session_id,
+                code=execution_request.code,
+                language=execution_request.language,
+                event=execution_request.event,
+                timeout=execution_request.timeout,
+                env_vars=execution_request.env_vars,
+            )
+
+            logger.info(f"Execution submitted successfully: execution_id={execution_id}, session_id={session_id}")
+
+            return execution_id
+
+        except Exception as e:
+            logger.error(f"Failed to submit execution to executor: {executor_url}, error={e}")
+            raise

@@ -45,6 +45,7 @@ USER sandbox
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV WORKSPACE_PATH=/workspace
+ENV PYTHONPATH=/app
 
 # Expose executor API port
 EXPOSE 8080
@@ -55,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 # Start executor daemon as PID 1
 # The executor is the container's main process
-CMD ["python", "-m", "executor.interfaces.rest"]
+CMD ["python", "-m", "executor.interfaces.http.rest"]

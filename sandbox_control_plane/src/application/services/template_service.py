@@ -5,13 +5,13 @@
 """
 from typing import List, Optional
 
-from sandbox_control_plane.src.domain.entities.template import Template
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.application.commands.create_template import CreateTemplateCommand
-from sandbox_control_plane.src.application.commands.update_template import UpdateTemplateCommand
-from sandbox_control_plane.src.application.queries.get_template import GetTemplateQuery
-from sandbox_control_plane.src.application.dtos.template_dto import TemplateDTO
-from sandbox_control_plane.src.shared.errors.domain import NotFoundError, ValidationError
+from src.domain.entities.template import Template
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.application.commands.create_template import CreateTemplateCommand
+from src.application.commands.update_template import UpdateTemplateCommand
+from src.application.queries.get_template import GetTemplateQuery
+from src.application.dtos.template_dto import TemplateDTO
+from src.shared.errors.domain import NotFoundError, ValidationError
 
 
 class TemplateService:
@@ -42,7 +42,7 @@ class TemplateService:
             raise ValidationError(f"Template name already exists: {command.name}")
 
         # 2. 创建模板实体
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.value_objects.resource_limit import ResourceLimit
 
         template = Template(
             id=command.template_id,
@@ -114,7 +114,7 @@ class TemplateService:
             template.update_image(command.image_url)
 
         # Update default resources if any are specified
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.value_objects.resource_limit import ResourceLimit
 
         if any([command.default_cpu_cores, command.default_memory_mb, command.default_disk_mb]):
             cpu = str(command.default_cpu_cores) if command.default_cpu_cores else template.default_resources.cpu

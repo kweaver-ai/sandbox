@@ -7,17 +7,17 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional
 
-from sandbox_control_plane.src.application.services.session_service import SessionService
-from sandbox_control_plane.src.application.commands.execute_code import ExecuteCodeCommand
-from sandbox_control_plane.src.application.queries.get_execution import GetExecutionQuery
-from sandbox_control_plane.src.application.dtos.execution_dto import ExecutionDTO
-from sandbox_control_plane.src.interfaces.rest.schemas.request import ExecuteCodeRequest
-from sandbox_control_plane.src.interfaces.rest.schemas.response import (
+from src.application.services.session_service import SessionService
+from src.application.commands.execute_code import ExecuteCodeCommand
+from src.application.queries.get_execution import GetExecutionQuery
+from src.application.dtos.execution_dto import ExecutionDTO
+from src.interfaces.rest.schemas.request import ExecuteCodeRequest
+from src.interfaces.rest.schemas.response import (
     ExecutionResponse,
     ExecuteCodeResponse,
     ErrorResponse
 )
-from sandbox_control_plane.src.infrastructure.dependencies import (
+from src.infrastructure.dependencies import (
     USE_SQL_REPOSITORIES,
     get_session_service_db,
     get_session_service as get_mock_session_service,

@@ -9,12 +9,21 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 
-from sandbox_control_plane.src.infrastructure.config.settings import get_settings
+from src.infrastructure.config.settings import get_settings
 
 
 class Base(DeclarativeBase):
     """SQLAlchemy 基类"""
     pass
+
+
+# Import all models so they're registered with Base.metadata
+# This is required for create_all() to find all tables
+from src.infrastructure.persistence.models.template_model import TemplateModel
+from src.infrastructure.persistence.models.session_model import SessionModel
+from src.infrastructure.persistence.models.execution_model import ExecutionModel
+from src.infrastructure.persistence.models.container_model import ContainerModel
+from src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
 
 
 class DatabaseManager:

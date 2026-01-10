@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional
 import time
 
-from sandbox_control_plane.src.interfaces.rest.schemas.response import HealthResponse
+from src.interfaces.rest.schemas.response import HealthResponse
 
 router = APIRouter(prefix="/health", tags=["health"])
 

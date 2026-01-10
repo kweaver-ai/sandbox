@@ -14,7 +14,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from structlog import get_logger
 
 # 导入所有路由
-from sandbox_control_plane.src.interfaces.rest.api.v1 import (
+from src.interfaces.rest.api.v1 import (
     sessions,
     executions,
     templates,
@@ -23,7 +23,7 @@ from sandbox_control_plane.src.interfaces.rest.api.v1 import (
     files,
     internal,
 )
-from sandbox_control_plane.src.interfaces.rest.schemas.response import HealthResponse
+from src.interfaces.rest.schemas.response import HealthResponse
 
 logger = get_logger(__name__)
 
@@ -43,20 +43,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting Sandbox Control Plane")
 
     # 初始化依赖注入
-    from sandbox_control_plane.src.infrastructure.dependencies import initialize_dependencies
+    from src.infrastructure.dependencies import initialize_dependencies
     initialize_dependencies(app)
     logger.info("Dependencies initialized")
 
-    # TODO: 初始化数据库连接
-    # TODO: 启动后台清理任务
+    # 初始化数据库并创建表
+    from src.infrastructure.persistence.database import db_manager
+    from src.infrastructure.config.settings import get_settings
+
+    db_manager.initialize()
+    logger.info("Database initialized")
+
+    # 创建数据库表（开发环境自动创建）
+    from src.infrastructure.config.settings import get_settings
+    settings = get_settings()
+    if settings.environment == "development":
+        await db_manager.create_tables()
+        logger.info("Database tables created")
 
     yield
 
     # 关闭时执行
     logger.info("Shutting down Sandbox Control Plane")
     # 清理依赖项（包括关闭数据库连接）
-    from sandbox_control_plane.src.infrastructure.dependencies import cleanup_dependencies
+    from src.infrastructure.dependencies import cleanup_dependencies
     await cleanup_dependencies(app)
+    await db_manager.close()
 
 
 def create_app() -> FastAPI:

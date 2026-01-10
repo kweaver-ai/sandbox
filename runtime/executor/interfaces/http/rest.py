@@ -207,7 +207,10 @@ async def lifespan(app: FastAPI):
 
     # Initialize infrastructure services
     # Linux uses Bubblewrap, macOS uses Seatbelt sandbox
-    if is_linux:
+    # Check if bwrap is disabled via environment variable
+    disable_bwrap = os.environ.get("DISABLE_BWRAP", "false").lower() == "true"
+
+    if is_linux and not disable_bwrap:
         try:
             bwrap_runner = BubblewrapRunner(workspace_path=workspace_path)
             logger.info("Using BubblewrapRunner for Linux isolation")
@@ -216,13 +219,26 @@ async def lifespan(app: FastAPI):
             bwrap_runner = None
     else:
         # macOS: Use Seatbelt sandbox (sandbox-exec)
-        try:
-            from executor.infrastructure.isolation.macseatbelt import MacSeatbeltRunner
-            bwrap_runner = MacSeatbeltRunner(workspace_path=workspace_path)
-            logger.info("Using MacSeatbeltRunner with sandbox-exec", sandbox_version=bwrap_runner.get_version())
-        except Exception as e:
-            logger.error("Failed to initialize MacSeatbeltRunner", error=str(e))
+        # or Linux with DISABLE_BWRAP=true
+        if disable_bwrap:
+            logger.info("Bubblewrap disabled via DISABLE_BWRAP environment variable")
             bwrap_runner = None
+        elif is_macos:
+            try:
+                from executor.infrastructure.isolation.macseatbelt import MacSeatbeltRunner
+                bwrap_runner = MacSeatbeltRunner(workspace_path=workspace_path)
+                logger.info("Using MacSeatbeltRunner with sandbox-exec", sandbox_version=bwrap_runner.get_version())
+            except Exception as e:
+                logger.error("Failed to initialize MacSeatbeltRunner", error=str(e))
+                bwrap_runner = None
+        else:
+            bwrap_runner = None
+
+    # Fallback to SubprocessRunner if no isolation is available
+    if bwrap_runner is None:
+        from executor.infrastructure.isolation.subprocess import SubprocessRunner
+        bwrap_runner = SubprocessRunner(workspace_path=workspace_path)
+        logger.warning("Using SubprocessRunner - NO SECURITY ISOLATION (development mode only)")
 
     # ArtifactScanner doesn't need workspace_path in constructor
     artifact_scanner = ArtifactScanner()
@@ -269,16 +285,10 @@ async def lifespan(app: FastAPI):
     logger.info("Executor startup complete")
 
     # T076 [US5]: Send container_ready after HTTP server starts listening
-    # Use asyncio.wait_for to avoid long timeout in development mode
+    # Run in background to avoid blocking startup if HTTP client creation hangs
     import asyncio
-    try:
-        # Timeout after 2 seconds if control plane is not available
-        await asyncio.wait_for(lifecycle_service.send_container_ready(), timeout=2.0)
-        logger.info("Container ready signal sent")
-    except asyncio.TimeoutError:
-        logger.warning("Container ready signal timeout (control plane not available - development mode)")
-    except Exception as e:
-        logger.error("Failed to send container_ready", error=str(e))
+    asyncio.create_task(lifecycle_service.send_container_ready())
+    logger.info("Container ready signal task started in background")
 
     yield
 

@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Dict
 
-from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+from src.domain.value_objects.resource_limit import ResourceLimit
 
 
 @dataclass

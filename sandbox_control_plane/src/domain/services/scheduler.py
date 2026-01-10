@@ -5,9 +5,12 @@
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
-from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+from src.domain.value_objects.resource_limit import ResourceLimit
+
+if TYPE_CHECKING:
+    from src.domain.value_objects.execution_request import ExecutionRequest
 
 
 @dataclass
@@ -111,4 +114,28 @@ class IScheduler(ABC):
         template_id: str
     ) -> Optional[RuntimeNode]:
         """从预热池获取实例"""
+        pass
+
+    @abstractmethod
+    async def execute(
+        self,
+        session_id: str,
+        container_id: str,
+        execution_request: "ExecutionRequest",
+    ) -> str:
+        """
+        提交执行请求到容器内的执行器
+
+        Args:
+            session_id: 会话 ID
+            container_id: 容器 ID
+            execution_request: 执行请求
+
+        Returns:
+            execution_id: 执行任务 ID
+
+        Raises:
+            ConnectionError: 无法连接到执行器
+            TimeoutError: 执行器响应超时
+        """
         pass

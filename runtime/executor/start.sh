@@ -2,7 +2,8 @@
 # Runtime Executor 启动脚本
 
 # 设置 PYTHONPATH
-export PYTHONPATH=/Users/guochenguang/project/sandbox-v2/sandbox-runtime-executor/runtime
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$(dirname "$SCRIPT_DIR")"
 
 # 进入项目目录
 cd "$(dirname "$0")"

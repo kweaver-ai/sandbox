@@ -6,14 +6,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 
-from sandbox_control_plane.src.application.services.template_service import TemplateService
-from sandbox_control_plane.src.application.commands.create_template import CreateTemplateCommand
-from sandbox_control_plane.src.application.commands.update_template import UpdateTemplateCommand
-from sandbox_control_plane.src.application.queries.get_template import GetTemplateQuery
-from sandbox_control_plane.src.application.dtos.template_dto import TemplateDTO
-from sandbox_control_plane.src.interfaces.rest.schemas.request import CreateTemplateRequest, UpdateTemplateRequest
-from sandbox_control_plane.src.interfaces.rest.schemas.response import TemplateResponse, ErrorResponse
-from sandbox_control_plane.src.infrastructure.dependencies import get_template_service_db
+from src.application.services.template_service import TemplateService
+from src.application.commands.create_template import CreateTemplateCommand
+from src.application.commands.update_template import UpdateTemplateCommand
+from src.application.queries.get_template import GetTemplateQuery
+from src.application.dtos.template_dto import TemplateDTO
+from src.interfaces.rest.schemas.request import CreateTemplateRequest, UpdateTemplateRequest
+from src.interfaces.rest.schemas.response import TemplateResponse, ErrorResponse
+from src.infrastructure.dependencies import get_template_service_db
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 

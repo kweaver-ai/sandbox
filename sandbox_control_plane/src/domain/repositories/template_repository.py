@@ -6,7 +6,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from sandbox_control_plane.src.domain.entities.template import Template
+from src.domain.entities.template import Template
 
 
 class ITemplateRepository(ABC):

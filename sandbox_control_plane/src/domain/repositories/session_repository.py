@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime
 
-from sandbox_control_plane.src.domain.entities.session import Session
+from src.domain.entities.session import Session
 
 
 class ISessionRepository(ABC):
@@ -25,6 +25,11 @@ class ISessionRepository(ABC):
     @abstractmethod
     async def find_by_id(self, session_id: str) -> Optional[Session]:
         """根据 ID 查找会话"""
+        pass
+
+    @abstractmethod
+    async def find_by_container_id(self, container_id: str) -> Optional[Session]:
+        """根据容器 ID 查找会话"""
         pass
 
     @abstractmethod

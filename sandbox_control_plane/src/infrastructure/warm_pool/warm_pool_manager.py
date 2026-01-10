@@ -9,8 +9,8 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from sandbox_control_plane.src.infrastructure.warm_pool.warm_pool_entry import WarmPoolEntry
-from sandbox_control_plane.src.infrastructure.container_scheduler.base import IContainerScheduler, ContainerConfig
+from src.infrastructure.warm_pool.warm_pool_entry import WarmPoolEntry
+from src.infrastructure.container_scheduler.base import IContainerScheduler, ContainerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +245,7 @@ class WarmPoolManager:
         """创建预热池条目"""
         # 如果 resource_limit 为 None，使用默认值
         if resource_limit is None:
-            from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+            from src.domain.value_objects.resource_limit import ResourceLimit
             resource_limit = ResourceLimit.default()
 
         # 创建容器配置

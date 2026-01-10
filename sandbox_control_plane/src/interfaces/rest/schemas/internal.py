@@ -44,3 +44,11 @@ class ExecutionResultReport(BaseModel):
 class InternalAPIResponse(BaseModel):
     """内部 API 标准响应"""
     message: str = Field(..., description="响应消息")
+
+
+class ContainerReadyRequest(BaseModel):
+    """容器就绪请求"""
+    container_id: str = Field(..., description="容器 ID")
+    pod_name: Optional[str] = Field(None, description="Pod 名称（Kubernetes）")
+    executor_port: int = Field(8080, description="执行器 HTTP API 端口")
+    ready_at: Optional[str] = Field(None, description="就绪时间（ISO 8601）")

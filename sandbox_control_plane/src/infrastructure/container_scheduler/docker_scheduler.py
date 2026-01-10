@@ -10,7 +10,7 @@ from typing import Optional
 from aiodocker import Docker
 from aiodocker.exceptions import DockerError
 
-from sandbox_control_plane.src.infrastructure.container_scheduler.base import (
+from src.infrastructure.container_scheduler.base import (
     IContainerScheduler,
     ContainerConfig,
     ContainerInfo,
@@ -58,7 +58,7 @@ class DockerScheduler(IContainerScheduler):
         创建 Docker 容器
 
         容器配置：
-        - NetworkMode: none (无网络访问)
+        - NetworkMode: sandbox_network (容器网络，用于 executor 通信)
         - CAP_DROP: ALL (移除所有特权)
         - SecurityOpt: no-new-privileges (禁止获取新权限)
         - User: 1000:1000 (非特权用户)
@@ -76,7 +76,7 @@ class DockerScheduler(IContainerScheduler):
             "Hostname": config.name,
             "Env": [f"{k}={v}" for k, v in config.env_vars.items()],
             "HostConfig": {
-                "NetworkMode": "none",  # 无网络访问
+                "NetworkMode": config.network_name,  # 使用指定的 Docker 网络
                 "CapDrop": ["ALL"],  # 移除所有特权
                 "SecurityOpt": ["no-new-privileges"],  # 禁止获取新权限
                 "User": "1000:1000",  # 非特权用户
@@ -84,14 +84,21 @@ class DockerScheduler(IContainerScheduler):
                 "CpuPeriod": 100000,
                 "Memory": memory_bytes,
                 "MemorySwap": memory_bytes,  # 禁用 swap
+                # PortBindings removed - executor ports NOT mapped to host
+                # to avoid conflicts when multiple sessions are created
             },
             "Labels": config.labels,
-            "Cmd": ["/bin/sleep", "infinity"],  # 保持容器运行
+            "ExposedPorts": {
+                "8080/tcp": {}  # 声明容器暴露的端口（仅用于内部网络通信）
+            },
         }
 
         try:
             container = await docker.containers.create(container_config, name=config.name)
-            logger.info(f"Created container {container.id} for session {config.name}")
+            logger.info(
+                f"Created container {container.id} for session {config.name} "
+                f"on network {config.network_name}"
+            )
             return container.id
         except DockerError as e:
             logger.error(f"Failed to create container: {e}")

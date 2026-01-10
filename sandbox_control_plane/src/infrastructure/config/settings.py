@@ -39,18 +39,6 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=40)
     db_pool_recycle: int = Field(default=3600)
 
-    # ============== Redis 配置 ==============
-    redis_host: str = Field(default="localhost")
-    redis_port: int = Field(default=6379)
-    redis_db: int = Field(default=0)
-    redis_password: str = Field(default="")
-
-    @property
-    def redis_url(self) -> str:
-        """构建 Redis 连接 URL"""
-        auth = f":{self.redis_password}@" if self.redis_password else ""
-        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
-
     # ============== S3 配置 ==============
     s3_bucket: str = Field(default="sandbox-workspace")
     s3_region: str = Field(default="us-east-1")
@@ -59,7 +47,7 @@ class Settings(BaseSettings):
     s3_endpoint_url: str = Field(default="")  # MinIO 支持
 
     # ============== Docker 配置 ==============
-    docker_host: str = Field(default="unix://var/run/docker.sock")
+    docker_host: str = Field(default="unix:///var/run/docker.sock")
     docker_tls_verify: bool = Field(default=False)
     docker_cert_path: str = Field(default="")
 

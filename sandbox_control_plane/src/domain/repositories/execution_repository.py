@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime
 
-from sandbox_control_plane.src.domain.entities.execution import Execution
+from src.domain.entities.execution import Execution
 
 
 class IExecutionRepository(ABC):
@@ -20,6 +20,10 @@ class IExecutionRepository(ABC):
     @abstractmethod
     async def save(self, execution: Execution) -> None:
         """保存执行记录（创建或更新）"""
+        pass
+
+    async def commit(self) -> None:
+        """Explicitly commit the transaction (optional - some repos may not implement this)"""
         pass
 
     @abstractmethod

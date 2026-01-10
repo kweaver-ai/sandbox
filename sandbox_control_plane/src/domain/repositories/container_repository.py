@@ -6,7 +6,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from sandbox_control_plane.src.domain.entities.container import Container
+from src.domain.entities.container import Container
 
 
 class IContainerRepository(ABC):

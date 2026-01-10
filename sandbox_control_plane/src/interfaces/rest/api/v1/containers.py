@@ -7,10 +7,10 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional, List
 
-from sandbox_control_plane.src.application.services.container_service import ContainerService
-from sandbox_control_plane.src.application.queries.list_containers import ListContainersQuery
-from sandbox_control_plane.src.application.dtos.container_dto import ContainerDTO
-from sandbox_control_plane.src.interfaces.rest.schemas.response import ContainerResponse, ErrorResponse
+from src.application.services.container_service import ContainerService
+from src.application.queries.list_containers import ListContainersQuery
+from src.application.dtos.container_dto import ContainerDTO
+from src.interfaces.rest.schemas.response import ContainerResponse, ErrorResponse
 
 router = APIRouter(prefix="/containers", tags=["containers"])
 

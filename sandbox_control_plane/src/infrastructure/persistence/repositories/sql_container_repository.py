@@ -7,9 +7,9 @@ from typing import List, Optional
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sandbox_control_plane.src.domain.repositories.container_repository import IContainerRepository
-from sandbox_control_plane.src.domain.entities.container import Container
-from sandbox_control_plane.src.infrastructure.persistence.models.container_model import ContainerModel
+from src.domain.repositories.container_repository import IContainerRepository
+from src.domain.entities.container import Container
+from src.infrastructure.persistence.models.container_model import ContainerModel
 
 
 class SqlContainerRepository(IContainerRepository):

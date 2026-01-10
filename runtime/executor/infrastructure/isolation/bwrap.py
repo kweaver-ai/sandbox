@@ -281,15 +281,15 @@ try:
     result = handler(event)
 
     # Output result with markers
-    print("\\n===SANDBOX_RESULT===")
+    print("\n===SANDBOX_RESULT===")
     print(json.dumps(result))
-    print("\\n===SANDBOX_RESULT_END===")
+    print("\n===SANDBOX_RESULT_END===")
 
 except Exception as e:
     import traceback
-    print("\\n===SANDBOX_ERROR===")
+    print("\n===SANDBOX_ERROR===")
     print(traceback.format_exc())
-    print("\\n===SANDBOX_ERROR_END===")
+    print("\n===SANDBOX_ERROR_END===")
     sys.exit(1)
 """
 

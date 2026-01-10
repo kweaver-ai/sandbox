@@ -10,7 +10,7 @@ from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Nume
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
-from sandbox_control_plane.src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.database import Base
 
 
 class TemplateModel(Base):
@@ -77,8 +77,8 @@ class TemplateModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from sandbox_control_plane.src.domain.entities.template import Template
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.entities.template import Template
+        from src.domain.value_objects.resource_limit import ResourceLimit
 
         # 将数据库中的数字转换为带单位的格式
         def format_resource(value):

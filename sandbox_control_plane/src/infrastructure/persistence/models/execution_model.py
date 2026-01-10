@@ -9,7 +9,7 @@ from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Inde
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
-from sandbox_control_plane.src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.database import Base
 
 
 class ExecutionModel(Base):
@@ -79,8 +79,8 @@ class ExecutionModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from sandbox_control_plane.src.domain.entities.execution import Execution
-        from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
+        from src.domain.entities.execution import Execution
+        from src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
 
         return Execution(
             id=self.id,

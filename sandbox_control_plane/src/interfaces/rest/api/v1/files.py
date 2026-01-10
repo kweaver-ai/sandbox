@@ -7,8 +7,8 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import Optional
 
-from sandbox_control_plane.src.application.services.file_service import FileService
-from sandbox_control_plane.src.interfaces.rest.schemas.response import ErrorResponse
+from src.application.services.file_service import FileService
+from src.interfaces.rest.schemas.response import ErrorResponse
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 

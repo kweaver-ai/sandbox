@@ -19,6 +19,7 @@ class ContainerConfig:
     disk_limit: str  # 如 "1Gi", "10Gi"
     workspace_path: str  # S3路径，如 "s3://bucket/sessions/{session_id}/"
     labels: Dict[str, str]
+    network_name: str = "sandbox_network"  # Docker 网络名称，默认 sandbox_network
 
 
 @dataclass

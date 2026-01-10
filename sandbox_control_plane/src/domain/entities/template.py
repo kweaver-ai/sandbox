@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict
 
-from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+from src.domain.value_objects.resource_limit import ResourceLimit
 
 
 @dataclass

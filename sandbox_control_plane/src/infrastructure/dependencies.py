@@ -4,32 +4,46 @@
 配置和提供应用所需的所有依赖项。
 """
 from functools import lru_cache
+import logging
 from typing import Optional
 
 from fastapi import FastAPI, Depends
 
-from sandbox_control_plane.src.application.services.session_service import SessionService
-from sandbox_control_plane.src.application.services.template_service import TemplateService
-from sandbox_control_plane.src.application.services.container_service import ContainerService
-from sandbox_control_plane.src.application.services.file_service import FileService
+from src.application.services.session_service import SessionService
+from src.application.services.template_service import TemplateService
+from src.application.services.container_service import ContainerService
+from src.application.services.file_service import FileService
 
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.domain.repositories.container_repository import IContainerRepository
-from sandbox_control_plane.src.domain.services.scheduler import IScheduler, RuntimeNode
-from sandbox_control_plane.src.domain.services.storage import IStorageService
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.execution_repository import IExecutionRepository
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.domain.repositories.container_repository import IContainerRepository
+from src.domain.services.scheduler import IScheduler, RuntimeNode
+from src.domain.services.storage import IStorageService
+from src.domain.value_objects.execution_request import ExecutionRequest
 
-from sandbox_control_plane.src.infrastructure.persistence.database import db_manager
+from src.infrastructure.persistence.database import db_manager
+from src.infrastructure.executors import ExecutorClient
+from src.infrastructure.config.settings import get_settings
 
 # Configuration flag to switch between Mock and SQL repositories
 USE_SQL_REPOSITORIES = True  # Set to False to use Mock repositories
 
 # Configuration flag to switch between Mock and Docker scheduler
-USE_DOCKER_SCHEDULER = False  # Set to False to use Mock scheduler
+USE_DOCKER_SCHEDULER = True  # Set to False to use Mock scheduler
 
-# Docker configuration
-DOCKER_URL = "unix:///Users/guochenguang/.docker/run/docker.sock"  # Docker Desktop for Mac
+logger = logging.getLogger(__name__)
+
+
+def _get_docker_url() -> str:
+    """获取 Docker socket URL"""
+    settings = get_settings()
+    # 确保 docker_host 有正确的协议前缀
+    docker_host = settings.docker_host
+    if not docker_host.startswith("unix://") and not docker_host.startswith("tcp://"):
+        docker_host = f"unix://{docker_host}"
+    logger.info(f"Using Docker URL: {docker_host}")
+    return docker_host
 
 
 # Mock implementations for development
@@ -80,6 +94,10 @@ class MockExecutionRepository(IExecutionRepository):
     async def save(self, execution):
         self._executions[execution.id] = execution
 
+    async def commit(self):
+        """Mock commit - no-op"""
+        pass
+
     async def find_by_id(self, execution_id: str):
         return self._executions.get(execution_id)
 
@@ -113,8 +131,8 @@ class MockTemplateRepository(ITemplateRepository):
 
     def __init__(self):
         from datetime import datetime
-        from sandbox_control_plane.src.domain.entities.template import Template
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.entities.template import Template
+        from src.domain.value_objects.resource_limit import ResourceLimit
 
         # 默认模板
         self._templates = {
@@ -239,6 +257,15 @@ class MockScheduler(IScheduler):
     async def acquire_warm_instance(self, template_id: str):
         return None
 
+    async def execute(
+        self,
+        session_id: str,
+        container_id: str,
+        execution_request: ExecutionRequest,
+    ) -> str:
+        """Mock 执行方法"""
+        return execution_request.execution_id or "mock_execution_id"
+
 
 class MockRuntimeNodeRepository:
     """Mock 运行时节点仓储（用于开发测试）"""
@@ -256,7 +283,7 @@ class MockRuntimeNodeRepository:
             self.cached_templates = kwargs.get('cached_templates', [])
 
         def to_runtime_node(self):
-            from sandbox_control_plane.src.domain.services.scheduler import RuntimeNode
+            from src.domain.services.scheduler import RuntimeNode
             return RuntimeNode(
                 id=self.id,
                 type=self.type,
@@ -424,11 +451,11 @@ def initialize_dependencies(app: FastAPI):
     global _container_scheduler_singleton, _warm_pool_manager_singleton
 
     if USE_DOCKER_SCHEDULER:
-        from sandbox_control_plane.src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
-        from sandbox_control_plane.src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
+        from src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
+        from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
 
         # 创建容器调度器（模块级单例）
-        _container_scheduler_singleton = DockerScheduler(docker_url=DOCKER_URL)
+        _container_scheduler_singleton = DockerScheduler(docker_url=_get_docker_url())
 
         # 创建预热池管理器（模块级单例，持有 in-memory 状态）
         _warm_pool_manager_singleton = WarmPoolManager(
@@ -478,7 +505,7 @@ def get_session_repository(
 ) -> ISessionRepository:
     """获取会话仓储（SQL 或 Mock）"""
     if USE_SQL_REPOSITORIES:
-        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+        from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
         return SqlSessionRepository(session)
     return MockSessionRepository()
 
@@ -488,7 +515,7 @@ def get_execution_repository(
 ) -> IExecutionRepository:
     """获取执行仓储（SQL 或 Mock）"""
     if USE_SQL_REPOSITORIES:
-        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
+        from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
         return SqlExecutionRepository(session)
     return MockExecutionRepository()
 
@@ -498,7 +525,7 @@ def get_template_repository(
 ) -> ITemplateRepository:
     """获取模板仓储（SQL 或 Mock）"""
     if USE_SQL_REPOSITORIES:
-        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_template_repository import SqlTemplateRepository
+        from src.infrastructure.persistence.repositories.sql_template_repository import SqlTemplateRepository
         return SqlTemplateRepository(session)
     return MockTemplateRepository()
 
@@ -508,7 +535,7 @@ def get_container_repository(
 ) -> IContainerRepository:
     """获取容器仓储（SQL 或 Mock）"""
     if USE_SQL_REPOSITORIES:
-        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
+        from src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
         return SqlContainerRepository(session)
     return MockContainerRepository()
 
@@ -516,7 +543,7 @@ def get_container_repository(
 def get_scheduler() -> IScheduler:
     """获取调度器（Mock 或 Docker）"""
     if USE_DOCKER_SCHEDULER:
-        from sandbox_control_plane.src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+        from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
         # 需要通过 Depends() 获取运行时节点仓储和容器调度器
         # 这里暂时返回 Mock，实际使用时需要通过 session-scoped 依赖
         return MockScheduler()
@@ -528,15 +555,15 @@ def get_runtime_node_repository(
 ):
     """获取运行时节点仓储（SQL 或 Mock）"""
     if USE_SQL_REPOSITORIES:
-        from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_runtime_node_repository import SqlRuntimeNodeRepository
+        from src.infrastructure.persistence.repositories.sql_runtime_node_repository import SqlRuntimeNodeRepository
         return SqlRuntimeNodeRepository(session)
     return MockRuntimeNodeRepository()
 
 
 def get_container_scheduler():
     """获取容器调度器"""
-    from sandbox_control_plane.src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
-    return DockerScheduler(docker_url=DOCKER_URL)
+    from src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
+    return DockerScheduler(docker_url=_get_docker_url())
 
 
 def get_docker_scheduler_service(
@@ -547,11 +574,25 @@ def get_docker_scheduler_service(
     if not USE_DOCKER_SCHEDULER:
         return MockScheduler()
 
-    from sandbox_control_plane.src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+    from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+    import os
+
+    # 读取 control_plane_url 配置
+    control_plane_url = os.environ.get(
+        "CONTROL_PLANE_URL",
+        "http://host.docker.internal:8000"  # 本地开发默认值
+    )
 
     # 使用模块级单例
     container_scheduler = _container_scheduler_singleton
     warm_pool_manager = _warm_pool_manager_singleton
+
+    # 创建 ExecutorClient 实例
+    executor_client = ExecutorClient(
+        timeout=30.0,
+        max_retries=3,
+        retry_delay=0.5,
+    )
 
     # 为每个请求创建新的 DockerSchedulerService 实例
     # 但使用共享的 container_scheduler 和 warm_pool_manager
@@ -559,7 +600,10 @@ def get_docker_scheduler_service(
         runtime_node_repo=runtime_node_repo,
         container_scheduler=container_scheduler,
         template_repo=template_repo,
+        executor_client=executor_client,
+        executor_port=8080,
         warm_pool_manager=warm_pool_manager,  # 共享的预热池管理器
+        control_plane_url=control_plane_url,  # 传递 control plane URL
     )
 
 

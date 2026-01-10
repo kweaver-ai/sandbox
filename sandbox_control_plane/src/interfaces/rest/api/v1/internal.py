@@ -11,16 +11,18 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
-from sandbox_control_plane.src.domain.value_objects.execution_status import ExecutionStatus
-from sandbox_control_plane.src.domain.value_objects.artifact import Artifact, ArtifactType
-from sandbox_control_plane.src.interfaces.rest.schemas.internal import (
+from src.domain.repositories.execution_repository import IExecutionRepository
+from src.domain.value_objects.execution_status import ExecutionStatus
+from src.domain.value_objects.artifact import Artifact, ArtifactType
+from src.interfaces.rest.schemas.internal import (
+    ContainerReadyRequest,
     ExecutionResultReport,
     InternalAPIResponse,
 )
-from sandbox_control_plane.src.infrastructure.dependencies import (
+from src.infrastructure.dependencies import (
     USE_SQL_REPOSITORIES,
     get_execution_repository as get_sql_execution_repository,
+    get_session_repository as get_sql_session_repository,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,9 +35,63 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 # Mock 模式：使用从 app.state 获取仓储的函数
 if USE_SQL_REPOSITORIES:
     _get_execution_repository = get_sql_execution_repository
+    _get_session_repository = get_sql_session_repository
 else:
-    from sandbox_control_plane.src.infrastructure.dependencies import get_execution_repository as get_mock_execution_repository
+    from src.infrastructure.dependencies import get_execution_repository as get_mock_execution_repository
+    from src.infrastructure.dependencies import get_session_repository as get_mock_session_repository
     _get_execution_repository = get_mock_execution_repository
+    _get_session_repository = get_mock_session_repository
+
+
+@router.post("/containers/ready")
+async def handle_container_ready(
+    request: ContainerReadyRequest,
+    session_repo=Depends(_get_session_repository),
+):
+    """
+    处理容器就绪事件
+
+    由 Executor 在启动完成后调用，通知控制平面容器已就绪。
+    更新对应的会话状态为 RUNNING。
+    """
+    logger.info(f"Container ready event received: container_id={request.container_id}")
+
+    # 查找对应的会话
+    session = await session_repo.find_by_container_id(request.container_id)
+    if session:
+        # 更新会话状态为 RUNNING
+        from src.domain.value_objects.execution_status import SessionStatus
+        session.status = SessionStatus.RUNNING
+        await session_repo.save(session)
+        logger.info(f"Session {session.id} status updated to RUNNING")
+        return InternalAPIResponse(message="Container ready acknowledged, session updated")
+    else:
+        logger.warning(f"No session found for container_id={request.container_id}")
+        return InternalAPIResponse(message="Container ready acknowledged (no session found)")
+
+
+@router.post("/containers/exited")
+async def handle_container_exited():
+    """
+    处理容器退出事件
+
+    由 Executor 在关闭前调用，通知控制平面容器即将退出。
+    """
+    logger.info("Container exited event received")
+    # Currently just acknowledge - future: update container status in database
+    return InternalAPIResponse(message="Container exited acknowledged")
+
+
+@router.post("/executions/{execution_id}/heartbeat")
+async def handle_execution_heartbeat(execution_id: str):
+    """
+    处理执行心跳
+
+    由 Executor 在执行过程中定期调用，保持执行活跃状态。
+    """
+    logger.debug(f"Heartbeat received for execution {execution_id}")
+    # Currently just acknowledge - future: update last_heartbeat timestamp
+    return InternalAPIResponse(message="Heartbeat acknowledged")
 
 
 @router.post(

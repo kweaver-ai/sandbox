@@ -8,8 +8,8 @@ from decimal import Decimal
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sandbox_control_plane.src.domain.repositories.runtime_node_repository import IRuntimeNodeRepository
-from sandbox_control_plane.src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
+from src.domain.repositories.runtime_node_repository import IRuntimeNodeRepository
+from src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
 
 
 class SqlRuntimeNodeRepository(IRuntimeNodeRepository):

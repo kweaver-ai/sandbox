@@ -10,7 +10,7 @@ from sqlalchemy import Column, String, Enum, DateTime, Integer, Numeric, JSON, I
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
-from sandbox_control_plane.src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.database import Base
 
 
 class RuntimeNodeModel(Base):
@@ -81,7 +81,7 @@ class RuntimeNodeModel(Base):
 
     def to_runtime_node(self):
         """转换为领域 RuntimeNode 值对象"""
-        from sandbox_control_plane.src.domain.services.scheduler import RuntimeNode
+        from src.domain.services.scheduler import RuntimeNode
 
         # 计算资源使用率
         cpu_usage = (

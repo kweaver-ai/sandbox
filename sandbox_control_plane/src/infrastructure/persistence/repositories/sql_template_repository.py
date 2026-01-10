@@ -8,9 +8,9 @@ from typing import List
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sandbox_control_plane.src.domain.repositories.template_repository import ITemplateRepository
-from sandbox_control_plane.src.domain.entities.template import Template
-from sandbox_control_plane.src.infrastructure.persistence.models.template_model import TemplateModel
+from src.domain.repositories.template_repository import ITemplateRepository
+from src.domain.entities.template import Template
+from src.infrastructure.persistence.models.template_model import TemplateModel
 
 
 class SqlTemplateRepository(ITemplateRepository):

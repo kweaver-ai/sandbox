@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy import Column, String, Enum, DateTime, Integer, Text, JSON, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from sandbox_control_plane.src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.database import Base
 
 
 class SessionModel(Base):
@@ -84,9 +84,9 @@ class SessionModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from sandbox_control_plane.src.domain.entities.session import Session
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
-        from sandbox_control_plane.src.domain.value_objects.execution_status import SessionStatus
+        from src.domain.entities.session import Session
+        from src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.value_objects.execution_status import SessionStatus
 
         # 数据库中已存储格式化后的字符串，直接使用
         return Session(

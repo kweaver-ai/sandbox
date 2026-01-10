@@ -10,7 +10,7 @@ from sqlalchemy import Column, String, Enum, DateTime, Integer, Numeric, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
-from sandbox_control_plane.src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.database import Base
 
 
 class ContainerModel(Base):
@@ -82,9 +82,9 @@ class ContainerModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from sandbox_control_plane.src.domain.entities.container import Container
-        from sandbox_control_plane.src.domain.value_objects.resource_limit import ResourceLimit
-        from sandbox_control_plane.src.domain.value_objects.container_status import ContainerStatus
+        from src.domain.entities.container import Container
+        from src.domain.value_objects.resource_limit import ResourceLimit
+        from src.domain.value_objects.container_status import ContainerStatus
 
         return Container(
             id=self.id,

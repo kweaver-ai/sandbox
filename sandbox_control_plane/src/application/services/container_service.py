@@ -5,11 +5,11 @@
 """
 from typing import List, Optional
 
-from sandbox_control_plane.src.domain.entities.container import Container
-from sandbox_control_plane.src.domain.repositories.container_repository import IContainerRepository
-from sandbox_control_plane.src.application.queries.list_containers import ListContainersQuery
-from sandbox_control_plane.src.application.dtos.container_dto import ContainerDTO
-from sandbox_control_plane.src.shared.errors.domain import NotFoundError
+from src.domain.entities.container import Container
+from src.domain.repositories.container_repository import IContainerRepository
+from src.application.queries.list_containers import ListContainersQuery
+from src.application.dtos.container_dto import ContainerDTO
+from src.shared.errors.domain import NotFoundError
 
 
 class ContainerService:

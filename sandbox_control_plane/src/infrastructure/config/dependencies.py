@@ -7,15 +7,14 @@ from functools import lru_cache
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from redis.asyncio import Redis
 
-from sandbox_control_plane.src.infrastructure.config.settings import get_settings, Settings
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
-from sandbox_control_plane.src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.repositories.execution_repository import IExecutionRepository
-from sandbox_control_plane.src.application.services.session_service import SessionService
-from sandbox_control_plane.src.application.services.execution_service import ExecutionService
+from src.infrastructure.config.settings import get_settings, Settings
+from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.execution_repository import IExecutionRepository
+from src.application.services.session_service import SessionService
+from src.application.services.execution_service import ExecutionService
 
 
 # ============== 数据库 ==============
@@ -53,32 +52,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
-
-
-# ============== Redis ==============
-
-@lru_cache()
-def _get_redis_client():
-    """获取 Redis 客户端（单例）"""
-    settings = get_settings()
-    return Redis.from_url(
-        settings.redis_url,
-        encoding="utf-8",
-        decode_responses=True,
-    )
-
-
-async def get_redis() -> AsyncGenerator[Redis, None]:
-    """
-    获取 Redis 客户端
-
-    用于 FastAPI 依赖注入。
-    """
-    redis = _get_redis_client()
-    try:
-        yield redis
-    finally:
-        await redis.close()
 
 
 # ============== 仓储 ==============

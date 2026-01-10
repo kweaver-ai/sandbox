@@ -8,9 +8,9 @@ from datetime import datetime
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sandbox_control_plane.src.domain.repositories.session_repository import ISessionRepository
-from sandbox_control_plane.src.domain.entities.session import Session
-from sandbox_control_plane.src.infrastructure.persistence.models.session_model import SessionModel
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.entities.session import Session
+from src.infrastructure.persistence.models.session_model import SessionModel
 
 
 class SqlSessionRepository(ISessionRepository):
@@ -55,6 +55,13 @@ class SqlSessionRepository(ISessionRepository):
     async def find_by_id(self, session_id: str) -> Optional[Session]:
         """根据 ID 查找会话"""
         model = await self._session.get(SessionModel, session_id)
+        return model.to_entity() if model else None
+
+    async def find_by_container_id(self, container_id: str) -> Optional[Session]:
+        """根据容器 ID 查找会话"""
+        stmt = select(SessionModel).where(SessionModel.container_id == container_id)
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
     async def find_by_status(self, status: str, limit: int = 100) -> List[Session]:
