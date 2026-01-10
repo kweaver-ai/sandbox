@@ -27,10 +27,14 @@ class WarmPoolManager:
         container_scheduler: IContainerScheduler,
         idle_timeout_seconds: int = 1800,  # 30 分钟
         max_pool_size_per_template: int = 5,  # 每个模板最大预热数量
+        control_plane_url: str = "http://control-plane:8000",
+        disable_bwrap: bool = False,  # 是否禁用 Bubblewrap
     ):
         self._container_scheduler = container_scheduler
         self._idle_timeout_seconds = idle_timeout_seconds
         self._max_pool_size_per_template = max_pool_size_per_template
+        self._control_plane_url = control_plane_url
+        self._disable_bwrap = disable_bwrap
 
         # 预热池存储：template_id -> List[WarmPoolEntry]
         self._warm_pool: Dict[str, List[WarmPoolEntry]] = defaultdict(list)
@@ -147,6 +151,7 @@ class WarmPoolManager:
         Returns:
             创建的容器数量
         """
+        # 只在持有锁时检查当前大小
         async with self._lock:
             pool = self._warm_pool.get(template_id, [])
             current_size = len([e for e in pool if e.is_available()])
@@ -155,31 +160,37 @@ class WarmPoolManager:
             if needed <= 0:
                 return 0
 
-            created_count = 0
-            for i in range(needed):
-                try:
-                    # 创建容器
-                    container_name = f"warm-{template_id}-{i}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    entry = await self._create_warm_entry(
-                        template_id=template_id,
-                        image=image,
-                        node_id=node_id,
-                        container_name=container_name,
-                        resource_limit=resource_limit,
-                        env_vars=env_vars,
-                        workspace_path_template=workspace_path_template,
-                    )
-                    await self.add(entry)
-                    created_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to create warm instance: {e}")
-                    break
+        # 在锁外创建容器（避免阻塞其他操作）
+        created_entries = []
+        created_count = 0
+        for i in range(needed):
+            try:
+                # 创建容器（慢操作，不在锁内执行）
+                container_name = f"warm-{template_id}-{i}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                entry = await self._create_warm_entry(
+                    template_id=template_id,
+                    image=image,
+                    node_id=node_id,
+                    container_name=container_name,
+                    resource_limit=resource_limit,
+                    env_vars=env_vars,
+                    workspace_path_template=workspace_path_template,
+                )
+                created_entries.append(entry)
+                created_count += 1
+            except Exception as e:
+                logger.error(f"Failed to create warm instance: {e}")
+                break
 
-            logger.info(
-                f"Replenished warm pool: template={template_id}, "
-                f"created={created_count}, pool_size={len(pool)}"
-            )
-            return created_count
+        # 批量添加到预热池（短时间持有锁）
+        for entry in created_entries:
+            await self.add(entry)
+
+        logger.info(
+            f"Replenished warm pool: template={template_id}, "
+            f"created={created_count}, pool_size={len(self._warm_pool.get(template_id, []))}"
+        )
+        return created_count
 
     async def cleanup_idle(self, idle_timeout_seconds: Optional[int] = None) -> int:
         """
@@ -256,6 +267,8 @@ class WarmPoolManager:
                 **env_vars,
                 "WARM_POOL": "true",
                 "TEMPLATE_ID": template_id,
+                "CONTROL_PLANE_URL": self._control_plane_url,
+                "DISABLE_BWRAP": "true" if self._disable_bwrap else "false",
             },
             cpu_limit=resource_limit.cpu,
             memory_limit=resource_limit.memory,

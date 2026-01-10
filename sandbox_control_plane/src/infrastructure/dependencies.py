@@ -11,13 +11,11 @@ from fastapi import FastAPI, Depends
 
 from src.application.services.session_service import SessionService
 from src.application.services.template_service import TemplateService
-from src.application.services.container_service import ContainerService
 from src.application.services.file_service import FileService
 
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.execution_repository import IExecutionRepository
 from src.domain.repositories.template_repository import ITemplateRepository
-from src.domain.repositories.container_repository import IContainerRepository
 from src.domain.services.scheduler import IScheduler, RuntimeNode
 from src.domain.services.storage import IStorageService
 from src.domain.value_objects.execution_request import ExecutionRequest
@@ -58,6 +56,12 @@ class MockSessionRepository(ISessionRepository):
 
     async def find_by_id(self, session_id: str):
         return self._sessions.get(session_id)
+
+    async def find_by_container_id(self, container_id: str):
+        for session in self._sessions.values():
+            if getattr(session, 'container_id', None) == container_id:
+                return session
+        return None
 
     async def find_by_status(self, status: str, limit: int = 100):
         return [s for s in self._sessions.values() if s.status == status][:limit]
@@ -185,41 +189,6 @@ class MockTemplateRepository(ITemplateRepository):
 
     async def count(self) -> int:
         return len(self._templates)
-
-
-class MockContainerRepository(IContainerRepository):
-    """Mock 容器仓储（用于开发测试）"""
-
-    def __init__(self):
-        self._containers = {}
-
-    async def save(self, container):
-        self._containers[container.id] = container
-
-    async def find_by_id(self, container_id: str):
-        return self._containers.get(container_id)
-
-    async def find_by_session_id(self, session_id: str):
-        for c in self._containers.values():
-            if c.session_id == session_id:
-                return c
-        return None
-
-    async def find_all(self, status=None, runtime_type=None, offset=0, limit=100):
-        return list(self._containers.values())[offset:offset+limit]
-
-    async def delete(self, container_id: str) -> None:
-        if container_id in self._containers:
-            del self._containers[container_id]
-
-    async def exists(self, container_id: str) -> bool:
-        return container_id in self._containers
-
-    async def count(self) -> int:
-        return len(self._containers)
-
-    async def count_by_status(self, status: str) -> int:
-        return sum(1 for c in self._containers.values() if c.status == status)
 
 
 class MockScheduler(IScheduler):
@@ -367,6 +336,7 @@ class MockStorageService(IStorageService):
 # Module-level singletons for shared components
 _container_scheduler_singleton = None
 _warm_pool_manager_singleton = None
+_scheduler_singleton = None
 
 
 def initialize_dependencies(app: FastAPI):
@@ -382,31 +352,26 @@ def initialize_dependencies(app: FastAPI):
         app.state.get_session_repository = get_session_repository
         app.state.get_execution_repository = get_execution_repository
         app.state.get_template_repository = get_template_repository
-        app.state.get_container_repository = get_container_repository
 
         # SessionService 也需要动态创建
         app.state.get_session_service = get_session_service_db
         app.state.get_template_service = get_template_service_db
-        app.state.get_container_service = get_container_service_db
         app.state.get_file_service = get_file_service_db
 
         # 对于向后兼容，也设置仓储实例（用于可能直接访问的情况）
         app.state.session_repo = None  # 使用工厂函数
         app.state.execution_repo = None
         app.state.template_repo = None
-        app.state.container_repo = None
 
         # 服务也使用工厂函数
         app.state.session_service = None
         app.state.template_service = None
-        app.state.container_service = None
         app.state.file_service = None
     else:
         # Mock 模式：直接创建实例
         session_repo = MockSessionRepository()
         execution_repo = MockExecutionRepository()
         template_repo = MockTemplateRepository()
-        container_repo = MockContainerRepository()
 
         # 创建领域服务实例
         storage_service = MockStorageService()
@@ -426,10 +391,6 @@ def initialize_dependencies(app: FastAPI):
             template_repo=template_repo,
         )
 
-        container_service = ContainerService(
-            container_repo=container_repo,
-        )
-
         file_service = FileService(
             session_repo=session_repo,
             storage_service=storage_service,
@@ -438,31 +399,44 @@ def initialize_dependencies(app: FastAPI):
         # 存储到应用状态
         app.state.session_service = session_service
         app.state.template_service = template_service
-        app.state.container_service = container_service
         app.state.file_service = file_service
 
         # 也存储仓储（可能需要）
         app.state.session_repo = session_repo
         app.state.execution_repo = execution_repo
         app.state.template_repo = template_repo
-        app.state.container_repo = container_repo
 
     # 创建容器调度器和预热池管理器（模块级单例，仅在 Docker 调度模式下）
-    global _container_scheduler_singleton, _warm_pool_manager_singleton
+    global _container_scheduler_singleton, _warm_pool_manager_singleton, _scheduler_singleton
 
     if USE_DOCKER_SCHEDULER:
         from src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
         from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
+        from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
 
         # 创建容器调度器（模块级单例）
         _container_scheduler_singleton = DockerScheduler(docker_url=_get_docker_url())
 
         # 创建预热池管理器（模块级单例，持有 in-memory 状态）
+        settings = get_settings()
         _warm_pool_manager_singleton = WarmPoolManager(
             container_scheduler=_container_scheduler_singleton,
             idle_timeout_seconds=1800,
             max_pool_size_per_template=3,
+            control_plane_url=settings.control_plane_url,
+            disable_bwrap=settings.disable_bwrap,
         )
+
+        # 创建调度器服务（模块级单例，用于状态恢复）
+        # 需要获取 template_repo 和 runtime_node_repo
+        if USE_SQL_REPOSITORIES:
+            # 使用已创建的仓储（需要从 app.state 获取）
+            # 注意：这些仓储在初始化时可能还未完全创建
+            # 暂时使用 Mock，后续在 get_state_sync_service 中重新创建
+            _scheduler_singleton = None  # 延迟初始化
+        else:
+            # Mock 模式
+            _scheduler_singleton = MockScheduler()
 
 
 async def cleanup_dependencies(app: FastAPI):
@@ -478,11 +452,6 @@ def get_session_service(app: FastAPI) -> SessionService:
 def get_template_service(app: FastAPI) -> TemplateService:
     """获取模板服务"""
     return app.state.template_service
-
-
-def get_container_service(app: FastAPI) -> ContainerService:
-    """获取容器服务"""
-    return app.state.container_service
 
 
 def get_file_service(app: FastAPI) -> FileService:
@@ -530,16 +499,6 @@ def get_template_repository(
     return MockTemplateRepository()
 
 
-def get_container_repository(
-    session = Depends(get_db_session)
-) -> IContainerRepository:
-    """获取容器仓储（SQL 或 Mock）"""
-    if USE_SQL_REPOSITORIES:
-        from src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
-        return SqlContainerRepository(session)
-    return MockContainerRepository()
-
-
 def get_scheduler() -> IScheduler:
     """获取调度器（Mock 或 Docker）"""
     if USE_DOCKER_SCHEDULER:
@@ -580,7 +539,7 @@ def get_docker_scheduler_service(
     # 读取 control_plane_url 配置
     control_plane_url = os.environ.get(
         "CONTROL_PLANE_URL",
-        "http://host.docker.internal:8000"  # 本地开发默认值
+        "http://control-plane:8000"  # Docker 网络中的服务名
     )
 
     # 使用模块级单例
@@ -596,6 +555,7 @@ def get_docker_scheduler_service(
 
     # 为每个请求创建新的 DockerSchedulerService 实例
     # 但使用共享的 container_scheduler 和 warm_pool_manager
+    settings = get_settings()
     return DockerSchedulerService(
         runtime_node_repo=runtime_node_repo,
         container_scheduler=container_scheduler,
@@ -603,7 +563,8 @@ def get_docker_scheduler_service(
         executor_client=executor_client,
         executor_port=8080,
         warm_pool_manager=warm_pool_manager,  # 共享的预热池管理器
-        control_plane_url=control_plane_url,  # 传递 control plane URL
+        control_plane_url=settings.control_plane_url,  # 传递 control plane URL
+        disable_bwrap=settings.disable_bwrap,  # 传递 bubblewrap 设置
     )
 
 
@@ -634,13 +595,6 @@ def get_template_service_db(
     return TemplateService(template_repo=template_repo)
 
 
-def get_container_service_db(
-    container_repo: IContainerRepository = Depends(get_container_repository),
-) -> ContainerService:
-    """获取容器服务（使用数据库仓储）"""
-    return ContainerService(container_repo=container_repo)
-
-
 def get_file_service_db(
     session_repo: ISessionRepository = Depends(get_session_repository),
     storage_service: IStorageService = Depends(get_storage_service),
@@ -650,3 +604,174 @@ def get_file_service_db(
         session_repo=session_repo,
         storage_service=storage_service,
     )
+
+
+# ============================================================================
+# State Sync and Warm Pool Services (shared singletons)
+# ============================================================================
+
+_state_sync_service_singleton = None
+_warm_pool_service_singleton = None
+
+
+def get_state_sync_service():
+    """
+    获取状态同步服务（共享单例）
+
+    此服务在启动时调用，需要使用已初始化的单例。
+    使用 SQL 数据库直接查询，不依赖仓储模式。
+    """
+    global _scheduler_singleton
+    from src.application.services.state_sync_service import StateSyncService
+
+    # 使用模块级单例
+    container_scheduler = _container_scheduler_singleton
+    warm_pool_manager = _warm_pool_manager_singleton
+
+    # 创建直接使用数据库的仓储
+    if USE_SQL_REPOSITORIES:
+        from src.infrastructure.persistence.database import db_manager
+
+        class DirectSessionRepository:
+            """直接使用数据库的仓储，用于状态同步"""
+            def __init__(self, db_mgr):
+                self._db_mgr = db_mgr
+
+            async def find_by_status(self, status: str, limit: int = 100):
+                """直接查询数据库"""
+                from src.infrastructure.persistence.models.session_model import SessionModel
+                from sqlalchemy import select
+                result = []
+                async with self._db_mgr.get_session() as session:
+                    stmt = select(SessionModel).filter(
+                        SessionModel.status == status
+                    ).limit(limit)
+                    models_result = await session.execute(stmt)
+                    for model in models_result.scalars():
+                        from src.domain.entities.session import Session, SessionStatus
+                        from src.domain.value_objects.resource_limit import ResourceLimit
+
+                        session_entity = Session(
+                            id=model.id,
+                            template_id=model.template_id,
+                            status=SessionStatus(model.status),
+                            resource_limit=ResourceLimit(
+                                cpu=model.resources_cpu,
+                                memory=model.resources_memory,
+                                disk=model.resources_disk,
+                                max_processes=128,  # 默认值
+                            ),
+                            workspace_path=model.workspace_path,
+                            runtime_type=model.runtime_type,
+                            runtime_node=model.runtime_node,
+                            container_id=model.container_id,
+                            pod_name=model.pod_name,
+                            env_vars=model.env_vars,
+                            timeout=model.timeout,
+                            created_at=model.created_at,
+                            updated_at=model.updated_at,
+                            last_activity_at=model.last_activity_at,
+                        )
+                        result.append(session_entity)
+                return result
+
+            async def find_by_id(self, session_id: str):
+                """通过 ID 查找"""
+                from src.infrastructure.persistence.models.session_model import SessionModel
+                async with self._db_mgr.get_session() as session:
+                    model = await session.get(SessionModel, session_id)
+                    if model:
+                        from src.domain.entities.session import Session, SessionStatus
+                        from src.domain.value_objects.resource_limit import ResourceLimit
+
+                        return Session(
+                            id=model.id,
+                            template_id=model.template_id,
+                            status=SessionStatus(model.status),
+                            resource_limit=ResourceLimit(
+                                cpu=model.resources_cpu,
+                                memory=model.resources_memory,
+                                disk=model.resources_disk,
+                                max_processes=128,  # 默认值
+                            ),
+                            workspace_path=model.workspace_path,
+                            runtime_type=model.runtime_type,
+                            runtime_node=model.runtime_node,
+                            container_id=model.container_id,
+                            pod_name=model.pod_name,
+                            env_vars=model.env_vars,
+                            timeout=model.timeout,
+                            created_at=model.created_at,
+                            updated_at=model.updated_at,
+                            last_activity_at=model.last_activity_at,
+                        )
+                return None
+
+            async def save(self, session):
+                """保存 session"""
+                from src.infrastructure.persistence.models.session_model import SessionModel
+                async with self._db_mgr.get_session() as db:
+                    model = await db.get(SessionModel, session.id)
+                    if model:
+                        # 处理 status 可能是枚举或字符串的情况
+                        if hasattr(session.status, 'value'):
+                            model.status = session.status.value
+                        else:
+                            model.status = session.status
+                        model.container_id = session.container_id
+                        model.runtime_node = session.runtime_node
+                        model.updated_at = session.updated_at
+                        await db.commit()
+
+        session_repo = DirectSessionRepository(db_manager)
+    else:
+        session_repo = MockSessionRepository()
+
+    # 创建 scheduler（如果还没有）
+    scheduler = _scheduler_singleton
+    if scheduler is None and USE_DOCKER_SCHEDULER:
+        scheduler = MockScheduler()
+        _scheduler_singleton = scheduler
+
+    # 每次都创建新的 StateSyncService 实例，使用最新的仓储
+    state_sync_service = StateSyncService(
+        session_repo=session_repo,
+        container_scheduler=container_scheduler,
+        warm_pool_manager=warm_pool_manager,
+        scheduler=scheduler,
+    )
+
+    return state_sync_service
+
+
+def get_warm_pool_service():
+    """
+    获取预热池管理服务（共享单例）
+
+    此服务在启动时调用，需要使用已初始化的单例。
+    """
+    global _warm_pool_service_singleton
+
+    if _warm_pool_service_singleton is None:
+        from src.application.services.warm_pool_service import WarmPoolService
+
+        # 使用模块级单例
+        warm_pool_manager = _warm_pool_manager_singleton
+
+        # 创建 Template仓储
+        if USE_SQL_REPOSITORIES:
+            template_repo = MockTemplateRepository()  # 简化：使用 Mock
+        else:
+            template_repo = MockTemplateRepository()
+
+        _warm_pool_service_singleton = WarmPoolService(
+            warm_pool_manager=warm_pool_manager,
+            template_repo=template_repo,
+            default_node_id="local",
+            default_idle_timeout=1800,  # 30 分钟
+            default_target_size=3,
+            env_vars={},
+            workspace_path_template="s3://bucket/sessions/{session_id}/",
+        )
+
+    return _warm_pool_service_singleton

@@ -18,7 +18,6 @@ from src.interfaces.rest.api.v1 import (
     sessions,
     executions,
     templates,
-    containers,
     health,
     files,
     internal,
@@ -61,10 +60,76 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await db_manager.create_tables()
         logger.info("Database tables created")
 
+    # ============= 启动时状态同步 =============
+    from src.infrastructure.dependencies import get_state_sync_service
+    state_sync_service = get_state_sync_service()
+    try:
+        sync_stats = await state_sync_service.sync_on_startup()
+        logger.info(
+            "Startup state sync completed",
+            total=sync_stats.get("total", 0),
+            healthy=sync_stats.get("healthy", 0),
+            unhealthy=sync_stats.get("unhealthy", 0),
+            recovered=sync_stats.get("recovered", 0),
+            failed=sync_stats.get("failed", 0),
+        )
+        if sync_stats.get("errors"):
+            logger.warning("State sync had errors", errors=sync_stats["errors"])
+    except Exception as e:
+        logger.error("Failed to perform startup state sync", error=str(e), exc_info=True)
+
+    # ============= 启动后台任务管理器 =============
+    from src.infrastructure.background_tasks import BackgroundTaskManager
+    from src.infrastructure.dependencies import (
+        get_state_sync_service,
+        get_warm_pool_service,
+    )
+
+    background_task_manager = BackgroundTaskManager()
+
+    # 注册定时健康检查任务（每 30 秒）
+    state_sync_svc = get_state_sync_service()
+    background_task_manager.register_task(
+        name="health_check",
+        func=state_sync_svc.periodic_health_check,
+        interval_seconds=30,
+        initial_delay_seconds=30,  # 首次执行延迟 30 秒
+    )
+
+    # 注册预热池清理任务（每 5 分钟）
+    warm_pool_svc = get_warm_pool_service()
+    background_task_manager.register_task(
+        name="warm_pool_cleanup",
+        func=warm_pool_svc.periodic_cleanup,
+        interval_seconds=300,  # 5 分钟
+        initial_delay_seconds=60,  # 首次执行延迟 1 分钟
+    )
+
+    # 注册预热池补充任务（每 2 分钟）
+    background_task_manager.register_task(
+        name="warm_pool_replenish",
+        func=warm_pool_svc.periodic_replenish,
+        interval_seconds=120,  # 2 分钟
+        initial_delay_seconds=120,  # 首次执行延迟 2 分钟
+    )
+
+    # 启动所有后台任务
+    await background_task_manager.start_all()
+    logger.info(f"Background tasks started: {background_task_manager.task_count} tasks")
+
+    # 将后台任务管理器存储到 app.state，以便关闭时使用
+    app.state.background_task_manager = background_task_manager
+
     yield
 
     # 关闭时执行
     logger.info("Shutting down Sandbox Control Plane")
+
+    # 停止所有后台任务
+    if hasattr(app.state, "background_task_manager"):
+        await app.state.background_task_manager.stop_all()
+        logger.info("Background tasks stopped")
+
     # 清理依赖项（包括关闭数据库连接）
     from src.infrastructure.dependencies import cleanup_dependencies
     await cleanup_dependencies(app)
@@ -145,7 +210,6 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(sessions.router, prefix="/api/v1")
     app.include_router(executions.router, prefix="/api/v1")
     app.include_router(templates.router, prefix="/api/v1")
-    app.include_router(containers.router, prefix="/api/v1")
     app.include_router(files.router, prefix="/api/v1")
     app.include_router(internal.router, prefix="/api/v1")  # 内部 API
 
@@ -162,7 +226,8 @@ def _register_routes(app: FastAPI) -> None:
                 "code_execution",
                 "template_management",
                 "file_operations",
-                "container_monitoring",
+                "state_sync",
+                "warm_pool",
             ],
             "documentation": {
                 "swagger": "/docs",

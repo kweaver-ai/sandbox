@@ -185,9 +185,14 @@ async def report_execution_result(
             )
 
         elif domain_status == ExecutionStatus.FAILED:
-            # 使用 stderr 作为错误消息
+            # 使用 stderr 作为错误消息，同时保存 stdout 和 stderr
             error_message = report.stderr if report.stderr else "Execution failed"
-            execution.mark_failed(error_message=error_message, exit_code=report.exit_code)
+            execution.mark_failed(
+                error_message=error_message,
+                exit_code=report.exit_code,
+                stdout=report.stdout,
+                stderr=report.stderr,
+            )
 
         elif domain_status == ExecutionStatus.TIMEOUT:
             execution.mark_timeout()

@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     default_cpu: str = Field(default="1")
     default_memory: str = Field(default="512Mi")
     default_disk: str = Field(default="1Gi")
+    disable_bwrap: bool = Field(default=False)  # 禁用 Bubblewrap（本地开发环境）
+    control_plane_url: str = Field(default="http://control-plane:8000")  # Control Plane URL for executor callback
 
     # ============== 清理配置 ==============
     idle_threshold_minutes: int = Field(default=30)

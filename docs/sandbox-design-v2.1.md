@@ -844,6 +844,169 @@ class HealthProbe:
             await asyncio.sleep(10)
 ```
 
+#### 2.1.5 状态同步服务 (State Sync Service)
+
+**设计原则**：Docker/K8s 是容器状态的唯一真实来源，Session 表只保存关联关系。
+
+状态同步服务负责：
+1. **启动时全量同步**：Control Plane 重启后恢复状态
+2. **定时健康检查**：定期检查容器状态并修复不一致
+3. **容器状态恢复**：结合预热池自动恢复不健康的容器
+
+```python
+class StateSyncService:
+    """
+    状态同步服务
+
+    职责：
+    1. 启动时全量状态同步
+    2. 定时健康检查（每 30 秒）
+    3. 容器状态恢复
+    """
+
+    def __init__(
+        self,
+        session_repo: ISessionRepository,
+        docker_scheduler: IDockerScheduler,
+        warm_pool_manager: WarmPoolManager,
+    ):
+        self._session_repo = session_repo
+        self._docker_scheduler = docker_scheduler
+        self._warm_pool_manager = warm_pool_manager
+
+    async def sync_on_startup(self) -> dict:
+        """
+        启动时全量同步
+
+        策略：
+        1. 查询所有 RUNNING/CREATING 状态的 Session
+        2. 通过 Docker API 检查每个容器是否真实存在且运行中
+        3. 更新 Session 状态：
+           - 容器存在且运行 → 保持 RUNNING
+           - 容器不存在/已停止 → 尝试恢复或标记为 FAILED
+        """
+        active_sessions = await self._session_repo.find_by_status("running")
+        active_sessions.extend(await self._session_repo.find_by_status("creating"))
+
+        stats = {"healthy": 0, "unhealthy": 0, "recovered": 0, "failed": 0}
+
+        for session in active_sessions:
+            if not session.container_id:
+                continue
+
+            # 直接通过 Docker API 检查容器状态
+            is_running = await self._docker_scheduler.is_container_running(
+                session.container_id
+            )
+
+            if is_running:
+                stats["healthy"] += 1
+            else:
+                stats["unhealthy"] += 1
+                # 尝试恢复
+                recovered = await self._attempt_recovery(session)
+                if recovered:
+                    stats["recovered"] += 1
+                else:
+                    stats["failed"] += 1
+
+        return stats
+
+    async def periodic_health_check(self) -> dict:
+        """
+        定时健康检查（每 30 秒）
+
+        只检查 RUNNING 状态的 Session，减少查询范围
+        """
+        running_sessions = await self._session_repo.find_by_status("running")
+
+        for session in running_sessions:
+            if not session.container_id:
+                continue
+
+            is_running = await self._docker_scheduler.is_container_running(
+                session.container_id
+            )
+
+            if not is_running:
+                await self._attempt_recovery(session)
+
+        return {"checked": len(running_sessions)}
+
+    async def _attempt_recovery(self, session: Session) -> bool:
+        """
+        尝试恢复 Session
+
+        策略：
+        1. 首先尝试从预热池获取实例
+        2. 如果预热池为空，创建新容器
+        3. 如果创建失败，标记 Session 为 FAILED
+        """
+        # 1. 尝试从预热池获取
+        warm_entry = await self._warm_pool_manager.acquire(
+            session.template_id, session.id
+        )
+        if warm_entry:
+            # 分配预热实例
+            session.container_id = warm_entry.container_id
+            session.runtime_node = warm_entry.node_id
+            await self._session_repo.save(session)
+            return True
+
+        # 2. 创建新容器
+        try:
+            container_id = await self._docker_scheduler.create_container_for_session(
+                session_id=session.id,
+                template_id=session.template_id,
+                workspace_path=session.workspace_path,
+            )
+            session.container_id = container_id
+            await self._session_repo.save(session)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to recover session {session.id}: {e}")
+            # 3. 标记为失败
+            session.mark_as_failed()
+            await self._session_repo.save(session)
+            return False
+```
+
+**启动流程集成**：
+
+```python
+# 在 main.py 的 lifespan 函数中
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时
+    logger.info("Starting Sandbox Control Plane")
+
+    # 初始化依赖注入
+    initialize_dependencies(app)
+
+    # 执行启动时状态同步
+    state_sync_service = app.state.state_sync_service
+    sync_stats = await state_sync_service.sync_on_startup()
+    logger.info(f"Startup sync completed: {sync_stats}")
+
+    # 启动后台任务管理器
+    task_manager = BackgroundTaskManager()
+
+    # 注册定时健康检查任务（每 30 秒）
+    task_manager.register_task(
+        name="health_check",
+        func=state_sync_service.periodic_health_check,
+        interval_seconds=30,
+        initial_delay_seconds=60,
+    )
+
+    await task_manager.start_all()
+
+    yield
+
+    # 关闭时
+    await task_manager.stop_all()
+```
+
 ### 2.2 Container Scheduler 模块
 
 运行时负责管理沙箱容器的生命周期。系统采用容器隔离 + Bubblewrap 进程隔离的双层安全机制。
@@ -1015,6 +1178,53 @@ class DockerRuntime:
             await asyncio.sleep(0.5)
         
         raise TimeoutError(f"Executor not ready in container {container_id}")
+
+    # ========== 状态查询接口（状态同步服务专用） ==========
+
+    async def is_container_running(self, container_id: str) -> bool:
+        """
+        检查容器是否正在运行
+
+        直接通过 Docker API 查询，不依赖数据库。
+        此方法供 StateSyncService 使用。
+
+        Args:
+            container_id: 容器 ID
+
+        Returns:
+            bool: 容器是否运行中
+        """
+        try:
+            container = await self.docker_client.containers.get(container_id)
+            info = await container.show()
+            return info["State"]["Status"] == "running"
+        except Exception:
+            return False
+
+    async def get_container_status(self, container_id: str) -> ContainerInfo:
+        """
+        获取容器详细状态
+
+        直接通过 Docker API 查询，不依赖数据库。
+        此方法供 StateSyncService 使用。
+
+        Args:
+            container_id: 容器 ID
+
+        Returns:
+            ContainerInfo: 包含 status, health, created_at 等信息
+        """
+        container = await self.docker_client.containers.get(container_id)
+        info = await container.show()
+
+        return ContainerInfo(
+            id=container_id,
+            status=info["State"]["Status"],
+            created_at=info["Created"],
+            health=info["State"].get("Health", {}).get("Status", "unknown"),
+            image=info["Config"]["Image"],
+            labels=info["Config"].get("Labels", {}),
+        )
 ```
 
 容器镜像构建：

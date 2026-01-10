@@ -3,7 +3,7 @@
 
 定义健康检查和系统监控相关的 HTTP 端点。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 import time
@@ -57,4 +57,23 @@ async def detailed_health_check() -> dict:
             "storage": "healthy",
             "runtime_nodes": "healthy"
         }
+    }
+
+
+@router.post("/sync")
+async def trigger_state_sync() -> dict:
+    """
+    手动触发状态同步
+
+    立即执行一次状态同步和健康检查，用于调试和手动恢复。
+    """
+    from src.infrastructure.dependencies import get_state_sync_service
+
+    state_sync_service = get_state_sync_service()
+    result = await state_sync_service.periodic_health_check()
+
+    return {
+        "status": "success",
+        "message": "State sync completed",
+        "result": result
     }

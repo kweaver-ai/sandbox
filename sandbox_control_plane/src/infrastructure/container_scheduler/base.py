@@ -96,6 +96,25 @@ class IContainerScheduler(ABC):
         pass
 
     @abstractmethod
+    async def is_container_running(
+        self,
+        container_id: str
+    ) -> bool:
+        """
+        检查容器是否正在运行
+
+        直接通过 Docker API 查询，不依赖数据库。
+        此方法供 StateSyncService 使用。
+
+        Args:
+            container_id: 容器 ID
+
+        Returns:
+            bool: 容器是否运行中
+        """
+        pass
+
+    @abstractmethod
     async def get_container_logs(
         self,
         container_id: str,

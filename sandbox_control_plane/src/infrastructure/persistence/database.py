@@ -22,7 +22,6 @@ class Base(DeclarativeBase):
 from src.infrastructure.persistence.models.template_model import TemplateModel
 from src.infrastructure.persistence.models.session_model import SessionModel
 from src.infrastructure.persistence.models.execution_model import ExecutionModel
-from src.infrastructure.persistence.models.container_model import ContainerModel
 from src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
 
 

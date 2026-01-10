@@ -10,12 +10,10 @@ from src.infrastructure.persistence.database import db_manager
 from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
 from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
 from src.infrastructure.persistence.repositories.sql_template_repository import SqlTemplateRepository
-from src.infrastructure.persistence.repositories.sql_container_repository import SqlContainerRepository
 
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.execution_repository import IExecutionRepository
 from src.domain.repositories.template_repository import ITemplateRepository
-from src.domain.repositories.container_repository import IContainerRepository
 
 
 class RepositoryFactory:
@@ -41,7 +39,6 @@ class RepositoryFactory:
                 "session_repo": SqlSessionRepository(session),
                 "execution_repo": SqlExecutionRepository(session),
                 "template_repo": SqlTemplateRepository(session),
-                "container_repo": SqlContainerRepository(session),
             }
 
     @staticmethod
@@ -58,8 +55,3 @@ class RepositoryFactory:
     def create_template_repository(session) -> ITemplateRepository:
         """创建模板仓储"""
         return SqlTemplateRepository(session)
-
-    @staticmethod
-    def create_container_repository(session) -> IContainerRepository:
-        """创建容器仓储"""
-        return SqlContainerRepository(session)

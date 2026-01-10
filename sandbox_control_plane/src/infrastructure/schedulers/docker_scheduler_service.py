@@ -72,7 +72,8 @@ class DockerSchedulerService(IScheduler):
         executor_client: Optional[ExecutorClient] = None,
         executor_port: int = 8080,
         warm_pool_manager: Optional[WarmPoolManager] = None,
-        control_plane_url: str = "http://host.docker.internal:8000",
+        control_plane_url: str = "http://control-plane:8000",
+        disable_bwrap: bool = False,
     ):
         self._runtime_node_repo = runtime_node_repo
         self._container_scheduler = container_scheduler
@@ -80,10 +81,13 @@ class DockerSchedulerService(IScheduler):
         self._executor_client = executor_client or ExecutorClient()
         self._executor_port = executor_port
         self._control_plane_url = control_plane_url
+        self._disable_bwrap = disable_bwrap
         self._warm_pool_manager = warm_pool_manager or WarmPoolManager(
             container_scheduler=container_scheduler,
             idle_timeout_seconds=1800,  # 30 分钟
             max_pool_size_per_template=5,  # 每个模板最多 5 个预热实例
+            control_plane_url=control_plane_url,
+            disable_bwrap=disable_bwrap,
         )
 
         # 用于记录分配给会话的预热实例
@@ -102,13 +106,14 @@ class DockerSchedulerService(IScheduler):
         3. 选择负载最低的健康节点
 
         预热池自动补充：
-        - 如果是首次使用该模板，自动补充预热池到最小大小
+        - 如果是首次使用该模板，异步初始化预热池（不阻塞请求）
         """
-        # 🔧 临时禁用预热池自动初始化
-        # 首次使用模板时，自动初始化预热池
-        # if request.template_id not in self._initialized_pools:
-        #     await self._ensure_warm_pool_initialized(request.template_id)
-        #     self._initialized_pools.add(request.template_id)
+        # 首次使用模板时，异步初始化预热池（不阻塞当前请求）
+        if request.template_id not in self._initialized_pools:
+            # 标记为已初始化，避免重复初始化
+            self._initialized_pools.add(request.template_id)
+            # 异步初始化预热池，不阻塞当前请求
+            asyncio.create_task(self._ensure_warm_pool_initialized_async(request.template_id))
 
         # 1. 检查预热池
         warm_entry = await self._warm_pool_manager.acquire(
@@ -209,12 +214,13 @@ class DockerSchedulerService(IScheduler):
             return warm_entry.container_id
 
         # 没有预热实例，需要创建新容器
-        request = ScheduleRequest(
-            template_id=template_id,
-            resource_limit=resource_limit,
-            session_id=session_id,
-        )
-        node = await self.schedule(request)
+        # 注意：调度已经在 create_session 中完成，这里不需要再次调度
+        # 直接使用默认节点
+        nodes = await self.get_healthy_nodes()
+        if not nodes:
+            raise RuntimeError("No healthy runtime nodes available")
+
+        node = nodes[0]  # 使用第一个健康节点
 
         # 创建容器配置
         config = ContainerConfig(
@@ -225,7 +231,7 @@ class DockerSchedulerService(IScheduler):
                 "SESSION_ID": session_id,
                 "WORKSPACE_PATH": workspace_path,
                 "CONTROL_PLANE_URL": self._control_plane_url,
-                "DISABLE_BWRAP": "true",  # 本地开发禁用 Bubblewrap
+                "DISABLE_BWRAP": "true" if self._disable_bwrap else "false",
             },
             cpu_limit=resource_limit.cpu,
             memory_limit=resource_limit.memory,
@@ -238,16 +244,29 @@ class DockerSchedulerService(IScheduler):
             },
         )
 
-        # 创建容器
-        container_id = await self._container_scheduler.create_container(config)
-        await self._container_scheduler.start_container(container_id)
+        # 异步创建容器（不阻塞当前请求）
+        # 使用 asyncio.shield 确保后台任务不会因为请求结束而取消
+        async def _create_and_start():
+            try:
+                container_id = await self._container_scheduler.create_container(config)
+                await self._container_scheduler.start_container(container_id)
+                logger.info(
+                    f"Background task: Created and started container {container_id} "
+                    f"for session {session_id} on node {node.id}"
+                )
+            except Exception as e:
+                logger.error(f"Background task: Failed to create/start container for session {session_id}: {e}")
+
+        # 在后台执行容器创建，不等待结果
+        asyncio.create_task(_create_and_start())
 
         logger.info(
-            f"Created container {container_id} for session {session_id} "
+            f"Initiated background container creation for session {session_id} "
             f"on node {node.id}"
         )
 
-        return container_id
+        # 立即返回临时 container_id，不等待容器创建完成
+        return f"sandbox-{session_id}"
 
     async def destroy_container(
         self,
@@ -423,6 +442,19 @@ class DockerSchedulerService(IScheduler):
             )
         except Exception as e:
             logger.error(f"Failed to initialize warm pool for {template_id}: {e}")
+
+    async def _ensure_warm_pool_initialized_async(self, template_id: str) -> None:
+        """
+        异步初始化预热池（不阻塞请求）
+
+        此方法作为后台任务运行，不阻塞 API 请求。
+        如果初始化失败，仅记录错误，不影响请求处理。
+        """
+        try:
+            await self._ensure_warm_pool_initialized(template_id)
+            logger.info(f"Background warm pool initialization completed for {template_id}")
+        except Exception as e:
+            logger.error(f"Background warm pool initialization failed for {template_id}: {e}")
 
     async def _replenish_warm_pool_after_use(self, template_id: str, image: str) -> None:
         """

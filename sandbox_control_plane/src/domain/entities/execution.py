@@ -80,13 +80,21 @@ class Execution:
         self.completed_at = datetime.now()
         self.last_heartbeat_at = datetime.now()
 
-    def mark_failed(self, error_message: str, exit_code: int | None = None) -> None:
+    def mark_failed(
+        self,
+        error_message: str,
+        exit_code: int | None = None,
+        stdout: str | None = None,
+        stderr: str | None = None,
+    ) -> None:
         """标记为失败"""
         self.state = ExecutionState(
             status=ExecutionStatus.FAILED,
             exit_code=exit_code,
             error_message=error_message
         )
+        self.stdout = stdout or ""
+        self.stderr = stderr or ""
         self.completed_at = datetime.now()
 
     def mark_timeout(self) -> None:
