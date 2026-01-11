@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Configuration
-BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-sandbox-base}"
+BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-sandbox-executor-base}"
 BASE_IMAGE_TAG="${BASE_IMAGE_TAG:-latest}"
 REGISTRY="${REGISTRY:-localhost:5000}"
 PUSH="${PUSH:-false}"
@@ -32,9 +32,9 @@ log_error() {
 
 # Build base image
 build_base() {
-    log_info "Building base image: ${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}"
+    log_info "Building executor base image: ${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}"
     docker build \
-        -f "${SCRIPT_DIR}/base/Dockerfile" \
+        -f "${PROJECT_ROOT}/runtime/executor/Dockerfile" \
         -t "${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}" \
         -t "${BASE_IMAGE_NAME}:latest" \
         "${PROJECT_ROOT}"
@@ -48,13 +48,14 @@ build_base() {
 
 # Build template images
 build_templates() {
-    local templates=("python-basic" "python-datascience" "nodejs-basic")
+    # local templates=("python-basic" "python-datascience" "nodejs-basic")
+    local templates=("python-basic")
 
     for template in "${templates[@]}"; do
         log_info "Building template: ${template}"
 
         local template_dir="${SCRIPT_DIR}/templates/${template}"
-        local image_name="sandbox-${template}"
+        local image_name="sandbox-template-${template}"
         local image_tag="v1.0.0"
 
         if [ ! -d "$template_dir" ]; then
@@ -91,9 +92,9 @@ main() {
     log_info "Build complete!"
     log_info "Images:"
     log_info "  - ${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}"
-    log_info "  - sandbox-python-basic:latest"
-    log_info "  - sandbox-python-datascience:latest"
-    log_info "  - sandbox-nodejs-basic:latest"
+    log_info "  - sandbox-template-python-basic:latest"
+    log_info "  - sandbox-template-python-datascience:latest"
+    log_info "  - sandbox-template-nodejs-basic:latest"
 }
 
 # Parse arguments

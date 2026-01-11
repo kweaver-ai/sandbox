@@ -197,6 +197,13 @@ def collect_artifacts(
         ...     print(f"{artifact.path}: {artifact.size} bytes")
     """
     workspace_path = Path(workspace_path)
+    workspace_str = str(workspace_path)
+
+    # If workspace is S3 path, use local /workspace directory instead
+    # S3 paths are handled by the artifact storage layer, not filesystem checks
+    if workspace_str.startswith("s3:/") or workspace_str.startswith("s3://"):
+        logger.info("Workspace is S3 path, using local /workspace directory for artifact scanning", s3_path=workspace_str)
+        workspace_path = Path("/workspace")
 
     if not workspace_path.exists():
         logger.warning("Workspace path does not exist", path=str(workspace_path))
@@ -298,6 +305,12 @@ class ArtifactScanner(IArtifactScannerPort):
             Set of relative file paths
         """
         workspace_path = Path(workspace_path)
+        workspace_str = str(workspace_path)
+
+        # If workspace is S3 path, use local /workspace directory instead
+        if workspace_str.startswith("s3:/") or workspace_str.startswith("s3://"):
+            logger.info("Workspace is S3 path, using local /workspace directory for snapshot", s3_path=workspace_str)
+            workspace_path = Path("/workspace")
 
         if not workspace_path.exists():
             return set()

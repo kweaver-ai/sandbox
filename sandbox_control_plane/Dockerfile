@@ -8,46 +8,40 @@ LABEL maintainer="Sandbox Team"
 LABEL description="Sandbox Control Plane - Management API"
 LABEL version="2.1.0"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    # Docker CLI for container management
-    docker.io \
+# Install system dependencies (optimized)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # curl for health checks
     curl \
     ca-certificates \
-    # Build tools for Python packages
+    # Minimal build tools for Python packages
     gcc \
     python3-dev \
-    musl-dev \
     libffi-dev \
-    # Clean up
+    # Clean up in the same layer to reduce image size
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && rm -rf /tmp/* /var/tmp/*
 
 WORKDIR /app
 
-# Copy dependency files and README
+# Copy dependency files first (better layer caching)
 COPY pyproject.toml uv.lock README.md ./
 
-# Install pip and uv
+# Install uv and Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir uv
+    pip install --no-cache-dir uv && \
+    uv sync --frozen && \
+    # Clean up uv cache
+    rm -rf /root/.cache/uv /root/.cache/pip
 
-# Install Python dependencies
-RUN uv sync --frozen
-
-# Copy source code
-COPY . .
-
-# Create non-root user (optional, can run as root for Docker socket access)
-# RUN useradd -m -u 1000 sandbox && \
-#     chown -R sandbox:sandbox /app
-# USER sandbox
+# Copy source code (dockerignore will exclude unnecessary files)
+COPY src/ ./src/
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
+ENV PYTHONHASHSEED=0
 
 # Expose API port
 EXPOSE 8000

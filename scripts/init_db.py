@@ -1,483 +1,133 @@
 #!/usr/bin/env python3
 """
-数据库初始化脚本
+数据库初始化脚本（完整功能）
 
-创建数据库和所有表结构。
+提供更完整的数据库初始化功能，包括创建数据库、表结构和种子数据。
+适用于开发环境设置和 CI/CD 流水线。
 """
 import asyncio
 import sys
 from pathlib import Path
+import argparse
 
 # 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-from decimal import Decimal
-
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Enum,
-    Float,
-    ForeignKey,
-    Integer,
-    JSON,
-    Numeric,
-    String,
-    Text,
-    UniqueConstraint,
-    Index,
-)
-from sqlalchemy.orm import DeclarativeBase, Session
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from src.infrastructure.config.settings import get_settings
+from src.infrastructure.persistence.database import db_manager
+from src.infrastructure.persistence.seed.seeder import seed_default_data
 
 
-class Base(DeclarativeBase):
-    """SQLAlchemy 基类"""
-    pass
-
-
-# ==================== ORM Models ====================
-
-class Template(Base):
-    """沙箱环境模板"""
-    __tablename__ = "templates"
-
-    id = Column(String(64), primary_key=True)
-    name = Column(String(255), nullable=False, unique=True)
-    description = Column(Text, nullable=True)
-    image_url = Column(String(512), nullable=False)
-    base_image = Column(String(256), nullable=True)
-    pre_installed_packages = Column(JSON, nullable=True)
-    runtime_type = Column(
-        Enum("python3.11", "nodejs20", "java17", "go1.21", name="runtime_type"),
-        nullable=False,
-    )
-    default_cpu_cores = Column(Numeric(3, 1), nullable=False, default=0.5)
-    default_memory_mb = Column(Integer, nullable=False, default=512)
-    default_disk_mb = Column(Integer, nullable=False, default=1024)
-    default_timeout_sec = Column(Integer, nullable=False, default=300)
-    default_env_vars = Column(JSON, nullable=True)
-    security_context = Column(JSON, nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=text("CURRENT_TIMESTAMP"))
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-        onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-
-class Session(Base):
-    """沙箱执行会话 - 按照 sandbox-design-v2.1.md 2.1.3 章节设计"""
-    __tablename__ = "sessions"
-
-    id = Column(String(64), primary_key=True)
-    template_id = Column(
-        String(64), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False
-    )
-    status = Column(
-        Enum(
-            "creating",
-            "running",
-            "completed",
-            "failed",
-            "timeout",
-            "terminated",
-            name="session_status",
-        ),
-        nullable=False,
-        default="creating",
-    )
-    runtime_type = Column(
-        Enum("python3.11", "nodejs20", "java17", "go1.21", name="runtime_type"),
-        nullable=False,
-    )
-    runtime_node = Column(String(128), nullable=True)  # 当前运行的节点（可为空，支持会话迁移）
-    container_id = Column(String(128), nullable=True)  # 当前容器 ID
-    pod_name = Column(String(128), nullable=True)  # 当前 Pod 名称
-    workspace_path = Column(String(256), nullable=True)  # S3 路径：s3://bucket/sessions/{session_id}/
-    resources_cpu = Column(String(16), nullable=False)  # 如 "1", "2"
-    resources_memory = Column(String(16), nullable=False)  # 如 "512Mi", "1Gi"
-    resources_disk = Column(String(16), nullable=False)  # 如 "1Gi", "10Gi"
-    env_vars = Column(JSON, nullable=True)
-    timeout = Column(Integer, nullable=False, default=300)
-    last_activity_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-        onupdate=text("CURRENT_TIMESTAMP"),
-    )
-    completed_at = Column(DateTime, nullable=True)
-
-    __table_args__ = (
-        Index("ix_sessions_status", "status"),
-        Index("ix_sessions_template_id", "template_id"),
-        Index("ix_sessions_created_at", "created_at"),
-        Index("ix_sessions_runtime_node", "runtime_node"),
-        Index("ix_sessions_last_activity_at", "last_activity_at"),
-    )
-
-
-class Execution(Base):
-    """代码执行请求"""
-    __tablename__ = "executions"
-
-    id = Column(String(64), primary_key=True)
-    session_id = Column(
-        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
-    )
-    status = Column(
-        Enum(
-            "pending",
-            "running",
-            "completed",
-            "failed",
-            "timeout",
-            "crashed",
-            name="execution_status",
-        ),
-        nullable=False,
-        default="pending",
-    )
-    code = Column(Text, nullable=False)
-    language = Column(String(32), nullable=False)
-    entrypoint = Column(String(255), nullable=True)
-    event_data = Column(JSON, nullable=True)
-    timeout_sec = Column(Integer, nullable=False)
-    return_value = Column(JSON, nullable=True)
-    stdout = Column(Text, nullable=True)
-    stderr = Column(Text, nullable=True)
-    exit_code = Column(Integer, nullable=True)
-    metrics = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-        onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-    __table_args__ = (
-        Index("ix_executions_session_id", "session_id"),
-        Index("ix_executions_status", "status"),
-    )
-
-
-class Container(Base):
-    """容器实例 (Docker 或 Kubernetes)"""
-    __tablename__ = "containers"
-
-    id = Column(String(128), primary_key=True)
-    session_id = Column(
-        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
-    )
-    runtime_type = Column(
-        Enum("docker", "kubernetes", name="container_runtime"), nullable=False
-    )
-    node_id = Column(
-        String(64), ForeignKey("runtime_nodes.node_id", ondelete="CASCADE"), nullable=False
-    )
-    container_name = Column(String(255), nullable=False)
-    image_url = Column(String(512), nullable=False)
-    status = Column(
-        Enum(
-            "created",
-            "running",
-            "paused",
-            "exited",
-            "deleting",
-            name="container_status",
-        ),
-        nullable=False,
-        default="created",
-    )
-    ip_address = Column(String(45), nullable=True)
-    executor_port = Column(Integer, nullable=True)
-    cpu_cores = Column(Numeric(3, 1), nullable=False)
-    memory_mb = Column(Integer, nullable=False)
-    disk_mb = Column(Integer, nullable=False)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-    started_at = Column(DateTime, nullable=True)
-    exited_at = Column(DateTime, nullable=True)
-
-    __table_args__ = (
-        Index("ix_containers_session_id", "session_id"),
-        Index("ix_containers_node_id", "node_id"),
-    )
-
-
-class Artifact(Base):
-    """执行输出制品"""
-    __tablename__ = "artifacts"
-
-    id = Column(String(64), primary_key=True)
-    execution_id = Column(
-        String(64), ForeignKey("executions.id", ondelete="CASCADE"), nullable=False
-    )
-    artifact_type = Column(
-        Enum("file", "stdout", "stderr", "return_value", name="artifact_type"),
-        nullable=False,
-    )
-    name = Column(String(255), nullable=True)
-    s3_path = Column(String(512), nullable=False)
-    size_bytes = Column(Integer, nullable=False)
-    content_type = Column(String(128), nullable=True)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-
-    __table_args__ = (
-        Index("ix_artifacts_execution_id", "execution_id"),
-    )
-
-
-class RuntimeNode(Base):
-    """容器运行时节点 (Docker 主机或 Kubernetes 节点)"""
-    __tablename__ = "runtime_nodes"
-
-    node_id = Column(String(64), primary_key=True)
-    hostname = Column(String(255), nullable=False, unique=True)
-    runtime_type = Column(
-        Enum("docker", "kubernetes", name="node_runtime"), nullable=False
-    )
-    ip_address = Column(String(45), nullable=False)
-    api_endpoint = Column(String(512), nullable=True)
-    status = Column(
-        Enum(
-            "online",
-            "offline",
-            "draining",
-            "maintenance",
-            name="node_status",
-        ),
-        nullable=False,
-        default="online",
-    )
-    total_cpu_cores = Column(Numeric(5, 1), nullable=False)
-    total_memory_mb = Column(Integer, nullable=False)
-    allocated_cpu_cores = Column(Numeric(5, 1), nullable=False, default=0)
-    allocated_memory_mb = Column(Integer, nullable=False, default=0)
-    running_containers = Column(Integer, nullable=False, default=0)
-    max_containers = Column(Integer, nullable=False)
-    cached_images = Column(JSON, nullable=True)
-    labels = Column(JSON, nullable=True)
-    last_heartbeat_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=text("CURRENT_TIMESTAMP"),
-    )
-
-    __table_args__ = (
-        Index("ix_runtime_nodes_status", "status"),
-    )
-
-
-async def create_database():
-    """创建数据库"""
-    from dotenv import load_dotenv
-    load_dotenv()
-
+async def create_database(database_url: str, db_name: str) -> None:
+    """创建数据库（仅开发环境）"""
     # 连接到 MySQL 服务器（不指定数据库）
-    database_url = "mysql+aiomysql://root:12345678@127.0.0.1:3308"
-    engine = create_async_engine(database_url, echo=True)
+    url = database_url.rsplit('/', 1)[0]  # 移除数据库名
+    engine = create_async_engine(url, echo=False)
 
-    async with engine.begin() as conn:
-        # 删除旧数据库（如果存在）
-        await conn.execute(text("DROP DATABASE IF EXISTS sandbox_control_plane"))
-        print("✓ Old database dropped (if existed)")
-
-        # 创建新数据库
-        await conn.execute(text("CREATE DATABASE IF NOT EXISTS sandbox_control_plane"))
-        print("✓ Database 'sandbox_control_plane' created")
-
-    await engine.dispose()
+    try:
+        async with engine.begin() as conn:
+            # 创建数据库（如果不存在）
+            await conn.execute(text(f"CREATE DATABASE IF NOT EXISTS `{db_name}`"))
+            print(f"✓ Database '{db_name}' created (or already exists)")
+    finally:
+        await engine.dispose()
 
 
-async def create_tables():
-    """创建所有表"""
-    from dotenv import load_dotenv
-    load_dotenv()
+async def drop_database(database_url: str, db_name: str) -> None:
+    """删除数据库（仅开发环境，谨慎使用）"""
+    # 连接到 MySQL 服务器（不指定数据库）
+    url = database_url.rsplit('/', 1)[0]  # 移除数据库名
+    engine = create_async_engine(url, echo=False)
 
-    # 连接到 sandbox_control_plane 数据库
-    database_url = "mysql+aiomysql://root:12345678@127.0.0.1:3308/sandbox_control_plane"
-    engine = create_async_engine(database_url, echo=True)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        print("✓ All tables created successfully")
-
-    await engine.dispose()
-
-
-async def seed_default_templates():
-    """插入默认模板"""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    database_url = "mysql+aiomysql://root:12345678@127.0.0.1:3308/sandbox_control_plane"
-    engine = create_async_engine(database_url, echo=False)
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with async_session() as session:
-        # 检查是否已有模板
-        from sqlalchemy import select
-        result = await session.execute(select(Template).limit(1))
-        if result.scalar_one_or_none():
-            print("✓ Templates already exist, skipping seed")
-            return
-
-        # 创建默认模板
-        templates = [
-            Template(
-                id="python-basic",
-                name="Python Basic",
-                description="基础 Python 3.11 环境",
-                image_url="python:3.11-slim",
-                base_image="python:3.11-slim",
-                pre_installed_packages=["pip", "setuptools", "wheel"],
-                runtime_type="python3.11",
-                default_cpu_cores=Decimal("0.5"),
-                default_memory_mb=512,
-                default_disk_mb=1024,
-                default_timeout_sec=300,
-                default_env_vars={"PYTHONPATH": "/app"},
-                security_context={"network_enabled": False, "allow_privilege_escalation": False},
-            ),
-            Template(
-                id="python-datascience",
-                name="Python Data Science",
-                description="Python 数据科学环境，包含 NumPy, Pandas 等",
-                image_url="python:3.11-datascience",
-                base_image="python:3.11-slim",
-                pre_installed_packages=["numpy", "pandas", "matplotlib", "scipy", "jupyter"],
-                runtime_type="python3.11",
-                default_cpu_cores=Decimal("2.0"),
-                default_memory_mb=2048,
-                default_disk_mb=5120,
-                default_timeout_sec=600,
-                default_env_vars={
-                    "PYTHONPATH": "/app",
-                    "JUPYTER_ENABLE": "true",
-                },
-                security_context={"network_enabled": False, "allow_privilege_escalation": False},
-            ),
-            Template(
-                id="nodejs-basic",
-                name="Node.js Basic",
-                description="基础 Node.js 20 环境",
-                image_url="node:20-slim",
-                base_image="node:20-slim",
-                pre_installed_packages=["npm", "yarn"],
-                runtime_type="nodejs20",
-                default_cpu_cores=Decimal("0.5"),
-                default_memory_mb=512,
-                default_disk_mb=1024,
-                default_timeout_sec=300,
-                default_env_vars={"NODE_ENV": "production"},
-                security_context={"network_enabled": False, "allow_privilege_escalation": False},
-            ),
-        ]
-
-        for template in templates:
-            session.add(template)
-
-        await session.commit()
-        print(f"✓ Seeded {len(templates)} default templates")
-
-
-async def seed_default_runtime_nodes():
-    """插入默认运行时节点"""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    database_url = "mysql+aiomysql://root:12345678@127.0.0.1:3308/sandbox_control_plane"
-    engine = create_async_engine(database_url, echo=False)
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with async_session() as session:
-        # 检查是否已有节点
-        from sqlalchemy import select
-        result = await session.execute(select(RuntimeNode).limit(1))
-        if result.scalar_one_or_none():
-            print("✓ Runtime nodes already exist, skipping seed")
-            return
-
-        # 创建默认运行时节点
-        nodes = [
-            RuntimeNode(
-                node_id="node-1",
-                hostname="localhost",
-                runtime_type="docker",
-                ip_address="127.0.0.1",
-                api_endpoint="unix:///var/run/docker.sock",
-                status="online",
-                total_cpu_cores=Decimal("4.0"),
-                total_memory_mb=8192,
-                allocated_cpu_cores=Decimal("0"),
-                allocated_memory_mb=0,
-                running_containers=0,
-                max_containers=50,
-                cached_images=["python:3.11-slim", "node:20-slim", "python:3.11-datascience"],
-                labels={"environment": "development", "zone": "local"},
-            ),
-        ]
-
-        for node in nodes:
-            session.add(node)
-
-        await session.commit()
-        print(f"✓ Seeded {len(nodes)} default runtime nodes")
+    try:
+        async with engine.begin() as conn:
+            # 删除数据库（如果存在）
+            await conn.execute(text(f"DROP DATABASE IF EXISTS `{db_name}`"))
+            print(f"✓ Database '{db_name}' dropped")
+    finally:
+        await engine.dispose()
 
 
 async def main():
     """主函数"""
+    parser = argparse.ArgumentParser(
+        description="Sandbox Control Plane - Database Initialization"
+    )
+    parser.add_argument(
+        "--create-db",
+        action="store_true",
+        help="Create database (development only)"
+    )
+    parser.add_argument(
+        "--drop-db",
+        action="store_true",
+        help="Drop database before creating (use with caution!)"
+    )
+    parser.add_argument(
+        "--skip-seed",
+        action="store_true",
+        help="Skip seeding default data"
+    )
+    parser.add_argument(
+        "--force-seed",
+        action="store_true",
+        help="Force re-seeding even if data exists"
+    )
+
+    args = parser.parse_args()
+    settings = get_settings()
+
     print("=" * 60)
     print("Sandbox Control Plane - Database Initialization")
     print("=" * 60)
+    print(f"Environment: {settings.environment}")
+    print(f"Database: {settings.database_url.split('@')[-1]}")
+    print("=" * 60)
 
-    # 1. 创建数据库
-    print("\n[Step 1/3] Creating database...")
-    await create_database()
+    # 安全检查
+    if args.drop_db and settings.environment == "production":
+        print("❌ ERROR: --drop-db is not allowed in production!")
+        sys.exit(1)
 
-    # 2. 创建表
-    print("\n[Step 2/3] Creating tables...")
-    await create_tables()
+    # 1. 创建/删除数据库
+    if args.create_db or args.drop_db:
+        if settings.environment == "production":
+            print("\n⚠ WARNING: Skipping database creation in production")
+            print("   Use manual database setup in production environments")
+        else:
+            print("\n[Step 1/3] Database setup...")
+            db_name = settings.database_url.split('/')[-1]
 
-    # 3. 插入默认数据
-    print("\n[Step 3/3] Seeding default data...")
-    await seed_default_templates()
-    await seed_default_runtime_nodes()
+            if args.drop_db:
+                await drop_database(settings.database_url, db_name)
+
+            await create_database(settings.database_url, db_name)
+
+    # 2. 初始化数据库管理器
+    print("\n[Step 2/3] Initializing database manager...")
+    db_manager.initialize()
+    print("✓ Database manager initialized")
+
+    # 3. 创建表
+    print("\n[Step 3/3] Creating tables...")
+    await db_manager.create_tables()
+    print("✓ Database tables created")
+
+    # 4. 初始化默认数据
+    if not args.skip_seed:
+        print("\n[Step 4/4] Seeding default data...")
+        stats = await seed_default_data(force=args.force_seed)
+        print(f"✓ Default data seeded: {stats['total']} items")
+        print(f"  - Runtime nodes: {stats['runtime_nodes']}")
+        print(f"  - Templates: {stats['templates']}")
+    else:
+        print("\n[Step 4/4] Skipping default data seeding")
+
+    # 关闭连接
+    await db_manager.close()
 
     print("\n" + "=" * 60)
     print("✅ Database initialization completed!")

@@ -33,10 +33,21 @@ class SubprocessRunner:
         Initialize the subprocess runner.
 
         Args:
-            workspace_path: Path to the workspace directory
+            workspace_path: Path to the workspace directory (can be S3 path)
         """
-        self.workspace_path = workspace_path
-        logger.warning(f"SubprocessRunner initialized - NO SECURITY ISOLATION, workspace_path={workspace_path}")
+        # Store original workspace path for reference
+        self.original_workspace_path = workspace_path
+        workspace_str = str(workspace_path)
+
+        # If workspace is S3 path, use local /workspace directory for execution
+        # S3 paths are handled by the artifact storage layer
+        if workspace_str.startswith("s3:/") or workspace_str.startswith("s3://"):
+            logger.warning(f"Workspace is S3 path ({workspace_str}), using local /workspace for execution")
+            self.workspace_path = Path("/workspace")
+        else:
+            self.workspace_path = workspace_path
+
+        logger.warning(f"SubprocessRunner initialized - NO SECURITY ISOLATION, workspace_path={self.workspace_path}")
 
     async def execute(self, execution: Execution) -> ExecutionResult:
         """

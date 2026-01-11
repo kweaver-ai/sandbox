@@ -60,6 +60,41 @@ class DatabaseManager:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
+    async def initialize_with_seed(
+        self,
+        create_tables: bool = False,
+        seed_data: bool = False,
+        force_seed: bool = False
+    ) -> dict:
+        """
+        初始化数据库并可选地创建表和种子数据
+
+        Args:
+            create_tables: 是否创建数据库表
+            seed_data: 是否初始化种子数据
+            force_seed: 是否强制重新创建种子数据
+
+        Returns:
+            包含初始化结果的字典
+        """
+        result = {
+            "tables_created": False,
+            "seeded": False,
+            "seed_stats": {}
+        }
+
+        if create_tables:
+            await self.create_tables()
+            result["tables_created"] = True
+
+        if seed_data:
+            from src.infrastructure.persistence.seed.seeder import seed_default_data
+            stats = await seed_default_data(force=force_seed)
+            result["seeded"] = True
+            result["seed_stats"] = stats
+
+        return result
+
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """

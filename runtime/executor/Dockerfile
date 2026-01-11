@@ -1,16 +1,18 @@
 # Sandbox Executor Base Image
-# This image contains the executor daemon and Bubblewrap for secure code execution
+# This image serves as the base for all template images
+# Contains the executor daemon and Bubblewrap for secure code execution
 
-FROM python:3.11-slim
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim
 
 # Metadata
 LABEL maintainer="Sandbox Team"
-LABEL description="Sandbox Executor - Code execution daemon with Bubblewrap isolation"
+LABEL description="Sandbox Executor Base - Daemon + Bubblewrap Isolation"
 LABEL version="1.0.0"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    # Bubblewrap for process isolation
+    # Bubblewrap for process isolation (second layer)
     bubblewrap \
     # curl for health checks
     curl \
@@ -23,9 +25,6 @@ RUN apt-get update && apt-get install -y \
 # The executor runs as UID:GID 1000:1000 for security
 RUN groupadd -g 1000 sandbox && \
     useradd -m -u 1000 -g sandbox sandbox
-
-# Set working directory
-WORKDIR /app
 
 # Copy executor code
 COPY runtime/executor/ /app/executor/
@@ -46,8 +45,9 @@ USER sandbox
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV WORKSPACE_PATH=/workspace
+ENV PYTHONPATH=/app
 
-# Expose health check and API port
+# Expose executor API port
 EXPOSE 8080
 
 # Health check

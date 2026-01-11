@@ -53,12 +53,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db_manager.initialize()
     logger.info("Database initialized")
 
-    # 创建数据库表（开发环境自动创建）
+    # 根据环境决定是否自动创建表和初始化数据
     from src.infrastructure.config.settings import get_settings
+
     settings = get_settings()
-    if settings.environment == "development":
+    if settings.environment in ("development", "staging"):
+        from src.infrastructure.persistence.seed.seeder import seed_default_data
+
+        # 创建表
         await db_manager.create_tables()
         logger.info("Database tables created")
+
+        # 初始化默认数据
+        seed_stats = await seed_default_data(force=False)
+        logger.info(
+            "Default data initialized",
+            runtime_nodes=seed_stats["runtime_nodes"],
+            templates=seed_stats["templates"]
+        )
 
     # ============= 启动时状态同步 =============
     from src.infrastructure.dependencies import get_state_sync_service
@@ -95,27 +107,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 注册会话清理任务（每 5 分钟）
     from src.application.services.session_cleanup_service import SessionCleanupService
-    from src.infrastructure.dependencies import (
-        get_session_repository,
-        get_docker_scheduler_service,
-    )
+    from src.infrastructure.dependencies import get_docker_scheduler_service
+    from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+    from src.infrastructure.persistence.database import db_manager
 
-    # 创建 SessionCleanupService 实例
-    session_repo = await get_session_repository().__anext__()
-    scheduler = get_docker_scheduler_service(
-        runtime_node_repo=None,  # 将在依赖注入中解析
-        template_repo=None,  # 将在依赖注入中解析
-    )
-    session_cleanup_svc = SessionCleanupService(
-        session_repo=session_repo,
-        scheduler=scheduler,
-        idle_timeout_minutes=30,  # 30 分钟空闲超时
-        max_lifetime_hours=6,  # 6 小时最大生命周期
-    )
+    async def session_cleanup_task():
+        """会话清理任务（每次执行时创建新的 repository）"""
+        async with db_manager.get_session() as session:
+            session_repo = SqlSessionRepository(session)
+            scheduler = get_docker_scheduler_service(
+                runtime_node_repo=None,
+                template_repo=None,
+            )
+            cleanup_svc = SessionCleanupService(
+                session_repo=session_repo,
+                scheduler=scheduler,
+                idle_timeout_minutes=30,
+                max_lifetime_hours=6,
+            )
+            return await cleanup_svc.cleanup_idle_sessions()
 
     background_task_manager.register_task(
         name="session_cleanup",
-        func=session_cleanup_svc.cleanup_idle_sessions,
+        func=session_cleanup_task,
         interval_seconds=300,  # 5 分钟
         initial_delay_seconds=60,  # 首次执行延迟 1 分钟
     )

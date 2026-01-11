@@ -15,7 +15,7 @@
 
 This is a single backend service project located at repository root:
 - **Source code**: `sandbox_control_plane/`
-- **Tests**: `tests/`
+- **Tests**: `sandbox_control_plane/tests/`
 - **API contracts**: `specs/001-control-plane/contracts/`
 
 ---
@@ -94,18 +94,18 @@ This is a single backend service project located at repository root:
 
 ### Contract Tests for User Story 1
 
-- [X] T035 [P] [US1] Contract test for POST /sessions in tests/contract/test_sessions_api.py (validate CreateSessionRequest, SessionResponse schema, 201 status)
-- [X] T036 [P] [US1] Contract test for GET /sessions/{id} in tests/contract/test_sessions_api.py (validate SessionResponse schema, 404 for non-existent session)
-- [X] T037 [P] [US1] Contract test for DELETE /sessions/{id} in tests/contract/test_sessions_api.py (validate termination response, 404 for non-existent session)
-- [X] T038 [P] [US1] Contract test for GET /sessions with filters in tests/contract/test_sessions_api.py (validate pagination, status filter, template_id filter)
-- [X] T039 [P] [US1] Contract test for POST /internal/sessions/{id}/container_ready in tests/contract/test_internal_api.py (validate container ready callback)
-- [X] T040 [P] [US1] Contract test for POST /internal/sessions/{id}/container_exited in tests/contract/test_internal_api.py (validate container exit callback with exit_code)
+- [X] T035 [P] [US1] Contract test for POST /sessions in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_sessions_api.py (validate CreateSessionRequest, SessionResponse schema, 201 status)
+- [X] T036 [P] [US1] Contract test for GET /sessions/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_sessions_api.py (validate SessionResponse schema, 404 for non-existent session)
+- [X] T037 [P] [US1] Contract test for DELETE /sessions/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_sessions_api.py (validate termination response, 404 for non-existent session)
+- [X] T038 [P] [US1] Contract test for GET /sessions with filters in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_sessions_api.py (validate pagination, status filter, template_id filter)
+- [X] T039 [P] [US1] Contract test for POST /internal/sessions/{id}/container_ready in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate container ready callback)
+- [X] T040 [P] [US1] Contract test for POST /internal/sessions/{id}/container_exited in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate container exit callback with exit_code)
 
 ### Integration Tests for User Story 1
 
-- [X] T041 [P] [US1] Integration test for session lifecycle in tests/integration/test_session_lifecycle.py (create → creating status, container_ready callback → running status, terminate → terminated status)
-- [X] T042 [P] [US1] Integration test for session timeout in tests/integration/test_session_lifecycle.py (create session with short timeout, verify auto-cleanup after expires_at)
-- [X] T043 [P] [US1] Integration test for session not found errors in tests/integration/test_session_lifecycle.py (query non-existent session, verify structured error with actionable guidance)
+- [X] T041 [P] [US1] Integration test for session lifecycle in sandbox_control_plane/tests/integration/test_session_lifecycle.py (create → creating status, container_ready callback → running status, terminate → terminated status)
+- [X] T042 [P] [US1] Integration test for session timeout in sandbox_control_plane/tests/integration/test_session_lifecycle.py (create session with short timeout, verify auto-cleanup after expires_at)
+- [X] T043 [P] [US1] Integration test for session not found errors in sandbox_control_plane/tests/integration/test_session_lifecycle.py (query non-existent session, verify structured error with actionable guidance)
 
 ### Implementation for User Story 1
 
@@ -139,9 +139,9 @@ This is a single backend service project located at repository root:
 
 #### Unit Tests for User Story 1
 
-- [X] T060 [P] [US1] Unit test for Session lifecycle in tests/unit/test_session_manager.py (validate state transitions, status update logic, expires_at calculation)
-- [X] T061 [P] [US1] Unit test for Session cleanup in tests/unit/test_session_manager.py (validate idle session detection, expired session detection, cleanup invocation)
-- [X] T062 [P] [US1] Unit test for Session repository in tests/unit/test_repositories.py (validate CRUD operations, status queries, agent_id queries for affinity)
+- [X] T060 [P] [US1] Unit test for Session lifecycle in sandbox_control_plane/tests/unit/test_session_manager.py (validate state transitions, status update logic, expires_at calculation)
+- [X] T061 [P] [US1] Unit test for Session cleanup in sandbox_control_plane/tests/unit/test_session_manager.py (validate idle session detection, expired session detection, cleanup invocation)
+- [X] T062 [P] [US1] Unit test for Session repository in sandbox_control_plane/tests/unit/test_repositories.py (validate CRUD operations, status queries, agent_id queries for affinity)
 
 **Checkpoint**: At this point, User Story 1 should be fully functional - users can create sessions, query status, and terminate sessions. Test independently before proceeding.
 
@@ -155,22 +155,22 @@ This is a single backend service project located at repository root:
 
 ### Contract Tests for User Story 2
 
-- [X] T063 [P] [US2] Contract test for POST /sessions/{id}/execute in tests/contract/test_executions_api.py (validate ExecuteRequest, ExecuteResponse schema, 200 status with execution_id)
-- [X] T064 [P] [US2] Contract test for GET /executions/{id}/status in tests/contract/test_executions_api.py (validate ExecutionStatus schema, status values: pending/running/completed/failed/timeout)
-- [X] T065 [P] [US2] Contract test for GET /executions/{id}/result in tests/contract/test_executions_api.py (validate ExecutionResult schema with stdout/stderr/exit_code/return_value/metrics/artifacts)
-- [X] T066 [P] [US2] Contract test for GET /sessions/{id}/executions in tests/contract/test_executions_api.py (validate execution list with pagination and status filter)
-- [X] T067 [P] [US2] Contract test for POST /internal/executions/{id}/result in tests/contract/test_internal_api.py (validate ExecutionResultReport, idempotency via Idempotency-Key header)
-- [X] T068 [P] [US2] Contract test for POST /internal/executions/{id}/status in tests/contract/test_internal_api.py (validate ExecutionStatusReport for running/timeout/crashed)
-- [X] T069 [P] [US2] Contract test for POST /internal/executions/{id}/heartbeat in tests/contract/test_internal_api.py (validate heartbeat timestamp update)
-- [X] T070 [P] [US2] Contract test for POST /internal/executions/{id}/artifacts in tests/contract/test_internal_api.py (validate ArtifactMetadata list)
+- [X] T063 [P] [US2] Contract test for POST /sessions/{id}/execute in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_executions_api.py (validate ExecuteRequest, ExecuteResponse schema, 200 status with execution_id)
+- [X] T064 [P] [US2] Contract test for GET /executions/{id}/status in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_executions_api.py (validate ExecutionStatus schema, status values: pending/running/completed/failed/timeout)
+- [X] T065 [P] [US2] Contract test for GET /executions/{id}/result in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_executions_api.py (validate ExecutionResult schema with stdout/stderr/exit_code/return_value/metrics/artifacts)
+- [X] T066 [P] [US2] Contract test for GET /sessions/{id}/executions in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_executions_api.py (validate execution list with pagination and status filter)
+- [X] T067 [P] [US2] Contract test for POST /internal/executions/{id}/result in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate ExecutionResultReport, idempotency via Idempotency-Key header)
+- [X] T068 [P] [US2] Contract test for POST /internal/executions/{id}/status in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate ExecutionStatusReport for running/timeout/crashed)
+- [X] T069 [P] [US2] Contract test for POST /internal/executions/{id}/heartbeat in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate heartbeat timestamp update)
+- [X] T070 [P] [US2] Contract test for POST /internal/executions/{id}/artifacts in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_internal_api.py (validate ArtifactMetadata list)
 
 ### Integration Tests for User Story 2
 
-- [X] T071 [P] [US2] Integration test for code execution flow in tests/integration/test_code_execution.py (create session, submit execution, poll status until completed, retrieve results)
-- [X] T072 [P] [US2] Integration test for execution timeout in tests/integration/test_code_execution.py (submit execution with 1s timeout, handler sleeps for 5s, verify status = timeout)
-- [X] T073 [P] [US2] Integration test for execution failure in tests/integration/test_code_execution.py (submit code with syntax error, verify status = failed, stderr contains traceback)
-- [X] T074 [P] [US2] Integration test for heartbeat timeout and crash detection in tests/integration/test_code_execution.py (submit execution, stop heartbeat, wait 15s, verify status = crashed)
-- [X] T075 [P] [US2] Integration test for idempotent result reporting in tests/integration/test_code_execution.py (submit same result twice with Idempotency-Key, verify only one execution record created)
+- [X] T071 [P] [US2] Integration test for code execution flow in sandbox_control_plane/tests/integration/test_code_execution.py (create session, submit execution, poll status until completed, retrieve results)
+- [X] T072 [P] [US2] Integration test for execution timeout in sandbox_control_plane/tests/integration/test_code_execution.py (submit execution with 1s timeout, handler sleeps for 5s, verify status = timeout)
+- [X] T073 [P] [US2] Integration test for execution failure in sandbox_control_plane/tests/integration/test_code_execution.py (submit code with syntax error, verify status = failed, stderr contains traceback)
+- [X] T074 [P] [US2] Integration test for heartbeat timeout and crash detection in sandbox_control_plane/tests/integration/test_code_execution.py (submit execution, stop heartbeat, wait 15s, verify status = crashed)
+- [X] T075 [P] [US2] Integration test for idempotent result reporting in sandbox_control_plane/tests/integration/test_code_execution.py (submit same result twice with Idempotency-Key, verify only one execution record created)
 
 ### Implementation for User Story 2
 
@@ -204,10 +204,10 @@ This is a single backend service project located at repository root:
 
 #### Unit Tests for User Story 2
 
-- [X] T092 [P] [US2] Unit test for execution submission in tests/unit/test_execution.py (validate execution_id generation, executor HTTP call, status = pending)
-- [X] T093 [P] [US2] Unit test for result reporting in tests/unit/test_execution.py (validate idempotency check, status update, result storage)
-- [X] T094 [P] [US2] Unit test for heartbeat timeout detection in tests/unit/test_execution.py (validate 15s timeout, crashed status, retry logic)
-- [X] T095 [P] [US2] Unit test for Execution repository in tests/unit/test_repositories.py (validate CRUD operations, idempotent result updates, status queries)
+- [X] T092 [P] [US2] Unit test for execution submission in sandbox_control_plane/tests/unit/test_execution.py (validate execution_id generation, executor HTTP call, status = pending)
+- [X] T093 [P] [US2] Unit test for result reporting in sandbox_control_plane/tests/unit/test_execution.py (validate idempotency check, status update, result storage)
+- [X] T094 [P] [US2] Unit test for heartbeat timeout detection in sandbox_control_plane/tests/unit/test_execution.py (validate 15s timeout, crashed status, retry logic)
+- [X] T095 [P] [US2] Unit test for Execution repository in sandbox_control_plane/tests/unit/test_repositories.py (validate CRUD operations, idempotent result updates, status queries)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently. Users can create sessions, execute code, retrieve results. Complete MVP functionality.
 
@@ -221,17 +221,17 @@ This is a single backend service project located at repository root:
 
 ### Contract Tests for User Story 3
 
-- [X] T096 [P] [US3] Contract test for POST /templates in tests/contract/test_templates_api.py (validate CreateTemplateRequest, Template schema, 201 status)
-- [X] T097 [P] [US3] Contract test for GET /templates in tests/contract/test_templates_api.py (validate template list with pagination)
-- [X] T098 [P] [US3] Contract test for GET /templates/{id} in tests/contract/test_templates_api.py (validate Template schema with all fields, 404 for non-existent template)
-- [X] T099 [P] [US3] Contract test for PUT /templates/{id} in tests/contract/test_templates_api.py (validate UpdateTemplateRequest, updated template response, 404 for non-existent)
-- [X] T100 [P] [US3] Contract test for DELETE /templates/{id} in tests/contract/test_templates_api.py (validate 204 on success, 400 if template has active sessions)
+- [X] T096 [P] [US3] Contract test for POST /templates in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_templates_api.py (validate CreateTemplateRequest, Template schema, 201 status)
+- [X] T097 [P] [US3] Contract test for GET /templates in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_templates_api.py (validate template list with pagination)
+- [X] T098 [P] [US3] Contract test for GET /templates/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_templates_api.py (validate Template schema with all fields, 404 for non-existent template)
+- [X] T099 [P] [US3] Contract test for PUT /templates/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_templates_api.py (validate UpdateTemplateRequest, updated template response, 404 for non-existent)
+- [X] T100 [P] [US3] Contract test for DELETE /templates/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_templates_api.py (validate 204 on success, 400 if template has active sessions)
 
 ### Integration Tests for User Story 3
 
-- [X] T101 [P] [US3] Integration test for template CRUD in tests/integration/test_template_crud.py (create template, list templates, get template by id, update template, delete template)
-- [X] T102 [P] [US3] Integration test for template validation in tests/integration/test_template_crud.py (create template with invalid image, verify validation error; create template with privileged user, verify security rejection)
-- [X] T103 [P] [US3] Integration test for template deletion prevention in tests/integration/test_template_crud.py (create session with template, attempt to delete template, verify 400 error with deprecation recommendation)
+- [X] T101 [P] [US3] Integration test for template CRUD in sandbox_control_plane/tests/integration/test_template_crud.py (create template, list templates, get template by id, update template, delete template)
+- [X] T102 [P] [US3] Integration test for template validation in sandbox_control_plane/tests/integration/test_template_crud.py (create template with invalid image, verify validation error; create template with privileged user, verify security rejection)
+- [X] T103 [P] [US3] Integration test for template deletion prevention in sandbox_control_plane/tests/integration/test_template_crud.py (create session with template, attempt to delete template, verify 400 error with deprecation recommendation)
 
 ### Implementation for User Story 3
 
@@ -259,9 +259,9 @@ This is a single backend service project located at repository root:
 
 #### Unit Tests for User Story 3
 
-- [X] T117 [P] [US3] Unit test for Template validation in tests/unit/test_template_manager.py (validate image URL validation, security context validation, resource range validation)
-- [X] T118 [P] [US3] Unit test for Template CRUD in tests/unit/test_template_manager.py (validate create, read, update, delete operations, uniqueness constraint, active session check)
-- [X] T119 [P] [US3] Unit test for Template repository in tests/unit/test_repositories.py (validate CRUD operations, active templates query)
+- [X] T117 [P] [US3] Unit test for Template validation in sandbox_control_plane/tests/unit/test_template_manager.py (validate image URL validation, security context validation, resource range validation)
+- [X] T118 [P] [US3] Unit test for Template CRUD in sandbox_control_plane/tests/unit/test_template_manager.py (validate create, read, update, delete operations, uniqueness constraint, active session check)
+- [X] T119 [P] [US3] Unit test for Template repository in sandbox_control_plane/tests/unit/test_repositories.py (validate CRUD operations, active templates query)
 
 **Checkpoint**: At this point, User Stories 1, 2, AND 3 should all work independently. Users can create custom templates, manage templates, and use templates for session creation.
 
@@ -275,16 +275,16 @@ This is a single backend service project located at repository root:
 
 ### Contract Tests for User Story 4
 
-- [X] T120 [P] [US4] Contract test for POST /sessions/{id}/files/upload in tests/contract/test_files_api.py (validate multipart/form-data, file path, size limit 100MB, 200 response with path and size)
-- [X] T121 [P] [US4] Contract test for GET /sessions/{id}/files/{name} in tests/contract/test_files_api.py (validate file content download, 307 redirect to S3 presigned URL for large files, 404 for non-existent file)
-- [X] T122 [P] [US4] Contract test for file size validation in tests/contract/test_files_api.py (upload file > 100MB, verify 400 error with size limit message)
+- [X] T120 [P] [US4] Contract test for POST /sessions/{id}/files/upload in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_files_api.py (validate multipart/form-data, file path, size limit 100MB, 200 response with path and size)
+- [X] T121 [P] [US4] Contract test for GET /sessions/{id}/files/{name} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_files_api.py (validate file content download, 307 redirect to S3 presigned URL for large files, 404 for non-existent file)
+- [X] T122 [P] [US4] Contract test for file size validation in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_files_api.py (upload file > 100MB, verify 400 error with size limit message)
 
 ### Integration Tests for User Story 4
 
-- [X] T123 [P] [US4] Integration test for file upload and download in tests/integration/test_file_operations.py (upload file to workspace, download file by path, verify content matches)
-- [X] T124 [P] [US4] Integration test for file access during execution in tests/integration/test_file_operations.py (upload file, execute code that reads /workspace/{file_path}, verify execution succeeds)
-- [X] T125 [P] [US4] Integration test for artifact file download in tests/integration/test_file_operations.py (execute code that generates file, retrieve execution result with artifacts list, download artifact file, verify content)
-- [X] T126 [P] [US4] Integration test for S3 presigned URL generation in tests/integration/test_file_operations.py (upload large file > 10MB, verify download returns 307 redirect to S3 presigned URL)
+- [X] T123 [P] [US4] Integration test for file upload and download in sandbox_control_plane/tests/integration/test_file_operations.py (upload file to workspace, download file by path, verify content matches)
+- [X] T124 [P] [US4] Integration test for file access during execution in sandbox_control_plane/tests/integration/test_file_operations.py (upload file, execute code that reads /workspace/{file_path}, verify execution succeeds)
+- [X] T125 [P] [US4] Integration test for artifact file download in sandbox_control_plane/tests/integration/test_file_operations.py (execute code that generates file, retrieve execution result with artifacts list, download artifact file, verify content)
+- [X] T126 [P] [US4] Integration test for S3 presigned URL generation in sandbox_control_plane/tests/integration/test_file_operations.py (upload large file > 10MB, verify download returns 307 redirect to S3 presigned URL)
 
 ### Implementation for User Story 4
 
@@ -307,9 +307,9 @@ This is a single backend service project located at repository root:
 
 #### Unit Tests for User Story 4
 
-- [X] T135 [P] [US4] Unit test for file upload in tests/unit/test_file_operations.py (validate file size validation, S3 upload invocation, path generation)
-- [X] T136 [P] [US4] Unit test for file download in tests/unit/test_file_operations.py (validate S3 check invocation, presigned URL generation for large files, direct content return for small files)
-- [X] T137 [P] [US4] Unit test for workspace operations in tests/unit/test_storage.py (validate upload_file, download_file, generate_presigned_url, list_files)
+- [X] T135 [P] [US4] Unit test for file upload in sandbox_control_plane/tests/unit/test_file_operations.py (validate file size validation, S3 upload invocation, path generation)
+- [X] T136 [P] [US4] Unit test for file download in sandbox_control_plane/tests/unit/test_file_operations.py (validate S3 check invocation, presigned URL generation for large files, direct content return for small files)
+- [X] T137 [P] [US4] Unit test for workspace operations in sandbox_control_plane/tests/unit/test_storage.py (validate upload_file, download_file, generate_presigned_url, list_files)
 
 **Checkpoint**: At this point, User Stories 1-4 should all work independently. Users can upload files, execute code with file I/O, and download generated files.
 
@@ -323,18 +323,18 @@ This is a single backend service project located at repository root:
 
 ### Contract Tests for User Story 5
 
-- [X] T138 [P] [US5] Contract test for GET /containers in tests/contract/test_containers_api.py (validate container list with status and runtime_type filters, pagination)
-- [X] T139 [P] [US5] Contract test for GET /containers/{id} in tests/contract/test_containers_api.py (validate ContainerInfo schema with session_id, template_id, resources, uptime_seconds, 404 for non-existent)
-- [X] T140 [P] [US5] Contract test for GET /containers/{id}/logs in tests/contract/test_containers_api.py (validate log content, tail parameter, time filtering)
-- [X] T141 [P] [US5] Contract test for GET /health endpoint in tests/contract/test_health.py (validate health check response with database, S3, runtime connectivity status)
+- [X] T138 [P] [US5] Contract test for GET /containers in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_containers_api.py (validate container list with status and runtime_type filters, pagination)
+- [X] T139 [P] [US5] Contract test for GET /containers/{id} in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_containers_api.py (validate ContainerInfo schema with session_id, template_id, resources, uptime_seconds, 404 for non-existent)
+- [X] T140 [P] [US5] Contract test for GET /containers/{id}/logs in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_containers_api.py (validate log content, tail parameter, time filtering)
+- [X] T141 [P] [US5] Contract test for GET /health endpoint in sandbox_control_plane/sandbox_control_plane/tests/integration/api/test_health.py (validate health check response with database, S3, runtime connectivity status)
 
 ### Integration Tests for User Story 5
 
-- [X] T142 [P] [US5] Integration test for container listing in tests/integration/test_container_monitoring.py (create multiple sessions, list containers, verify status filter works, verify runtime_type filter works)
-- [X] T143 [P] [US5] Integration test for container details in tests/integration/test_container_monitoring.py (create session, get container details, verify session_id, template_id, uptime_seconds calculation)
-- [X] T144 [P] [US5] Integration test for container logs retrieval in tests/integration/test_container_monitoring.py (create session, execute code that writes to stdout/stderr, get container logs with tail=100, verify log content)
-- [X] T145 [P] [US5] Integration test for health checks in tests/integration/test_container_monitoring.py (start control plane, call /health, verify database connectivity, verify S3 connectivity, verify runtime node connectivity)
-- [X] T146 [P] [US5] Integration test for unhealthy node detection in tests/integration/test_container_monitoring.py (mark runtime node as unhealthy after 3 consecutive health check failures, verify node status = unhealthy, verify new sessions not routed to unhealthy node)
+- [X] T142 [P] [US5] Integration test for container listing in sandbox_control_plane/tests/integration/test_container_monitoring.py (create multiple sessions, list containers, verify status filter works, verify runtime_type filter works)
+- [X] T143 [P] [US5] Integration test for container details in sandbox_control_plane/tests/integration/test_container_monitoring.py (create session, get container details, verify session_id, template_id, uptime_seconds calculation)
+- [X] T144 [P] [US5] Integration test for container logs retrieval in sandbox_control_plane/tests/integration/test_container_monitoring.py (create session, execute code that writes to stdout/stderr, get container logs with tail=100, verify log content)
+- [X] T145 [P] [US5] Integration test for health checks in sandbox_control_plane/tests/integration/test_container_monitoring.py (start control plane, call /health, verify database connectivity, verify S3 connectivity, verify runtime node connectivity)
+- [X] T146 [P] [US5] Integration test for unhealthy node detection in sandbox_control_plane/tests/integration/test_container_monitoring.py (mark runtime node as unhealthy after 3 consecutive health check failures, verify node status = unhealthy, verify new sessions not routed to unhealthy node)
 
 ### Implementation for User Story 5
 
@@ -356,9 +356,9 @@ This is a single backend service project located at repository root:
 
 #### Unit Tests for User Story 5
 
-- [X] T157 [P] [US5] Unit test for health check logic in tests/unit/test_health_probe.py (validate database/S3/runtime connectivity checks, health status aggregation)
-- [X] T158 [P] [US5] Unit test for metrics collection in tests/unit/test_health_probe.py (validate Prometheus metric types, counter increments, gauge updates, histogram recordings)
-- [X] T159 [P] [US5] Unit test for node status tracking in tests/unit/test_health_probe.py (validate consecutive failure tracking, unhealthy status transition after 3 failures)
+- [X] T157 [P] [US5] Unit test for health check logic in sandbox_control_plane/tests/unit/test_health_probe.py (validate database/S3/runtime connectivity checks, health status aggregation)
+- [X] T158 [P] [US5] Unit test for metrics collection in sandbox_control_plane/tests/unit/test_health_probe.py (validate Prometheus metric types, counter increments, gauge updates, histogram recordings)
+- [X] T159 [P] [US5] Unit test for node status tracking in sandbox_control_plane/tests/unit/test_health_probe.py (validate consecutive failure tracking, unhealthy status transition after 3 failures)
 
 **Checkpoint**: All user stories should now be independently functional. Platform has complete observability and monitoring capabilities.
 
@@ -403,11 +403,11 @@ This is a single backend service project located at repository root:
 
 ### Testing & Quality
 
-- [X] T181 [P] Add unit tests for scheduler in tests/unit/test_scheduler.py (test warm pool selection, affinity scoring, load balancing logic)
-- [X] T182 [P] Add integration test for warm pool in tests/integration/test_warm_pool.py (create session with warm pool template, verify allocation from pool < 100ms, verify pool replenishment)
-- [X] T183 [P] Add integration test for scheduler in tests/integration/test_scheduler.py (create sessions with different templates, verify node assignment follows warm pool → affinity → load balance strategy)
-- [X] T184 Run all contract tests and verify 100% pass rate in tests/contract/
-- [X] T185 Run all integration tests and verify 100% pass rate in tests/integration/
+- [X] T181 [P] Add unit tests for scheduler in sandbox_control_plane/tests/unit/test_scheduler.py (test warm pool selection, affinity scoring, load balancing logic)
+- [X] T182 [P] Add integration test for warm pool in sandbox_control_plane/tests/integration/test_warm_pool.py (create session with warm pool template, verify allocation from pool < 100ms, verify pool replenishment)
+- [X] T183 [P] Add integration test for scheduler in sandbox_control_plane/tests/integration/test_scheduler.py (create sessions with different templates, verify node assignment follows warm pool → affinity → load balance strategy)
+- [X] T184 Run all contract tests and verify 100% pass rate in sandbox_control_plane/sandbox_control_plane/tests/integration/api/
+- [X] T185 Run all integration tests and verify 100% pass rate in sandbox_control_plane/tests/integration/
 - [X] T186 Run all unit tests and verify minimum 80% coverage for session_manager, 70% for api handlers, 60% for utilities
 
 ### Final Validation

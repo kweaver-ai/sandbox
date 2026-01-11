@@ -15,7 +15,7 @@ from typing import Optional
 import structlog
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from executor.application.commands.execute_code import ExecuteCodeCommand
 from executor.application.dto.execute_request import ExecuteRequestDTO
@@ -47,24 +47,16 @@ startup_time = time.time()
 class ExecuteRequest(BaseModel):
     """Request model for code execution following AWS Lambda handler specification."""
 
-    execution_id: str = Field(..., description="Unique execution identifier", example="exec_20240115_test0001")
-    session_id: str = Field(..., description="Session identifier", example="sess_test_001")
-    code: str = Field(
-        ...,
-        description="AWS Lambda handler function code",
-        example='def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}'
-    )
-    language: str = Field(..., description="Programming language", pattern="^(python|javascript|shell)$", example="python")
-    event: dict = Field(
-        default_factory=dict,
-        description="Business data passed to handler function",
-        example={"name": "World"}
-    )
-    timeout: int = Field(default=300, description="Timeout in seconds", ge=1, le=3600, example=10)
-    env_vars: dict = Field(default_factory=dict, description="Environment variables", example={})
+    execution_id: str = Field(..., description="Unique execution identifier")
+    session_id: str = Field(..., description="Session identifier")
+    code: str = Field(..., description="AWS Lambda handler function code")
+    language: str = Field(..., description="Programming language", pattern="^(python|javascript|shell)$")
+    event: dict = Field(default_factory=dict, description="Business data passed to handler function")
+    timeout: int = Field(default=300, description="Timeout in seconds", ge=1, le=3600)
+    env_vars: dict = Field(default_factory=dict, description="Environment variables")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "examples": [
                 {
                     "execution_id": "exec_20240115_test0001",
@@ -86,6 +78,7 @@ class ExecuteRequest(BaseModel):
                 }
             ]
         }
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -463,18 +456,29 @@ def create_app() -> FastAPI:
             # Check workspace availability (only on Linux)
             is_macos = platform.system() == "Darwin"
             if not is_macos:
-                workspace_path = Path(os.environ.get("WORKSPACE_PATH", str(settings.workspace_path)))
-                workspace_accessible = workspace_path.exists() and os.access(workspace_path, os.W_OK)
+                # Get workspace path from environment or settings
+                workspace_path_env = os.environ.get("WORKSPACE_PATH", str(settings.workspace_path))
+
+                # If workspace is S3 path, check local /workspace directory instead
+                # S3 paths are handled by the artifact storage layer, not filesystem checks
+                if workspace_path_env.startswith("s3://"):
+                    check_path = Path("/workspace")
+                    logger.debug("Workspace is S3 path, checking local /workspace directory")
+                else:
+                    check_path = Path(workspace_path_env)
+
+                workspace_accessible = check_path.exists() and os.access(check_path, os.W_OK)
 
                 if not workspace_accessible:
-                    logger.warning("Health check failed: workspace not accessible")
+                    logger.warning("Health check failed: workspace not accessible", workspace_path=str(check_path))
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail={
                             "status": "unhealthy",
-                            "reason": f"Workspace directory {workspace_path} is not accessible",
+                            "reason": f"Workspace directory {check_path} is not accessible",
                         },
                     )
+                logger.debug("Workspace health check passed", workspace_path=str(check_path))
             else:
                 logger.debug("Skipping workspace health check on macOS")
 

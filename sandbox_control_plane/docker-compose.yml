@@ -3,7 +3,7 @@ version: '3.8'
 services:
   control-plane:
     build:
-      context: ./sandbox_control_plane
+      context: .
       dockerfile: Dockerfile
     container_name: sandbox-control-plane
     ports:

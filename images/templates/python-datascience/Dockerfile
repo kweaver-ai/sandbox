@@ -1,7 +1,8 @@
 # Python Data Science Template
 # Python 3.11 environment with data science libraries
+# Based on sandbox-executor-base which contains the executor daemon
 
-ARG BASE_IMAGE=sandbox-base:latest
+ARG BASE_IMAGE=sandbox-executor-base:latest
 FROM ${BASE_IMAGE}
 
 # Metadata
@@ -36,5 +37,4 @@ RUN pip install --no-cache-dir \
 # Switch back to sandbox user
 USER sandbox
 
-# Default to workspace directory
-WORKDIR /workspace
+# CMD is inherited from the base image (executor daemon)
