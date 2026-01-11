@@ -2,12 +2,9 @@
 Docker 调度服务
 
 实现调度策略，选择最优节点并创建容器。
-集成预热池功能，加速会话创建。
 """
-import asyncio
 import logging
 from typing import List, Optional
-from datetime import datetime
 
 from src.domain.services.scheduler import (
     IScheduler,
@@ -21,32 +18,9 @@ from src.infrastructure.container_scheduler.base import (
     IContainerScheduler,
     ContainerConfig,
 )
-from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
 from src.infrastructure.executors import ExecutorClient
 
 logger = logging.getLogger(__name__)
-
-# 预热池配置（基于模板）
-# 参考：docs/sandbox-design-v2.1.md 中的配置示例
-WARM_POOL_CONFIG = {
-    # 高频模板（如 Python 数据分析）
-    "python-datascience": {
-        "pool_size": 5,           # 目标池大小
-        "min_size": 2,            # 最小保留
-        "max_idle_time": 300,     # 最大空闲时间（秒）
-    },
-    # 低频模板
-    "python-basic": {
-        "pool_size": 3,
-        "min_size": 1,
-        "max_idle_time": 180,
-    },
-    "nodejs-basic": {
-        "pool_size": 3,
-        "min_size": 1,
-        "max_idle_time": 180,
-    },
-}
 
 
 class DockerSchedulerService(IScheduler):
@@ -54,14 +28,10 @@ class DockerSchedulerService(IScheduler):
     Docker 调度服务
 
     实现调度策略：
-    1. 优先使用预热池实例（快速启动）
-    2. 其次考虑模板亲和性（镜像已缓存）
-    3. 最后使用负载均衡（新建容器）
+    1. 优先选择有模板亲和性的节点（镜像已缓存）
+    2. 选择负载最低的健康节点
 
-    预热池自动补充：
-    - 在首次调度某模板时，检查预热池是否为空
-    - 如果为空，自动补充到最小大小
-    - 使用预热池实例后，异步补充一个新实例
+    容器从创建时就绑定到会话，生命周期完全跟随会话。
     """
 
     def __init__(
@@ -71,7 +41,6 @@ class DockerSchedulerService(IScheduler):
         template_repo: ITemplateRepository,
         executor_client: Optional[ExecutorClient] = None,
         executor_port: int = 8080,
-        warm_pool_manager: Optional[WarmPoolManager] = None,
         control_plane_url: str = "http://control-plane:8000",
         disable_bwrap: bool = False,
     ):
@@ -82,63 +51,21 @@ class DockerSchedulerService(IScheduler):
         self._executor_port = executor_port
         self._control_plane_url = control_plane_url
         self._disable_bwrap = disable_bwrap
-        self._warm_pool_manager = warm_pool_manager or WarmPoolManager(
-            container_scheduler=container_scheduler,
-            idle_timeout_seconds=1800,  # 30 分钟
-            max_pool_size_per_template=5,  # 每个模板最多 5 个预热实例
-            control_plane_url=control_plane_url,
-            disable_bwrap=disable_bwrap,
-        )
-
-        # 用于记录分配给会话的预热实例
-        self._session_warm_entries: dict = {}
-
-        # 记录哪些模板已经初始化过预热池
-        self._initialized_pools: set = set()
 
     async def schedule(self, request: ScheduleRequest) -> RuntimeNode:
         """
         调度会话到最优节点
 
         调度策略：
-        1. 检查预热池中是否有可用实例
-        2. 检查是否有已缓存该模板的节点
-        3. 选择负载最低的健康节点
-
-        预热池自动补充：
-        - 如果是首次使用该模板，异步初始化预热池（不阻塞请求）
+        1. 检查是否有已缓存该模板的节点（模板亲和性）
+        2. 选择负载最低的健康节点
         """
-        # 首次使用模板时，异步初始化预热池（不阻塞当前请求）
-        if request.template_id not in self._initialized_pools:
-            # 标记为已初始化，避免重复初始化
-            self._initialized_pools.add(request.template_id)
-            # 异步初始化预热池，不阻塞当前请求
-            asyncio.create_task(self._ensure_warm_pool_initialized_async(request.template_id))
-
-        # 1. 检查预热池
-        warm_entry = await self._warm_pool_manager.acquire(
-            request.template_id,
-            request.session_id or ""
-        )
-        if warm_entry:
-            # 从预热池分配，获取节点信息
-            node = await self.get_node(warm_entry.node_id)
-            if node:
-                logger.info(
-                    f"Allocated from warm pool: template={request.template_id}, "
-                    f"container={warm_entry.container_id[:12]}, node={node.id}"
-                )
-                # 记录会话与预热实例的关联
-                if request.session_id:
-                    self._session_warm_entries[request.session_id] = warm_entry
-                return node
-
-        # 2. 获取所有健康节点
+        # 1. 获取所有健康节点
         healthy_nodes = await self.get_healthy_nodes()
         if not healthy_nodes:
             raise RuntimeError("No healthy runtime nodes available")
 
-        # 3. 按模板亲和性排序
+        # 2. 按模板亲和性排序
         affinity_nodes = [
             node for node in healthy_nodes
             if node.has_template(request.template_id)
@@ -150,7 +77,7 @@ class DockerSchedulerService(IScheduler):
             logger.info(f"Selected affinity node: {selected.id} (template cached)")
             return selected
 
-        # 4. 使用负载均衡选择节点
+        # 3. 使用负载均衡选择节点
         selected = self._select_least_loaded(healthy_nodes)
         logger.info(f"Selected node by load balancing: {selected.id}")
         return selected
@@ -193,34 +120,29 @@ class DockerSchedulerService(IScheduler):
         resource_limit,
         env_vars: dict,
         workspace_path: str,
+        node_id: str,
     ) -> str:
         """
-        为会话创建容器
+        为会话创建容器（同步）
+
+        容器从创建时就绑定到会话。
+
+        Args:
+            session_id: 会话 ID
+            template_id: 模板 ID
+            image: 容器镜像
+            resource_limit: 资源限制
+            env_vars: 环境变量
+            workspace_path: 工作空间路径
+            node_id: 目标节点 ID
 
         Returns:
-            容器ID
+            容器ID（使用容器名称作为 ID）
         """
-        # 检查是否已有预热实例分配给此会话
-        warm_entry = self._session_warm_entries.get(session_id)
-        if warm_entry:
-            logger.info(
-                f"Using warm pool container for session {session_id}: "
-                f"{warm_entry.container_id[:12]}"
-            )
-            # 异步补充预热池（在后台任务中执行）
-            asyncio.create_task(
-                self._replenish_warm_pool_after_use(template_id, image)
-            )
-            return warm_entry.container_id
-
-        # 没有预热实例，需要创建新容器
-        # 注意：调度已经在 create_session 中完成，这里不需要再次调度
-        # 直接使用默认节点
-        nodes = await self.get_healthy_nodes()
-        if not nodes:
-            raise RuntimeError("No healthy runtime nodes available")
-
-        node = nodes[0]  # 使用第一个健康节点
+        # 获取节点信息
+        node = await self.get_node(node_id)
+        if not node:
+            raise RuntimeError(f"Node not found: {node_id}")
 
         # 创建容器配置
         config = ContainerConfig(
@@ -244,250 +166,44 @@ class DockerSchedulerService(IScheduler):
             },
         )
 
-        # 异步创建容器（不阻塞当前请求）
-        # 使用 asyncio.shield 确保后台任务不会因为请求结束而取消
-        async def _create_and_start():
-            try:
-                container_id = await self._container_scheduler.create_container(config)
-                await self._container_scheduler.start_container(container_id)
-                logger.info(
-                    f"Background task: Created and started container {container_id} "
-                    f"for session {session_id} on node {node.id}"
-                )
-            except Exception as e:
-                logger.error(f"Background task: Failed to create/start container for session {session_id}: {e}")
+        # 同步创建容器（等待完成）
+        try:
+            container_id = await self._container_scheduler.create_container(config)
+            await self._container_scheduler.start_container(container_id)
 
-        # 在后台执行容器创建，不等待结果
-        asyncio.create_task(_create_and_start())
+            logger.info(
+                f"Created and started container {container_id} "
+                f"for session {session_id} on node {node.id}"
+            )
 
-        logger.info(
-            f"Initiated background container creation for session {session_id} "
-            f"on node {node.id}"
-        )
+            # 使用容器名称作为 ID（用于执行器通信）
+            return f"sandbox-{session_id}"
 
-        # 立即返回临时 container_id，不等待容器创建完成
-        return f"sandbox-{session_id}"
+        except Exception as e:
+            logger.error(f"Failed to create container for session {session_id}: {e}")
+            raise
 
     async def destroy_container(
         self,
         container_id: str,
         timeout: int = 10
     ) -> None:
-        """销毁容器"""
-        # 检查是否是预热池实例
-        warm_entry = None
-        for entry in self._session_warm_entries.values():
-            if entry.container_id == container_id:
-                warm_entry = entry
-                break
+        """
+        销毁容器
 
-        if warm_entry:
-            # 释放预热实例（使其可供其他会话使用）
-            await self._warm_pool_manager.release(container_id)
-            # 清理会话关联
-            sessions_to_remove = [
-                sid for sid, entry in self._session_warm_entries.items()
-                if entry.container_id == container_id
-            ]
-            for sid in sessions_to_remove:
-                del self._session_warm_entries[sid]
-            logger.info(f"Released warm pool container {container_id[:12]}")
-        else:
-            # 普通容器，直接销毁
-            try:
-                await self._container_scheduler.stop_container(container_id, timeout=timeout)
-                await self._container_scheduler.remove_container(container_id)
-                logger.info(f"Destroyed container {container_id}")
-            except Exception as e:
-                logger.error(f"Failed to destroy container {container_id}: {e}")
-                raise
+        容器始终被销毁，不再有释放到预热池的逻辑。
+        """
+        try:
+            await self._container_scheduler.stop_container(container_id, timeout=timeout)
+            await self._container_scheduler.remove_container(container_id)
+            logger.info(f"Destroyed container {container_id}")
+        except Exception as e:
+            logger.error(f"Failed to destroy container {container_id}: {e}")
+            raise
 
     async def get_container_info(self, container_id: str):
         """获取容器信息"""
         return await self._container_scheduler.get_container_status(container_id)
-
-    async def acquire_warm_instance(self, template_id: str) -> Optional[RuntimeNode]:
-        """
-        从预热池获取实例
-
-        实现 IScheduler 接口的抽象方法。
-
-        Returns:
-            RuntimeNode 如果成功分配，None 如果预热池为空
-        """
-        warm_entry = await self._warm_pool_manager.acquire(
-            template_id=template_id,
-            session_id=""  # 无会话 ID，表示直接从预热池获取
-        )
-        if warm_entry:
-            node = await self.get_node(warm_entry.node_id)
-            if node:
-                logger.info(
-                    f"Acquired warm instance from pool: template={template_id}, "
-                    f"container={warm_entry.container_id[:12]}, node={node.id}"
-                )
-                return node
-        return None
-
-    async def add_warm_instance(
-        self,
-        template_id: str,
-        node_id: str,
-        container_id: str
-    ) -> None:
-        """
-        添加预热实例
-
-        实现 IScheduler 接口的抽象方法。
-        将已存在的容器添加到预热池中管理。
-        """
-        from src.infrastructure.warm_pool.warm_pool_entry import WarmPoolEntry
-
-        # 创建预热池条目
-        entry = WarmPoolEntry(
-            template_id=template_id,
-            node_id=node_id,
-            container_id=container_id,
-            container_name="",  # 已存在的容器，可能没有名称
-            image="",  # 已存在的容器
-            status="available",
-            created_at=datetime.now(),
-        )
-
-        # 将预热实例添加到管理器
-        await self._warm_pool_manager.add(entry)
-
-        logger.info(
-            f"Added warm instance to pool: template={template_id}, "
-            f"container={container_id[:12]}, node={node_id}"
-        )
-
-    async def remove_warm_instance(
-        self,
-        template_id: str,
-        node_id: str
-    ) -> None:
-        """
-        移除预热实例
-
-        实现 IScheduler 接口的抽象方法。
-        从预热池中移除指定节点上的指定模板实例。
-        """
-        # 获取该模板的预热池
-        pool = self._warm_pool_manager._warm_pool.get(template_id, [])
-
-        # 找到并移除匹配的条目
-        to_remove = []
-        for entry in pool:
-            if entry.node_id == node_id and entry.template_id == template_id:
-                to_remove.append(entry)
-
-        # 移除并销毁容器
-        for entry in to_remove:
-            try:
-                # 从容器索引中移除
-                if entry.container_id in self._warm_pool_manager._container_index:
-                    del self._warm_pool_manager._container_index[entry.container_id]
-
-                # 从预热池中移除
-                pool.remove(entry)
-
-                # 销毁容器
-                await self._warm_pool_manager._container_scheduler.remove_container(entry.container_id)
-
-                logger.info(
-                    f"Removed warm instance: template={template_id}, "
-                    f"container={entry.container_id[:12]}, node={node_id}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to remove warm instance {entry.container_id[:12]}: {e}")
-
-    async def _ensure_warm_pool_initialized(self, template_id: str) -> None:
-        """
-        确保预热池已初始化到最小大小
-
-        在首次使用某个模板时调用，自动补充预热池。
-        """
-        config = WARM_POOL_CONFIG.get(template_id, {})
-        min_size = config.get("min_size", 1)
-
-        # 获取模板信息
-        template = await self._template_repo.find_by_id(template_id)
-        if not template:
-            logger.warning(f"Template {template_id} not found, skipping warm pool initialization")
-            return
-
-        # 获取默认节点
-        nodes = await self.get_healthy_nodes()
-        if not nodes:
-            logger.warning("No healthy nodes available for warm pool initialization")
-            return
-
-        default_node = nodes[0]
-
-        try:
-            # 补充到最小大小
-            await self._warm_pool_manager.replenish(
-                template_id=template_id,
-                target_size=min_size,
-                image=template.image,
-                node_id=default_node.id,
-                resource_limit=template.default_resources,
-                env_vars={},
-                workspace_path_template="s3://sandbox-bucket/sessions/{session_id}",
-            )
-            logger.info(
-                f"Initialized warm pool for {template_id}: "
-                f"min_size={min_size}, image={template.image}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize warm pool for {template_id}: {e}")
-
-    async def _ensure_warm_pool_initialized_async(self, template_id: str) -> None:
-        """
-        异步初始化预热池（不阻塞请求）
-
-        此方法作为后台任务运行，不阻塞 API 请求。
-        如果初始化失败，仅记录错误，不影响请求处理。
-        """
-        try:
-            await self._ensure_warm_pool_initialized(template_id)
-            logger.info(f"Background warm pool initialization completed for {template_id}")
-        except Exception as e:
-            logger.error(f"Background warm pool initialization failed for {template_id}: {e}")
-
-    async def _replenish_warm_pool_after_use(self, template_id: str, image: str) -> None:
-        """
-        使用预热池实例后，异步补充一个新实例
-
-        这确保预热池始终保持可用状态。
-        """
-        try:
-            # 获取默认节点
-            nodes = await self.get_healthy_nodes()
-            if not nodes:
-                logger.warning("No healthy nodes available for warm pool replenishment")
-                return
-
-            default_node = nodes[0]
-
-            # 获取模板配置
-            config = WARM_POOL_CONFIG.get(template_id, {})
-            pool_size = config.get("pool_size", 2)
-
-            # 补充到目标大小
-            await self._warm_pool_manager.replenish(
-                template_id=template_id,
-                target_size=pool_size,
-                image=image,
-                node_id=default_node.id,
-                resource_limit=None,  # 使用模板默认值
-                env_vars={},
-                workspace_path_template="s3://sandbox-bucket/sessions/{session_id}",
-            )
-            logger.info(f"Replenished warm pool for {template_id}")
-        except Exception as e:
-            logger.error(f"Failed to replenish warm pool for {template_id}: {e}")
 
     async def execute(
         self,

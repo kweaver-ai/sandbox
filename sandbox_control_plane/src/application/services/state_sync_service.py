@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 from src.domain.entities.session import Session, SessionStatus
 from src.domain.repositories.session_repository import ISessionRepository
 from src.infrastructure.container_scheduler.base import IContainerScheduler
-from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ class StateSyncService:
     1. 启动时全量状态同步
     2. 定时健康检查（通过 Docker/K8s API）
     3. 状态不一致时更新 Session 表
-    4. 结合预热池的状态恢复
+    4. 恢复不健康的容器（创建新容器）
 
     核心原则：Docker/K8s 是容器状态的唯一真实来源，Session 表只保存关联关系。
     """
@@ -31,7 +30,6 @@ class StateSyncService:
         self,
         session_repo: ISessionRepository,
         container_scheduler: IContainerScheduler,
-        warm_pool_manager: WarmPoolManager,
         scheduler=None,  # 可选的调度器，用于创建新容器
     ):
         """
@@ -40,12 +38,10 @@ class StateSyncService:
         Args:
             session_repo: Session 仓储
             container_scheduler: 容器调度器
-            warm_pool_manager: 预热池管理器
             scheduler: 可选的调度器，用于恢复时创建新容器
         """
         self._session_repo = session_repo
         self._container_scheduler = container_scheduler
-        self._warm_pool_manager = warm_pool_manager
         self._scheduler = scheduler
 
     async def sync_on_startup(self) -> Dict[str, int]:
@@ -206,10 +202,7 @@ class StateSyncService:
         """
         尝试恢复 Session
 
-        策略：
-        1. 首先尝试从预热池获取实例
-        2. 如果预热池为空，创建新容器
-        3. 如果创建失败，标记 Session 为 FAILED
+        策略：创建新容器（不再使用预热池）
 
         Args:
             session: 需要恢复的 Session
@@ -220,82 +213,49 @@ class StateSyncService:
         logger.info(f"Attempting recovery for session {session.id}")
 
         try:
-            # 1. 尝试从预热池获取
-            warm_entry = await self._warm_pool_manager.acquire(
-                session.template_id, session.id
+            # 创建新容器
+            logger.info(f"Creating new container for session {session.id}")
+
+            # 直接使用 container_scheduler 创建容器
+            # 暂时使用默认镜像
+            from src.infrastructure.container_scheduler.base import ContainerConfig
+
+            config = ContainerConfig(
+                image="sandbox-template-python-basic:latest",  # 默认镜像，实际应从 template 获取
+                name=f"sandbox-{session.id}",
+                env_vars={
+                    **(session.env_vars or {}),
+                    "SESSION_ID": session.id,
+                    "WORKSPACE_PATH": session.workspace_path,
+                    "CONTROL_PLANE_URL": "http://control-plane:8000",
+                    "DISABLE_BWRAP": "true",  # 本地开发禁用 Bubblewrap
+                },
+                cpu_limit=session.resource_limit.cpu if session.resource_limit else "1",
+                memory_limit=session.resource_limit.memory if session.resource_limit else "512Mi",
+                disk_limit=session.resource_limit.disk if session.resource_limit else "1Gi",
+                workspace_path=session.workspace_path,
+                labels={
+                    "session_id": session.id,
+                    "template_id": session.template_id,
+                    "recovered": "true",
+                },
             )
-            if warm_entry:
-                logger.info(
-                    f"Allocated warm instance from pool for session {session.id}: "
-                    f"{warm_entry.container_id[:12]}"
-                )
 
-                # 分配预热实例
-                session.container_id = warm_entry.container_id
-                session.runtime_node = warm_entry.node_id
-                session.status = SessionStatus.RUNNING  # 确保状态为 running
+            # 创建容器
+            container_id = await self._container_scheduler.create_container(config)
+            await self._container_scheduler.start_container(container_id)
 
-                await self._session_repo.save(session)
-
-                logger.info(f"Session {session.id} recovered successfully with warm instance")
-                return True
-
-            # 2. 创建新容器
-            logger.info(f"No warm instance available for session {session.id}, creating new container")
-
-            try:
-                # 直接使用 container_scheduler 创建容器
-                # 首先需要获取模板信息来获取镜像
-                # 暂时使用默认镜像
-                from src.infrastructure.container_scheduler.base import ContainerConfig
-
-                config = ContainerConfig(
-                    image="sandbox-template-python-basic:latest",  # 默认镜像，实际应从 template 获取
-                    name=f"sandbox-{session.id}",
-                    env_vars={
-                        **(session.env_vars or {}),
-                        "SESSION_ID": session.id,
-                        "WORKSPACE_PATH": session.workspace_path,
-                        "CONTROL_PLANE_URL": "http://control-plane:8000",
-                        "DISABLE_BWRAP": "true",  # 本地开发禁用 Bubblewrap
-                    },
-                    cpu_limit=session.resource_limit.cpu if session.resource_limit else "1",
-                    memory_limit=session.resource_limit.memory if session.resource_limit else "512Mi",
-                    disk_limit=session.resource_limit.disk if session.resource_limit else "1Gi",
-                    workspace_path=session.workspace_path,
-                    labels={
-                        "session_id": session.id,
-                        "template_id": session.template_id,
-                        "recovered": "true",
-                    },
-                )
-
-                # 创建容器
-                container_id = await self._container_scheduler.create_container(config)
-                await self._container_scheduler.start_container(container_id)
-
-                # 更新 session
-                session.container_id = container_id
-                session.runtime_node = "docker-local"  # 默认节点
-                session.status = SessionStatus.RUNNING
-                await self._session_repo.save(session)
-
-                logger.info(f"Session {session.id} recovered successfully with new container {container_id[:12]}")
-                return True
-
-            except Exception as e:
-                logger.error(f"Failed to create new container for session {session.id}: {e}", exc_info=True)
-                # 继续执行，标记为失败
-
-            # 3. 标记为失败
-            session.mark_as_failed()
+            # 更新 session
+            session.container_id = container_id
+            session.runtime_node = "docker-local"  # 默认节点
+            session.status = SessionStatus.RUNNING
             await self._session_repo.save(session)
 
-            logger.error(f"Session {session.id} marked as failed (recovery failed)")
-            return False
+            logger.info(f"Session {session.id} recovered successfully with new container {container_id[:12]}")
+            return True
 
         except Exception as e:
-            logger.error(f"Recovery failed for session {session.id}: {e}", exc_info=True)
+            logger.error(f"Failed to recover session {session.id}: {e}", exc_info=True)
 
             # 标记为失败
             try:

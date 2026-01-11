@@ -25,10 +25,10 @@ The system uses a **Control Plane + Container Scheduler** architecture:
 1. **Control Plane Components**:
    - API Gateway (FastAPI + Uvicorn)
    - Scheduler with intelligent task distribution (supports ephemeral and persistent session modes)
-   - Session Manager with Redis-backed state
+   - Session Manager with database-backed state (MariaDB)
    - Template Manager for sandbox environment definitions
    - Health Probe for container monitoring
-   - Warm Pool for fast instance startup
+   - Session Cleanup Service for automatic resource reclamation
 
 2. **Container Scheduler Components**:
    - Docker Scheduler for direct Docker socket access (aiodocker)
@@ -110,18 +110,17 @@ Multi-layer isolation strategy:
 
 ### Scheduler Behavior
 
-The scheduler implements **Agent-affinity scheduling** for persistent sessions to optimize performance:
-- Reuses existing sessions for the same Agent (fastest: 10-50ms)
-- Routes to nodes with cached templates (Agent node history)
-- Uses Warm Pool for common templates
+The scheduler implements intelligent node selection for sessions:
+- Prioritizes template affinity (nodes with cached images)
 - Falls back to load-balanced cold start
+- Container lifecycle follows session lifecycle (delete session = destroy container)
 
-### Warm Pool Strategy
+### Session Cleanup Strategy
 
-Pre-instantiated containers are maintained for high-frequency templates:
-- Separate pools for ephemeral and persistent modes
-- Dynamic sizing based on load patterns
-- Idle timeout for resource reclamation
+Automatic cleanup of idle and expired sessions:
+- Idle timeout: 30 minutes of inactivity triggers automatic termination
+- Max lifetime: 6 hours forces session termination
+- Background task runs every 5 minutes to check for cleanup candidates
 
 ### Timeout Control
 
@@ -153,12 +152,12 @@ sandbox/
 │   ├── api/               # API route handlers
 │   ├── scheduler/         # Task scheduling logic
 │   ├── session_manager/   # Session lifecycle management
+│   ├── session_cleanup/   # Session cleanup service
 │   ├── template_manager/  # Template CRUD operations
 │   └── container_scheduler/  # Container Scheduler module
 │       ├── base.py        # Abstract scheduler interface
 │       ├── docker_scheduler.py  # Docker SDK wrapper
-│       ├── k8s_scheduler.py     # K8s client wrapper
-│       └── warm_pool.py   # Warm pool management
+│       └── k8s_scheduler.py     # K8s client wrapper
 ├── executor/              # sandbox-executor daemon
 │   ├── http_server.py     # HTTP API server
 │   ├── executor.py        # Code execution logic
@@ -191,7 +190,8 @@ flake8 control_plane/ executor/
 - **Protocol-Driven**: All communication via standardized RESTful API
 - **Cloud-Native**: Designed for Kubernetes deployment with HPA
 - **Security-First**: Multiple isolation layers, defense-in-depth
-- **Performance**: Warm Pool, async processing, connection pooling
+- **Performance**: Async processing, connection pooling, template affinity scheduling
+- **Simplicity**: Direct container creation without warm pool complexity
 - **Compatibility**: AWS Lambda handler specification for easy migration
 
 ## Active Technologies

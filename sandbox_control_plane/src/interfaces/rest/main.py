@@ -80,10 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ============= 启动后台任务管理器 =============
     from src.infrastructure.background_tasks import BackgroundTaskManager
-    from src.infrastructure.dependencies import (
-        get_state_sync_service,
-        get_warm_pool_service,
-    )
+    from src.infrastructure.dependencies import get_state_sync_service
 
     background_task_manager = BackgroundTaskManager()
 
@@ -96,21 +93,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         initial_delay_seconds=30,  # 首次执行延迟 30 秒
     )
 
-    # 注册预热池清理任务（每 5 分钟）
-    warm_pool_svc = get_warm_pool_service()
-    background_task_manager.register_task(
-        name="warm_pool_cleanup",
-        func=warm_pool_svc.periodic_cleanup,
-        interval_seconds=300,  # 5 分钟
-        initial_delay_seconds=60,  # 首次执行延迟 1 分钟
+    # 注册会话清理任务（每 5 分钟）
+    from src.application.services.session_cleanup_service import SessionCleanupService
+    from src.infrastructure.dependencies import (
+        get_session_repository,
+        get_docker_scheduler_service,
     )
 
-    # 注册预热池补充任务（每 2 分钟）
+    # 创建 SessionCleanupService 实例
+    session_repo = await get_session_repository().__anext__()
+    scheduler = get_docker_scheduler_service(
+        runtime_node_repo=None,  # 将在依赖注入中解析
+        template_repo=None,  # 将在依赖注入中解析
+    )
+    session_cleanup_svc = SessionCleanupService(
+        session_repo=session_repo,
+        scheduler=scheduler,
+        idle_timeout_minutes=30,  # 30 分钟空闲超时
+        max_lifetime_hours=6,  # 6 小时最大生命周期
+    )
+
     background_task_manager.register_task(
-        name="warm_pool_replenish",
-        func=warm_pool_svc.periodic_replenish,
-        interval_seconds=120,  # 2 分钟
-        initial_delay_seconds=120,  # 首次执行延迟 2 分钟
+        name="session_cleanup",
+        func=session_cleanup_svc.cleanup_idle_sessions,
+        interval_seconds=300,  # 5 分钟
+        initial_delay_seconds=60,  # 首次执行延迟 1 分钟
     )
 
     # 启动所有后台任务
@@ -227,7 +234,6 @@ def _register_routes(app: FastAPI) -> None:
                 "template_management",
                 "file_operations",
                 "state_sync",
-                "warm_pool",
             ],
             "documentation": {
                 "swagger": "/docs",

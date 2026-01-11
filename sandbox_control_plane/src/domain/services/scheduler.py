@@ -47,14 +47,6 @@ class ScheduleRequest:
     session_id: str | None = None
 
 
-@dataclass
-class ScheduleResult:
-    """调度结果"""
-    node: RuntimeNode
-    from_warm_pool: bool
-    reason: str  # 调度原因说明
-
-
 class IScheduler(ABC):
     """
     调度器接口
@@ -68,9 +60,8 @@ class IScheduler(ABC):
         调度会话到最优节点
 
         调度策略：
-        1. 优先使用预热池实例（快速启动）
-        2. 其次考虑模板亲和性（镜像已缓存）
-        3. 最后使用负载均衡（新建容器）
+        1. 优先考虑模板亲和性（镜像已缓存）
+        2. 使用负载均衡选择健康节点
         """
         pass
 
@@ -87,33 +78,6 @@ class IScheduler(ABC):
     @abstractmethod
     async def mark_node_unhealthy(self, node_id: str) -> None:
         """标记节点为不健康"""
-        pass
-
-    @abstractmethod
-    async def add_warm_instance(
-        self,
-        template_id: str,
-        node_id: str,
-        container_id: str
-    ) -> None:
-        """添加预热实例"""
-        pass
-
-    @abstractmethod
-    async def remove_warm_instance(
-        self,
-        template_id: str,
-        node_id: str
-    ) -> None:
-        """移除预热实例"""
-        pass
-
-    @abstractmethod
-    async def acquire_warm_instance(
-        self,
-        template_id: str
-    ) -> Optional[RuntimeNode]:
-        """从预热池获取实例"""
         pass
 
     @abstractmethod

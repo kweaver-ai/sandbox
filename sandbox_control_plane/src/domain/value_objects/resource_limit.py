@@ -23,10 +23,11 @@ class ResourceLimit:
         # 验证 CPU 格式
         try:
             cpu_value = float(self.cpu)
-            if cpu_value <= 0:
-                raise ValueError("cpu must be positive")
         except ValueError:
             raise ValueError(f"Invalid cpu format: {self.cpu}")
+
+        if cpu_value <= 0:
+            raise ValueError("cpu must be positive")
 
         # 验证内存格式
         if not self._validate_size_format(self.memory):

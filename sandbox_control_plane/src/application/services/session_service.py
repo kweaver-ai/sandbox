@@ -99,28 +99,34 @@ class SessionService:
         container_id = None
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
-                docker_container_id = await self._scheduler.create_container_for_session(
+                container_id = await self._scheduler.create_container_for_session(
                     session_id=session_id,
                     template_id=command.template_id,
                     image=template.image,
                     resource_limit=resource_limit,
                     env_vars=session.env_vars,
                     workspace_path=workspace_path,
+                    node_id=runtime_node.id,  # 传入调度选择的节点 ID
                 )
 
-                # 使用容器名称而不是 Docker 容器ID
-                # Executor 使用 HOSTNAME 环境变量（容器名称）作为 container_id
-                # 容器名称格式为 sandbox-{session_id}
-                container_id = f"sandbox-{session_id}"
-
-                # 立即保存容器 ID（但不改变状态），这样 executor 的 ready 回调可以找到会话
+                # 更新会话状态为 RUNNING
                 session.container_id = container_id
+                session.status = SessionStatus.RUNNING
                 await self._session_repo.save(session)
 
-                # 注意：状态将在 executor 调用 /containers/ready 回调时更新为 RUNNING
-                # 这是避免竞态条件：executor 可能在我们保存之前就调用 ready 回调
+                import logging
+                logging.info(
+                    f"Session {session_id} created successfully, "
+                    f"container={container_id}, node={runtime_node.id}"
+                )
         except Exception as e:
-            # 容器创建失败，标记会话为失败状态
+            # 容器创建失败，销毁部分创建的容器（如有），标记会话为失败状态
+            if container_id and hasattr(self._scheduler, 'destroy_container'):
+                try:
+                    await self._scheduler.destroy_container(container_id)
+                except Exception:
+                    pass  # 忽略清理错误
+
             session.status = SessionStatus.FAILED
             await self._session_repo.save(session)
             raise ValidationError(f"Failed to create container: {e}")

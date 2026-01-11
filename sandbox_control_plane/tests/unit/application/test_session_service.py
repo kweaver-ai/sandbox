@@ -12,8 +12,9 @@ from src.domain.entities.session import Session
 from src.domain.entities.template import Template
 from src.domain.value_objects.resource_limit import ResourceLimit
 from src.domain.value_objects.execution_status import SessionStatus
-from src.domain.services.scheduler import RuntimeNode, ScheduleResult
+from src.domain.services.scheduler import RuntimeNode
 from src.shared.errors.domain import NotFoundError
+from src.domain.repositories.execution_repository import IExecutionRepository
 
 
 class TestSessionService:
@@ -39,13 +40,25 @@ class TestSessionService:
         """模拟调度器"""
         scheduler = Mock()
         scheduler.schedule = AsyncMock()
+        scheduler.create_container_for_session = AsyncMock(return_value="container-123")
+        scheduler.destroy_container = AsyncMock()
         return scheduler
 
     @pytest.fixture
-    def service(self, session_repo, template_repo, scheduler):
+    def execution_repo(self):
+        """模拟执行仓储"""
+        repo = Mock()
+        repo.save = AsyncMock()
+        repo.find_by_id = AsyncMock()
+        repo.find_by_session_id = AsyncMock(return_value=[])
+        return repo
+
+    @pytest.fixture
+    def service(self, session_repo, template_repo, scheduler, execution_repo):
         """创建会话服务"""
         return SessionService(
             session_repo=session_repo,
+            execution_repo=execution_repo,
             template_repo=template_repo,
             scheduler=scheduler
         )
@@ -86,8 +99,8 @@ class TestSessionService:
 
         # 验证
         assert result.template_id == "python-datascience"
-        assert result.status == SessionStatus.CREATING.value
-        session_repo.save.assert_called_once()
+        assert result.status == SessionStatus.RUNNING.value
+        assert session_repo.save.call_count == 2  # 一次创建，一次更新容器ID和状态
 
     @pytest.mark.asyncio
     async def test_create_session_template_not_found(self, service, template_repo):

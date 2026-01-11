@@ -217,15 +217,6 @@ class MockScheduler(IScheduler):
     async def mark_node_unhealthy(self, node_id: str) -> None:
         pass
 
-    async def add_warm_instance(self, template_id: str, node_id: str, container_id: str) -> None:
-        pass
-
-    async def remove_warm_instance(self, template_id: str, node_id: str) -> None:
-        pass
-
-    async def acquire_warm_instance(self, template_id: str):
-        return None
-
     async def execute(
         self,
         session_id: str,
@@ -335,7 +326,6 @@ class MockStorageService(IStorageService):
 
 # Module-level singletons for shared components
 _container_scheduler_singleton = None
-_warm_pool_manager_singleton = None
 _scheduler_singleton = None
 
 
@@ -406,26 +396,14 @@ def initialize_dependencies(app: FastAPI):
         app.state.execution_repo = execution_repo
         app.state.template_repo = template_repo
 
-    # 创建容器调度器和预热池管理器（模块级单例，仅在 Docker 调度模式下）
-    global _container_scheduler_singleton, _warm_pool_manager_singleton, _scheduler_singleton
+    # 创建容器调度器（模块级单例，仅在 Docker 调度模式下）
+    global _container_scheduler_singleton, _scheduler_singleton
 
     if USE_DOCKER_SCHEDULER:
         from src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
-        from src.infrastructure.warm_pool.warm_pool_manager import WarmPoolManager
-        from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
 
         # 创建容器调度器（模块级单例）
         _container_scheduler_singleton = DockerScheduler(docker_url=_get_docker_url())
-
-        # 创建预热池管理器（模块级单例，持有 in-memory 状态）
-        settings = get_settings()
-        _warm_pool_manager_singleton = WarmPoolManager(
-            container_scheduler=_container_scheduler_singleton,
-            idle_timeout_seconds=1800,
-            max_pool_size_per_template=3,
-            control_plane_url=settings.control_plane_url,
-            disable_bwrap=settings.disable_bwrap,
-        )
 
         # 创建调度器服务（模块级单例，用于状态恢复）
         # 需要获取 template_repo 和 runtime_node_repo
@@ -529,22 +507,14 @@ def get_docker_scheduler_service(
     runtime_node_repo = Depends(get_runtime_node_repository),
     template_repo = Depends(get_template_repository),
 ) -> IScheduler:
-    """获取 Docker 调度服务（共享预热池管理器单例）"""
+    """获取 Docker 调度服务"""
     if not USE_DOCKER_SCHEDULER:
         return MockScheduler()
 
     from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
-    import os
-
-    # 读取 control_plane_url 配置
-    control_plane_url = os.environ.get(
-        "CONTROL_PLANE_URL",
-        "http://control-plane:8000"  # Docker 网络中的服务名
-    )
 
     # 使用模块级单例
     container_scheduler = _container_scheduler_singleton
-    warm_pool_manager = _warm_pool_manager_singleton
 
     # 创建 ExecutorClient 实例
     executor_client = ExecutorClient(
@@ -554,7 +524,6 @@ def get_docker_scheduler_service(
     )
 
     # 为每个请求创建新的 DockerSchedulerService 实例
-    # 但使用共享的 container_scheduler 和 warm_pool_manager
     settings = get_settings()
     return DockerSchedulerService(
         runtime_node_repo=runtime_node_repo,
@@ -562,9 +531,8 @@ def get_docker_scheduler_service(
         template_repo=template_repo,
         executor_client=executor_client,
         executor_port=8080,
-        warm_pool_manager=warm_pool_manager,  # 共享的预热池管理器
-        control_plane_url=settings.control_plane_url,  # 传递 control plane URL
-        disable_bwrap=settings.disable_bwrap,  # 传递 bubblewrap 设置
+        control_plane_url=settings.control_plane_url,
+        disable_bwrap=settings.disable_bwrap,
     )
 
 
@@ -607,11 +575,10 @@ def get_file_service_db(
 
 
 # ============================================================================
-# State Sync and Warm Pool Services (shared singletons)
+# State Sync Service (shared singleton)
 # ============================================================================
 
 _state_sync_service_singleton = None
-_warm_pool_service_singleton = None
 
 
 def get_state_sync_service():
@@ -626,7 +593,6 @@ def get_state_sync_service():
 
     # 使用模块级单例
     container_scheduler = _container_scheduler_singleton
-    warm_pool_manager = _warm_pool_manager_singleton
 
     # 创建直接使用数据库的仓储
     if USE_SQL_REPOSITORIES:
@@ -737,41 +703,7 @@ def get_state_sync_service():
     state_sync_service = StateSyncService(
         session_repo=session_repo,
         container_scheduler=container_scheduler,
-        warm_pool_manager=warm_pool_manager,
         scheduler=scheduler,
     )
 
     return state_sync_service
-
-
-def get_warm_pool_service():
-    """
-    获取预热池管理服务（共享单例）
-
-    此服务在启动时调用，需要使用已初始化的单例。
-    """
-    global _warm_pool_service_singleton
-
-    if _warm_pool_service_singleton is None:
-        from src.application.services.warm_pool_service import WarmPoolService
-
-        # 使用模块级单例
-        warm_pool_manager = _warm_pool_manager_singleton
-
-        # 创建 Template仓储
-        if USE_SQL_REPOSITORIES:
-            template_repo = MockTemplateRepository()  # 简化：使用 Mock
-        else:
-            template_repo = MockTemplateRepository()
-
-        _warm_pool_service_singleton = WarmPoolService(
-            warm_pool_manager=warm_pool_manager,
-            template_repo=template_repo,
-            default_node_id="local",
-            default_idle_timeout=1800,  # 30 分钟
-            default_target_size=3,
-            env_vars={},
-            workspace_path_template="s3://bucket/sessions/{session_id}/",
-        )
-
-    return _warm_pool_service_singleton

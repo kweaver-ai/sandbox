@@ -54,12 +54,12 @@ graph TB
         TemplateMgr["模板管理器<br/>(Template Manager)"]
         Monitor["监控探针<br/>(Health Probe)"]
         ResultStore["结果存储<br/>(Result Store)"]
+        SessionCleanup["会话清理服务<br/>(Session Cleanup)"]
     end
 
     subgraph ContainerScheduler["Container Scheduler 模块"]
         DockerRuntime["Docker Scheduler"]
         K8sRuntime["K8s Scheduler"]
-        WarmPool["预热池<br/>(Warm Pool)"]
     end
 
     subgraph Sandbox["沙箱实例"]
@@ -85,10 +85,10 @@ graph TB
     Monitor --> DockerRuntime
     Monitor --> K8sRuntime
     ResultStore --> S3
+    SessionCleanup --> SessionMgr
 
     DockerRuntime --> Container
     K8sRuntime --> Container
-    WarmPool --> Container
     Container --> BubbleWrap
     BubbleWrap --> Executor
     Executor -->|上报结果| API
@@ -144,19 +144,13 @@ graph TB
         end
         
         subgraph RuntimeNS["🔒 Namespace: sandbox-runtime"]
-            
-            subgraph WarmPoolGroup["预热池"]
-                Warm1["Pod: warm-python311-1<br/>Status: Ready<br/>Image: python:3.11-slim"]
-                Warm2["Pod: warm-python311-2<br/>Status: Ready<br/>Image: python:3.11-slim"]
-                Warm3["Pod: warm-nodejs20-1<br/>Status: Ready<br/>Image: node:20-slim"]
-            end
-            
+
             subgraph ActiveSandboxGroup["活跃沙箱"]
                 SB1["Pod: sandbox-abc123<br/>├─ Session: abc123<br/>├─ Status: Executing<br/>└─ CPU: 0.8, Mem: 400Mi"]
                 SB2["Pod: sandbox-def456<br/>├─ Session: def456<br/>├─ Status: Idle<br/>└─ CPU: 0.1, Mem: 200Mi"]
                 SB3["Pod: sandbox-xyz789<br/>├─ Session: xyz789<br/>├─ Status: Executing<br/>└─ CPU: 1.0, Mem: 512Mi"]
             end
-            
+
             NetworkPolicy["NetworkPolicy<br/>- 禁止 Pod 间通信<br/>- 仅允许访问管理中心<br/>- 可选白名单外部访问"]
         end
         
@@ -207,12 +201,9 @@ graph TB
     EtcdService --> Etcd1
     EtcdService --> Etcd2
     EtcdService --> Etcd3
-    
-    CP1 -.->|"K8s API<br/>调度 Pod"| Warm1
-    CP1 -.->|"K8s API<br/>调度 Pod"| Warm2
-    CP2 -.->|"K8s API<br/>调度 Pod"| Warm3
-    CP2 -.->|"K8s API<br/>创建 Pod"| SB1
-    CP3 -.->|"K8s API<br/>创建 Pod"| SB2
+
+    CP1 -.->|"K8s API<br/>创建 Pod"| SB1
+    CP2 -.->|"K8s API<br/>创建 Pod"| SB2
     CP3 -.->|"K8s API<br/>创建 Pod"| SB3
     
     NetworkPolicy -.->|限制| SB1
@@ -236,7 +227,7 @@ graph TB
     
     class Ingress,LB ingressStyle
     class CP1,CP2,CP3,CPService,HPA controlStyle
-    class Warm1,Warm2,Warm3,SB1,SB2,SB3,NetworkPolicy runtimeStyle
+    class SB1,SB2,SB3,NetworkPolicy runtimeStyle
     class DB1,DB2,DB3,Etcd1,Etcd2,Etcd3,MariaDBService,EtcdService dataStyle
     class S3,Registry externalStyle
 
@@ -319,23 +310,16 @@ class ExecutionResult(BaseModel):
 **调度策略**：
 
 调度原则：
-1. 优先使用预热池实例（快速启动）
-2. 其次考虑模板亲和性（镜像已缓存）
-3. 最后使用负载均衡（新建容器）
+1. 优先考虑模板亲和性（镜像已缓存）
+2. 使用负载均衡（新建容器）
 
-#### 2.1.2.1 预热池优先
-
-为常用模板维护预热实例池：
-- 预热实例：已启动的容器，可立即接受执行请求
-- 快速响应（100ms 内）
-
-#### 2.1.2.2 模板亲和性
+#### 2.1.2.1 模板亲和性
 
 优先选择已缓存镜像的节点：
 - 避免镜像拉取，加快启动速度
 - 启动时间：1-2s（vs 冷启动 2-5s）
 
-#### 2.1.2.3 负载均衡
+#### 2.1.2.2 负载均衡
 
 综合考虑 CPU、内存、会话数：
 - 选择负载最低的节点
@@ -345,22 +329,13 @@ class ExecutionResult(BaseModel):
 
 ```python
 class Scheduler:
-    def __init__(self):
-        # 仅跟踪当前运行位置（不用于调度决策）
-        self.session_node_map = {}   # Session ID -> Runtime Node
-
     async def schedule(self, request: CreateSessionRequest) -> RuntimeNode:
-        """统一调度逻辑（无状态架构）"""
+        """调度逻辑（无状态架构）"""
 
-        # 1. 优先使用预热池（快速启动）
-        if warm_instance := await self.warm_pool.acquire(request.template_id):
-            logger.info(f"Using warm pool instance for template {request.template_id}")
-            return warm_instance.node
-
-        # 2. 获取所有健康节点
+        # 1. 获取所有健康节点
         nodes = await self.health_probe.get_healthy_nodes()
 
-        # 3. 选择最优节点（负载 + 模板亲和性）
+        # 2. 选择最优节点（负载 + 模板亲和性）
         best_node = await self._select_best_node(nodes, request)
 
         logger.info(f"Selected node {best_node.id} for session")
@@ -408,11 +383,9 @@ class Scheduler:
 **性能优化路径**：
 
 ```
-最优：预热池实例（100ms）
-     ↓ 预热池耗尽
-   次优：模板亲和节点（1-2s，镜像缓存但容器未预热）
+最优：模板亲和节点（1-2s，镜像缓存但容器未预热）
      ↓ 无缓存
-   可接受：冷启动（2-5s）
+   次优：冷启动（2-5s）
 ```
 
 **无状态架构优势**：
@@ -421,25 +394,6 @@ class Scheduler:
 - 调度更灵活，无历史绑定
 - 支持会话迁移
 - 完全弹性扩展
-
-**预热池策略**：
-
-```python
-WARM_POOL_CONFIG = {
-    # 高频模板（如 Python 数据分析）
-    "python-datascience": {
-        "pool_size": 20,           # 预热池大小
-        "min_size": 10,            # 最小保留
-        "max_idle_time": 300       # 最大空闲时间（秒）
-    },
-    # 低频模板
-    "nodejs-basic": {
-        "pool_size": 5,
-        "min_size": 3,
-        "max_idle_time": 180
-    }
-}
-```
 
 #### 2.1.3 会话管理器 (Session Manager)
 状态管理：

@@ -4,7 +4,7 @@
 测试 Execution 实体的领域行为。
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.domain.entities.execution import Execution
 from src.domain.value_objects.execution_status import ExecutionStatus, ExecutionState
