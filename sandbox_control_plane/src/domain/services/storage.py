@@ -116,3 +116,19 @@ class IStorageService(ABC):
             文件列表
         """
         pass
+
+    @abstractmethod
+    async def delete_prefix(
+        self,
+        prefix: str
+    ) -> int:
+        """
+        删除指定前缀的所有文件（用于会话清理）
+
+        Args:
+            prefix: S3 路径前缀（例如: "sessions/sess_abc123/"）
+
+        Returns:
+            删除的文件数量
+        """
+        pass

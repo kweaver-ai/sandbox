@@ -1,15 +1,17 @@
 """
 会话清理服务
 
-负责定期清理空闲会话和过期会话，自动销毁关联的容器。
+负责定期清理空闲会话和过期会话，自动销毁关联的容器和删除关联的文件。
 """
 import logging
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
+from urllib.parse import urlparse
 
 from src.domain.entities.session import Session, SessionStatus
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.services.scheduler import IScheduler
+from src.domain.services.storage import IStorageService
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ class SessionCleanupService:
     1. 定期扫描空闲会话（基于 last_activity_at 字段）
     2. 自动终止超时会话并销毁容器
     3. 定期扫描 FAILED/TIMEOUT 状态的孤立会话
+    4. 清理会话关联的 S3 文件
 
     清理策略：
     - 空闲超时：30 分钟无活动（可配置，设为 -1 表示禁用空闲清理）
@@ -34,6 +37,7 @@ class SessionCleanupService:
         scheduler: IScheduler,
         idle_timeout_minutes: int = 30,
         max_lifetime_hours: int = 6,
+        storage_service: Optional[IStorageService] = None,
     ):
         """
         初始化会话清理服务
@@ -43,9 +47,11 @@ class SessionCleanupService:
             scheduler: 调度器（用于销毁容器）
             idle_timeout_minutes: 空闲超时时间（分钟），-1 表示无限期（不清理空闲会话）
             max_lifetime_hours: 最大生命周期（小时），-1 表示无限期
+            storage_service: 存储服务（可选，用于清理 S3 文件）
         """
         self._session_repo = session_repo
         self._scheduler = scheduler
+        self._storage_service = storage_service
         self._idle_timeout = None if idle_timeout_minutes == -1 else timedelta(minutes=idle_timeout_minutes)
         self._max_lifetime = None if max_lifetime_hours == -1 else timedelta(hours=max_lifetime_hours)
 
@@ -178,6 +184,61 @@ class SessionCleanupService:
 
         return stats
 
+    async def cleanup_session_files(
+        self,
+        session: Session,
+        reason: str
+    ) -> int:
+        """
+        删除会话关联的所有文件
+
+        Args:
+            session: 要清理的会话
+            reason: 清理原因
+
+        Returns:
+            删除的文件数量
+        """
+        if not self._storage_service:
+            logger.debug(f"Storage service not configured, skipping file cleanup for session {session.id}")
+            return 0
+
+        if not session.workspace_path:
+            logger.debug(f"Session {session.id} has no workspace_path, skipping file cleanup")
+            return 0
+
+        logger.info(
+            f"Cleaning up files for session {session.id} "
+            f"(reason: {reason}, workspace: {session.workspace_path})"
+        )
+
+        try:
+            # 从 workspace_path 提取 bucket 和 prefix
+            # workspace_path 格式: s3://bucket/sessions/{session_id}/
+            parsed = urlparse(session.workspace_path)
+            bucket = parsed.netloc  # 存储桶名称
+
+            # 构建删除前缀（包含存储桶路径）
+            # 例如: s3://sandbox-workspace/sessions/sess_abc123/
+            delete_prefix = session.workspace_path.rstrip('/')
+
+            # 删除所有带该前缀的文件
+            deleted_count = await self._storage_service.delete_prefix(delete_prefix)
+
+            logger.info(
+                f"Deleted {deleted_count} files for session {session.id} "
+                f"(prefix: {delete_prefix})"
+            )
+
+            return deleted_count
+
+        except Exception as e:
+            logger.error(
+                f"Error cleaning up files for session {session.id}: {e}",
+                exc_info=True
+            )
+            return 0
+
     async def _cleanup_session(
         self,
         session: Session,
@@ -211,6 +272,9 @@ class SessionCleanupService:
                 logger.warning(
                     f"Failed to destroy container {session.container_id} for session {session.id}: {e}"
                 )
+
+        # 删除 S3 文件（如果配置了存储服务）
+        await self.cleanup_session_files(session, reason)
 
         # 标记会话为已终止
         session.mark_as_terminated()

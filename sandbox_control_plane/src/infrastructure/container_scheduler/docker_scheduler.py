@@ -2,10 +2,15 @@
 Docker 容器调度器
 
 使用 aiodocker 实现 Docker 容器的创建和管理。
+
+支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
+容器会通过 s3fs 将 S3 bucket 挂载到 /workspace 目录。
 """
 import asyncio
 import logging
+import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from aiodocker import Docker
 from aiodocker.exceptions import DockerError
@@ -16,6 +21,7 @@ from src.infrastructure.container_scheduler.base import (
     ContainerInfo,
     ContainerResult,
 )
+from src.infrastructure.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,90 @@ class DockerScheduler(IContainerScheduler):
             await self._docker.close()
             self._initialized = False
 
+    def _parse_s3_workspace(self, workspace_path: str) -> Optional[dict]:
+        """
+        解析 S3 workspace 路径
+
+        Args:
+            workspace_path: S3 路径，格式: s3://bucket/sessions/{session_id}/
+
+        Returns:
+            包含 bucket, prefix 的字典，如果不是 S3 路径则返回 None
+        """
+        if not workspace_path or not workspace_path.startswith("s3://"):
+            return None
+
+        parsed = urlparse(workspace_path)
+        return {
+            "bucket": parsed.netloc,
+            "prefix": parsed.path.lstrip('/'),
+        }
+
+    def _build_s3_mount_entrypoint(
+        self,
+        s3_bucket: str,
+        s3_prefix: str,
+        s3_endpoint_url: str,
+        s3_access_key: str,
+        s3_secret_key: str,
+    ) -> str:
+        """
+        构建容器启动脚本，用于挂载 S3 bucket
+
+        Args:
+            s3_bucket: S3 bucket 名称
+            s3_prefix: S3 路径前缀
+            s3_endpoint_url: S3 端点 URL
+            s3_access_key: S3 访问密钥 ID
+            s3_secret_key: S3 访问密钥
+
+        Returns:
+            Shell 脚本字符串
+
+        工作原理:
+        1. 挂载 S3 bucket 到 /workspace/s3-root
+        2. 创建符号链接 /workspace -> /workspace/s3-root/sessions/{session_id}
+        3. 这样 /workspace 直接指向 session 的 workspace
+        """
+        # 对于 MinIO，需要使用 use_path_request_style
+        path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
+
+        return f"""#!/bin/sh
+set -e
+
+# 创建 s3fs 凭证文件
+echo "{s3_access_key}:{s3_secret_key}" > /tmp/.passwd-s3fs
+chmod 600 /tmp/.passwd-s3fs
+
+# 1. 创建 S3 挂载点（注意：不是直接挂到 /workspace）
+echo "Mounting S3 bucket {s3_bucket}..."
+mkdir -p /mnt/s3-root
+s3fs {s3_bucket} /mnt/s3-root \\
+    -o passwd_file=/tmp/.passwd-s3fs \\
+    -o url={s3_endpoint_url or "https://s3.amazonaws.com"} \\
+    {path_style_option} \\
+    -o allow_other \\
+    -o umask=000
+
+# 2. 创建 session workspace 目录（如果不存在）
+SESSION_PATH="/mnt/s3-root/{s3_prefix}"
+echo "Ensuring session workspace exists: $SESSION_PATH"
+mkdir -p "$SESSION_PATH"
+
+# 3. 将 /workspace 移动到临时位置
+mv /workspace /workspace-old 2>/dev/null || true
+
+# 4. 创建符号链接从 /workspace 到 session 目录
+ln -s "$SESSION_PATH" /workspace
+
+# 5. 验证符号链接
+echo "Workspace symlink: $(ls -la /workspace)"
+
+# 6. 使用 gosu 切换到 sandbox 用户运行 executor
+echo "Starting sandbox executor as sandbox user..."
+exec gosu sandbox python -m executor.interfaces.http.rest
+"""
+
     async def create_container(self, config: ContainerConfig) -> str:
         """
         创建 Docker 容器
@@ -60,9 +150,17 @@ class DockerScheduler(IContainerScheduler):
         容器配置：
         - NetworkMode: sandbox_network (容器网络，用于 executor 通信)
         - CAP_DROP: ALL (移除所有特权)
+        - CAP_ADD: SYS_ADMIN (仅当使用 S3 workspace 时需要，用于 FUSE 挂载)
         - SecurityOpt: no-new-privileges (禁止获取新权限)
         - User: 1000:1000 (非特权用户)
         - ReadonlyRootfs: false (需要写入工作空间)
+
+        S3 Workspace 挂载：
+        当 workspace_path 以 s3:// 开头时，容器会通过 s3fs 将 S3 bucket 挂载到 /workspace：
+        - 添加 /dev/fuse 设备（FUSE 需要）
+        - 添加 SYS_ADMIN capability（FUSE 挂载需要）
+        - 创建 entrypoint 脚本，在启动 executor 之前先挂载 S3
+        - 容器启动后自动 cd 到 workspace 子目录
         """
         docker = await self._ensure_docker()
 
@@ -70,34 +168,96 @@ class DockerScheduler(IContainerScheduler):
         cpu_quota = int(float(config.cpu_limit) * 100000)
         memory_bytes = self._parse_memory_to_bytes(config.memory_limit)
 
-        # aiodocker 的 config 格式
+        # 检查是否需要 S3 workspace 挂载
+        s3_workspace = self._parse_s3_workspace(config.workspace_path)
+        use_s3_mount = s3_workspace is not None
+
+        # 基础环境变量
+        env_vars = dict(config.env_vars)
+
+        # 基础容器配置
         container_config = {
             "Image": config.image,
             "Hostname": config.name,
-            "Env": [f"{k}={v}" for k, v in config.env_vars.items()],
+            "Env": [f"{k}={v}" for k, v in env_vars.items()],
             "HostConfig": {
-                "NetworkMode": config.network_name,  # 使用指定的 Docker 网络
-                "CapDrop": ["ALL"],  # 移除所有特权
-                "SecurityOpt": ["no-new-privileges"],  # 禁止获取新权限
-                "User": "1000:1000",  # 非特权用户
+                "NetworkMode": config.network_name,
+                # 默认配置，S3 mount 模式会覆盖
                 "CpuQuota": cpu_quota,
                 "CpuPeriod": 100000,
                 "Memory": memory_bytes,
-                "MemorySwap": memory_bytes,  # 禁用 swap
-                # PortBindings removed - executor ports NOT mapped to host
-                # to avoid conflicts when multiple sessions are created
+                "MemorySwap": memory_bytes,
             },
             "Labels": config.labels,
             "ExposedPorts": {
-                "8080/tcp": {}  # 声明容器暴露的端口（仅用于内部网络通信）
+                "8080/tcp": {}
             },
         }
+
+        # 如果不使用 S3 workspace，保持原有安全配置
+        if not use_s3_mount:
+            container_config["HostConfig"]["CapDrop"] = ["ALL"]
+            container_config["HostConfig"]["SecurityOpt"] = ["no-new-privileges"]
+            container_config["HostConfig"]["User"] = "1000:1000"
+
+        # 如果使用 S3 workspace 挂载，添加必要的配置
+        if use_s3_mount:
+            settings = get_settings()
+
+            # 以 root 用户启动（覆盖 Dockerfile 中的 USER sandbox）
+            # 这样 entrypoint 脚本可以以 root 执行 s3fs 挂载
+            container_config["User"] = "root"
+
+            # 添加 SYS_ADMIN capability（FUSE 需要）
+            container_config["HostConfig"]["CapAdd"] = ["SYS_ADMIN"]
+
+            # 添加 /dev/fuse 设备
+            container_config["HostConfig"]["Devices"] = [
+                {
+                    "PathOnHost": "/dev/fuse",
+                    "PathInContainer": "/dev/fuse",
+                    "CgroupPermissions": "rwm"
+                }
+            ]
+
+            # 添加 tmpfs 用于 s3fs 缓存
+            container_config["HostConfig"]["Tmpfs"] = {
+                "/tmp": "size=100M,mode=1777"
+            }
+
+            # 添加 S3 相关环境变量
+            s3_env_vars = {
+                "S3_BUCKET": s3_workspace["bucket"],
+                "S3_PREFIX": s3_workspace["prefix"],
+                "S3_ENDPOINT_URL": settings.s3_endpoint_url or "https://s3.amazonaws.com",
+                "S3_REGION": settings.s3_region,
+                "WORKSPACE_MOUNT_POINT": "/workspace",
+                "WORKSPACE_PATH": "/workspace",  # 告诉 executor 使用本地挂载点
+            }
+            for k, v in s3_env_vars.items():
+                container_config["Env"].append(f"{k}={v}")
+
+            # 构建并设置 entrypoint 脚本
+            entrypoint_script = self._build_s3_mount_entrypoint(
+                s3_bucket=s3_workspace["bucket"],
+                s3_prefix=s3_workspace["prefix"],
+                s3_endpoint_url=settings.s3_endpoint_url or "",
+                s3_access_key=settings.s3_access_key_id,
+                s3_secret_key=settings.s3_secret_access_key,
+            )
+            container_config["Entrypoint"] = ["/bin/sh", "-c"]
+            container_config["Cmd"] = [entrypoint_script]
+
+            logger.info(
+                f"Configuring S3 workspace mount for {config.name}: "
+                f"bucket={s3_workspace['bucket']}, prefix={s3_workspace['prefix']}"
+            )
 
         try:
             container = await docker.containers.create(container_config, name=config.name)
             logger.info(
                 f"Created container {container.id} for session {config.name} "
-                f"on network {config.network_name}"
+                f"on network {config.network_name} (S3 mount: {use_s3_mount})"
             )
             return container.id
         except DockerError as e:

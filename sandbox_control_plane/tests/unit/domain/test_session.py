@@ -22,7 +22,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.CREATING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -38,7 +38,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.CREATING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -58,7 +58,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -72,7 +72,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -91,7 +91,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
             last_activity_at=old_time,
         )
@@ -108,7 +108,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
             last_activity_at=old_time,
         )
@@ -125,7 +125,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -152,7 +152,7 @@ class TestSession:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker",
         )
 
@@ -175,7 +175,7 @@ class TestSession:
                 template_id="python-datascience",
                 status=SessionStatus.CREATING,
                 resource_limit=ResourceLimit.default(),
-                workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+                workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
                 runtime_type="docker",
                 timeout=-1,  # 无效值
             )

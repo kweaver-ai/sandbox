@@ -323,6 +323,10 @@ class MockStorageService(IStorageService):
     async def list_files(self, prefix: str, limit: int = 1000):
         return []
 
+    async def delete_prefix(self, prefix: str) -> int:
+        """删除指定前缀的所有文件（Mock 实现）"""
+        return 0
+
 
 # Module-level singletons for shared components
 _container_scheduler_singleton = None
@@ -536,9 +540,36 @@ def get_docker_scheduler_service(
     )
 
 
-def get_storage_service() -> IStorageService:
-    """获取存储服务（始终使用 Mock）"""
-    return MockStorageService()
+# Storage service singleton (cached at module level for use with Depends)
+_storage_service_singleton = None
+
+
+def get_storage_service():
+    """
+    获取存储服务（S3 或 Mock）
+
+    根据环境变量配置决定使用 S3Storage 还是 MockStorageService。
+    如果设置了 S3_ACCESS_KEY_ID，则使用 S3Storage，否则使用 MockStorageService。
+
+    Note: This function returns a cached singleton to ensure consistent behavior
+    when used with FastAPI's Depends().
+    """
+    global _storage_service_singleton
+
+    if _storage_service_singleton is not None:
+        return _storage_service_singleton
+
+    settings = get_settings()
+
+    # 如果配置了 S3 访问密钥，使用 S3Storage
+    if settings.s3_access_key_id:
+        from src.infrastructure.storage.s3_storage import S3Storage
+        _storage_service_singleton = S3Storage()
+    else:
+        # 否则使用 MockStorageService
+        _storage_service_singleton = MockStorageService()
+
+    return _storage_service_singleton
 
 
 def get_session_service_db(
@@ -546,6 +577,7 @@ def get_session_service_db(
     execution_repo: IExecutionRepository = Depends(get_execution_repository),
     template_repo: ITemplateRepository = Depends(get_template_repository),
     scheduler: IScheduler = Depends(get_docker_scheduler_service),
+    storage_service = Depends(get_storage_service),
 ) -> SessionService:
     """获取会话服务（使用数据库仓储和 Docker 调度器）"""
     return SessionService(
@@ -553,6 +585,7 @@ def get_session_service_db(
         execution_repo=execution_repo,
         template_repo=template_repo,
         scheduler=scheduler,
+        storage_service=storage_service,
     )
 
 
@@ -565,7 +598,7 @@ def get_template_service_db(
 
 def get_file_service_db(
     session_repo: ISessionRepository = Depends(get_session_repository),
-    storage_service: IStorageService = Depends(get_storage_service),
+    storage_service = Depends(get_storage_service),
 ) -> FileService:
     """获取文件服务（使用数据库仓储）"""
     return FileService(

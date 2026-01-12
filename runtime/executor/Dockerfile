@@ -14,6 +14,10 @@ LABEL version="1.0.0"
 RUN apt-get update && apt-get install -y \
     # Bubblewrap for process isolation (second layer)
     bubblewrap \
+    # s3fs for S3 workspace mounting (FUSE filesystem)
+    s3fs \
+    # gosu for dropping privileges in entrypoint
+    gosu \
     # curl for health checks
     curl \
     ca-certificates \

@@ -6,6 +6,7 @@
 from typing import List, Optional
 from datetime import datetime, timedelta
 import uuid
+import logging
 
 from src.domain.entities.session import Session
 from src.domain.entities.execution import Execution
@@ -16,13 +17,17 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.execution_repository import IExecutionRepository
 from src.domain.repositories.template_repository import ITemplateRepository
 from src.domain.services.scheduler import IScheduler, ScheduleRequest
+from src.domain.services.storage import IStorageService
 from src.application.commands.create_session import CreateSessionCommand
+from src.infrastructure.config.settings import get_settings
 from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.queries.get_session import GetSessionQuery
 from src.application.queries.get_execution import GetExecutionQuery
 from src.application.dtos.session_dto import SessionDTO
 from src.application.dtos.execution_dto import ExecutionDTO
 from src.shared.errors.domain import NotFoundError, ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class SessionService:
@@ -37,12 +42,14 @@ class SessionService:
         session_repo: ISessionRepository,
         execution_repo: IExecutionRepository,
         template_repo: ITemplateRepository,
-        scheduler: IScheduler
+        scheduler: IScheduler,
+        storage_service: Optional[IStorageService] = None
     ):
         self._session_repo = session_repo
         self._execution_repo = execution_repo
         self._template_repo = template_repo
         self._scheduler = scheduler
+        self._storage_service = storage_service
 
     async def create_session(self, command: CreateSessionCommand) -> SessionDTO:
         """
@@ -78,7 +85,8 @@ class SessionService:
         runtime_type = self._infer_runtime_type(template.image)
 
         resource_limit = command.resource_limit or ResourceLimit.default()
-        workspace_path = f"s3://sandbox-bucket/sessions/{session_id}"
+        settings = get_settings()
+        workspace_path = f"s3://{settings.s3_bucket}/sessions/{session_id}"
 
         session = Session(
             id=session_id,
@@ -149,7 +157,8 @@ class SessionService:
         1. 查找会话
         2. 验证状态
         3. 销毁 Docker 容器（如果调度器支持）
-        4. 更新会话状态
+        4. 清理 S3 文件（如果配置了存储服务）
+        5. 更新会话状态
         """
         session = await self._session_repo.find_by_id(session_id)
         if not session:
@@ -166,8 +175,23 @@ class SessionService:
                 )
             except Exception as e:
                 # 记录错误但不中断流程
-                import logging
-                logging.warning(f"Failed to destroy container {session.container_id}: {e}")
+                logger.warning(f"Failed to destroy container {session.container_id}: {e}")
+
+        # 清理 S3 文件（如果配置了存储服务）
+        if self._storage_service:
+            try:
+                # workspace_path 格式: s3://bucket/sessions/{session_id}/
+                # 提取前缀用于批量删除
+                if session.workspace_path.startswith("s3://"):
+                    # 使用完整的 workspace_path 作为前缀
+                    deleted_count = await self._storage_service.delete_prefix(session.workspace_path)
+                    logger.info(
+                        f"Deleted {deleted_count} files for session {session_id} "
+                        f"(workspace: {session.workspace_path})"
+                    )
+            except Exception as e:
+                # 记录错误但不中断流程
+                logger.warning(f"Failed to cleanup files for session {session_id}: {e}")
 
         # 更新会话状态
         session.mark_as_terminated()

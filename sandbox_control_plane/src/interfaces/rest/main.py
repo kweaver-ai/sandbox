@@ -42,9 +42,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting Sandbox Control Plane")
 
     # 初始化依赖注入
-    from src.infrastructure.dependencies import initialize_dependencies
+    from src.infrastructure.dependencies import initialize_dependencies, get_storage_service
     initialize_dependencies(app)
     logger.info("Dependencies initialized")
+
+    # 初始化 S3 storage（确保 bucket 存在）
+    try:
+        storage_service = get_storage_service()
+        await storage_service.initialize()
+    except Exception as e:
+        logger.warning(f"S3 storage initialization failed (continuing): {e}")
 
     # 初始化数据库并创建表
     from src.infrastructure.persistence.database import db_manager
@@ -107,7 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 注册会话清理任务（每 5 分钟）
     from src.application.services.session_cleanup_service import SessionCleanupService
-    from src.infrastructure.dependencies import get_docker_scheduler_service
+    from src.infrastructure.dependencies import get_docker_scheduler_service, get_storage_service
     from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
     from src.infrastructure.persistence.database import db_manager
 
@@ -119,11 +126,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 runtime_node_repo=None,
                 template_repo=None,
             )
+            storage_service = get_storage_service()
             cleanup_svc = SessionCleanupService(
                 session_repo=session_repo,
                 scheduler=scheduler,
                 idle_timeout_minutes=30,
                 max_lifetime_hours=6,
+                storage_service=storage_service,
             )
             return await cleanup_svc.cleanup_idle_sessions()
 

@@ -38,7 +38,7 @@ def session(session_id, resource_limit):
         template_id="python-datascience",
         status=SessionStatus.CREATING,
         resource_limit=resource_limit,
-        workspace_path=f"s3://sandbox-bucket/sessions/{session_id}",
+        workspace_path=f"s3://sandbox-workspace/sessions/{session_id}",
         runtime_type="docker"
     )
 
@@ -51,7 +51,7 @@ def running_session(session_id, resource_limit):
         template_id="python-datascience",
         status=SessionStatus.RUNNING,
         resource_limit=resource_limit,
-        workspace_path=f"s3://sandbox-bucket/sessions/{session_id}",
+        workspace_path=f"s3://sandbox-workspace/sessions/{session_id}",
         runtime_type="docker",
         runtime_node="node-1",
         container_id="container-123"

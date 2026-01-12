@@ -123,7 +123,7 @@ class TestSessionService:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker"
         )
         session_repo.find_by_id.return_value = session
@@ -155,7 +155,7 @@ class TestSessionService:
             template_id="python-datascience",
             status=SessionStatus.RUNNING,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker"
         )
         session_repo.find_by_id.return_value = session
@@ -173,7 +173,7 @@ class TestSessionService:
             template_id="python-datascience",
             status=SessionStatus.TERMINATED,
             resource_limit=ResourceLimit.default(),
-            workspace_path="s3://sandbox-bucket/sessions/sess_20240115_abc123",
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
             runtime_type="docker"
         )
         session_repo.find_by_id.return_value = session

@@ -9,15 +9,9 @@ from typing import Optional
 
 from src.application.services.file_service import FileService
 from src.interfaces.rest.schemas.response import ErrorResponse
+from src.infrastructure.dependencies import get_file_service_db
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
-
-
-async def get_file_service(
-    request: fastapi.Request
-) -> FileService:
-    """依赖注入：获取文件服务"""
-    return request.app.state.file_service
 
 
 @router.post("/upload")
@@ -25,7 +19,7 @@ async def upload_file(
     session_id: str,
     path: str,
     file: UploadFile = File(...),
-    service: FileService = Depends(get_file_service)
+    service: FileService = Depends(get_file_service_db)
 ):
     """
     上传文件到会话工作区
@@ -66,7 +60,7 @@ async def upload_file(
 async def download_file(
     session_id: str,
     file_path: str,
-    service: FileService = Depends(get_file_service)
+    service: FileService = Depends(get_file_service_db)
 ):
     """
     从会话工作区下载文件
