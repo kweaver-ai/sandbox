@@ -2724,6 +2724,422 @@ flowchart TD
    - 监控节点不健康比例（应 < 10%）
    - 告警阈值：连续 3 次重试失败
 
+### 4.4 S3 Workspace 挂载架构
+
+本节详细描述 S3 workspace 挂载的实现机制，使容器内的用户代码能够像访问本地文件系统一样访问 S3 对象存储。
+
+#### 4.4.1 架构概述
+
+```mermaid
+flowchart LR
+    subgraph ControlPlane["Control Plane"]
+        FileAPI["文件 API<br/>/sessions/{id}/files/*"]
+        SessionService["Session Service"]
+        S3Storage["S3Storage Service<br/>(boto3)"]
+    end
+
+    subgraph DockerScheduler["Docker Scheduler"]
+        DetectS3["检测 S3 Workspace<br/>workspace_path starts with s3://"]
+        MountConfig["配置 S3 挂载<br/>- SYS_ADMIN capability<br/>- /dev/fuse device<br/>- s3fs entrypoint"]
+    end
+
+    subgraph ExecutorContainer["Executor Container"]
+        Entrypoint["Entrypoint Script<br/>(s3fs mount)"]
+        S3FSMount["/mnt/s3-root<br/>(s3fs 挂载点)"]
+        WorkspaceSymlink["/workspace<br/>→ /mnt/s3-root/sessions/{id}"]
+        Executor["Executor<br/>(sandbox-executor)"]
+    end
+
+    subgraph S3Backend["S3 / MinIO"]
+        Bucket["sandbox-workspace<br/>/sessions/{session_id}/<br/>├── uploads/<br/>└── artifacts/"]
+    end
+
+    FileAPI -->|"上传/下载"| S3Storage
+    SessionService -->|"创建会话<br/>workspace_path=s3://..."| DetectS3
+    S3Storage <-->|"boto3 API"| Bucket
+
+    DetectS3 -->|"需要 S3 挂载"| MountConfig
+    MountConfig -->|"生成 entrypoint 脚本<br/>包含 S3 凭证"| Entrypoint
+    Entrypoint -->|"s3fs 命令"| S3FSMount
+    S3FSMount -->|"符号链接"| WorkspaceSymlink
+    WorkspaceSymlink -->|"文件读写"| Executor
+    S3FSMount <-->|"FUSE"| Bucket
+
+    style ControlPlane fill:#bbdefb
+    style DockerScheduler fill:#c8e6c9
+    style ExecutorContainer fill:#fff9c4
+    style S3Backend fill:#f8bbd0
+```
+
+**关键设计决策**：
+
+| 组件 | 方案 | 说明 |
+|------|------|------|
+| 挂载方式 | **s3fs-fuse** | 用户态文件系统，无需内核模块 |
+| 挂载点 | `/mnt/s3-root` + 符号链接 | 支持多 session 共享 bucket |
+| 运行用户 | root → gosu sandbox 1000:1000 | 挂载需要 root，执行降权 |
+| 能力要求 | SYS_ADMIN + /dev/fuse | FUSE 挂载必需 |
+| 缓存策略 | tmpfs 100M at /tmp | s3fs 缓存元数据和小文件 |
+
+#### 4.4.2 Docker Scheduler 实现
+
+**S3 Workspace 检测**：
+
+```python
+def _parse_s3_workspace(self, workspace_path: str) -> Optional[dict]:
+    """解析 S3 workspace 路径"""
+    if not workspace_path or not workspace_path.startswith("s3://"):
+        return None
+
+    parsed = urlparse(workspace_path)
+    return {
+        "bucket": parsed.netloc,
+        "prefix": parsed.path.lstrip('/'),
+    }
+```
+
+**容器配置增强**：
+
+```python
+# 当 workspace_path 以 s3:// 开头时
+if s3_workspace := self._parse_s3_workspace(config.workspace_path):
+    container_config["User"] = "root"  # 临时使用 root 执行 s3fs
+    container_config["HostConfig"]["CapAdd"] = ["SYS_ADMIN"]  # FUSE 需要
+    container_config["HostConfig"]["Devices"] = [
+        {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse", "CgroupPermissions": "rwm"}
+    ]
+    container_config["HostConfig"]["Tmpfs"] = {"/tmp": "size=100M,mode=1777"}  # s3fs 缓存
+
+    # 生成 entrypoint 脚本
+    entrypoint_script = self._build_s3_mount_entrypoint(
+        s3_bucket=s3_workspace["bucket"],
+        s3_prefix=s3_workspace["prefix"],
+        s3_endpoint_url=settings.s3_endpoint_url or "",
+        s3_access_key=settings.s3_access_key_id,
+        s3_secret_key=settings.s3_secret_access_key,
+    )
+    container_config["Entrypoint"] = ["/bin/sh", "-c"]
+    container_config["Cmd"] = [entrypoint_script]
+```
+
+**Entrypoint 脚本生成**：
+
+```python
+def _build_s3_mount_entrypoint(self, s3_bucket: str, s3_prefix: str,
+                               s3_endpoint_url: str, s3_access_key: str,
+                               s3_secret_key: str) -> str:
+    """构建容器启动脚本，用于挂载 S3 bucket"""
+    # 对于 MinIO，需要使用 use_path_request_style
+    path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
+
+    return f"""#!/bin/sh
+set -e
+
+# 创建 s3fs 凭证文件
+echo "{s3_access_key}:{s3_secret_key}" > /tmp/.passwd-s3fs
+chmod 600 /tmp/.passwd-s3fs
+
+# 1. 创建 S3 挂载点（挂载整个 bucket）
+echo "Mounting S3 bucket {s3_bucket}..."
+mkdir -p /mnt/s3-root
+s3fs {s3_bucket} /mnt/s3-root \\
+    -o passwd_file=/tmp/.passwd-s3fs \\
+    -o url={s3_endpoint_url or "https://s3.amazonaws.com"} \\
+    {path_style_option} \\
+    -o allow_other \\
+    -o umask=000
+
+# 2. 创建 session workspace 目录（如果不存在）
+SESSION_PATH="/mnt/s3-root/{s3_prefix}"
+echo "Ensuring session workspace exists: $SESSION_PATH"
+mkdir -p "$SESSION_PATH"
+
+# 3. 将 /workspace 移动到临时位置
+mv /workspace /workspace-old 2>/dev/null || true
+
+# 4. 创建符号链接从 /workspace 到 session 目录
+ln -s "$SESSION_PATH" /workspace
+
+# 5. 验证符号链接
+echo "Workspace symlink: $(ls -la /workspace)"
+
+# 6. 使用 gosu 切换到 sandbox 用户运行 executor
+echo "Starting sandbox executor as sandbox user..."
+exec gosu sandbox python -m executor.interfaces.http.rest
+"""
+```
+
+#### 4.4.3 Executor 镜像要求
+
+**Dockerfile 关键配置**：
+
+```dockerfile
+FROM python:3.11-slim
+
+# 安装 s3fs（S3 挂载必需）
+RUN apt-get update && apt-get install -y \
+    s3fs \
+    gosu \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非特权用户
+RUN groupadd -g 1000 sandbox && \
+    useradd -m -u 1000 -g sandbox sandbox
+
+# 创建 workspace 目录
+RUN mkdir -p /workspace && \
+    chown -R sandbox:sandbox /workspace
+
+# 切换到非特权用户
+USER sandbox
+WORKDIR /workspace
+
+EXPOSE 8080
+CMD ["python", "-m", "executor.interfaces.http.rest"]
+```
+
+#### 4.4.4 文件 API 实现
+
+**上传文件流程**：
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant API as 文件 API
+    participant S3Service as S3Storage
+    participant S3 as S3/MinIO
+
+    Client->>API: POST /sessions/{id}/files/upload?path=data.csv
+    API->>API: 验证会话存在且运行中
+    API->>API: 构建完整 S3 路径<br/>s3://bucket/sessions/{id}/data.csv
+    API->>S3Service: upload_file(s3_path, content)
+    S3Service->>S3: boto3.put_object()
+    S3-->>S3Service: 上传成功
+    S3Service-->>API: 返回
+    API-->>Client: 200 OK {file_path, size}
+```
+
+**下载文件流程**：
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant API as 文件 API
+    participant S3Service as S3Storage
+    participant S3 as S3/MinIO
+
+    Client->>API: GET /sessions/{id}/files/data.csv
+    API->>API: 验证会话存在
+    API->>S3Service: get_file_info(s3_path)
+    S3Service->>S3: boto3.head_object()
+    S3-->>S3Service: 文件元数据
+
+    alt 文件 < 10MB
+        API->>S3Service: download_file(s3_path)
+        S3Service->>S3: boto3.get_object()
+        S3-->>S3Service: 文件内容
+        API-->>Client: 200 OK (直接返回内容)
+    else 文件 >= 10MB
+        API->>S3Service: generate_presigned_url(s3_path)
+        S3Service->>S3: boto3.generate_presigned_url()
+        S3-->>S3Service: 预签名 URL
+        API-->>Client: 200 OK {presigned_url}
+    end
+```
+
+**S3Storage 核心方法**：
+
+```python
+class S3Storage(IStorageService):
+    def __init__(self):
+        settings = get_settings()
+        self._client = boto3.client(
+            's3',
+            endpoint_url=settings.s3_endpoint_url or None,
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+        )
+        self._bucket = settings.s3_bucket
+
+    async def upload_file(self, s3_path: str, content: bytes,
+                         content_type: str = "application/octet-stream"):
+        """上传文件到 S3"""
+        bucket, key = self._parse_s3_path(s3_path)
+        await asyncio.to_thread(
+            self._client.put_object,
+            Bucket=bucket,
+            Key=key,
+            Body=content,
+            ContentType=content_type
+        )
+
+    async def download_file(self, s3_path: str) -> bytes:
+        """从 S3 下载文件"""
+        bucket, key = self._parse_s3_path(s3_path)
+        response = await asyncio.to_thread(
+            self._client.get_object,
+            Bucket=bucket,
+            Key=key
+        )
+        return response['Body'].read()
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """删除指定前缀的所有文件（用于会话清理）"""
+        bucket, key_prefix = self._parse_s3_path(prefix)
+        deleted_count = 0
+
+        paginator = self._client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=key_prefix):
+            if 'Contents' in page:
+                objects = [{'Key': obj['Key']} for obj in page['Contents']]
+                await asyncio.to_thread(
+                    self._client.delete_objects,
+                    Bucket=bucket,
+                    Delete={'Objects': objects}
+                )
+                deleted_count += len(objects)
+
+        return deleted_count
+```
+
+#### 4.4.5 会话清理
+
+**自动清理 S3 文件**：
+
+```python
+async def terminate_session(self, session_id: str) -> SessionDTO:
+    """终止会话，清理 S3 文件"""
+    session = await self._session_repo.find_by_id(session_id)
+
+    # 销毁 Docker 容器
+    if session.container_id:
+        await self._scheduler.destroy_container(session.container_id)
+
+    # 清理 S3 文件
+    if self._storage_service and session.workspace_path.startswith("s3://"):
+        deleted_count = await self._storage_service.delete_prefix(
+            session.workspace_path
+        )
+        logger.info(f"Deleted {deleted_count} files for session {session_id}")
+
+    # 更新会话状态
+    session.mark_as_terminated()
+    await self._session_repo.save(session)
+
+    return SessionDTO.from_entity(session)
+```
+
+#### 4.4.6 配置说明
+
+**环境变量**：
+
+```bash
+# S3/MinIO 配置
+S3_BUCKET=sandbox-workspace          # 存储桶名称
+S3_REGION=us-east-1                 # 区域
+S3_ACCESS_KEY_ID=minioadmin         # 访问密钥 ID
+S3_SECRET_ACCESS_KEY=minioadmin     # 访问密钥
+S3_ENDPOINT_URL=http://minio:9000   # MinIO 端点（AWS S3 留空）
+```
+
+**docker-compose.yml 配置示例**：
+
+```yaml
+services:
+  control-plane:
+    environment:
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=minioadmin
+      - S3_SECRET_ACCESS_KEY=minioadmin
+      - S3_BUCKET=sandbox-workspace
+      - S3_REGION=us-east-1
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  minio:
+    image: quay.io/minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_DEFAULT_BUCKETS: sandbox-workspace
+    command: server /data --console-address ":9001"
+```
+
+#### 4.4.7 安全考虑
+
+| 安全措施 | 说明 |
+|----------|------|
+| **SYS_ADMIN 能力** | 仅在 S3 workspace 模式下添加，其他模式使用 CapDrop=ALL |
+| **用户降权** | 挂载后使用 gosu 切换到 UID:GID 1000:1000 |
+| **凭证管理** | 生产环境建议使用 IAM Roles 或 Docker Secrets |
+| **网络隔离** | 容器 NetworkMode=none 或独立网络 |
+| **资源限制** | tmpfs 100M 限制 s3fs 缓存大小 |
+
+#### 4.4.8 故障处理
+
+| 故障场景 | 处理方式 |
+|----------|----------|
+| **S3 不可达** | s3fs 挂载失败，容器启动失败，session 标记为 failed |
+| **权限不足** | 挂载失败，检查 S3 凭证配置 |
+| **文件过大** | 使用预签名 URL，绕过 Control Plane |
+| **并发写入** | s3fs 支持并发，但性能受限，建议文件操作串行化 |
+
+#### 4.4.9 性能优化
+
+| 优化项 | 方案 |
+|--------|------|
+| **小文件上传** | 直接使用 boto3 put_object（<5MB） |
+| **大文件上传** | 使用 boto3 upload_file（分片上传） |
+| **文件下载** | <10MB 直接返回，>10MB 使用预签名 URL |
+| **缓存策略** | s3fs 使用 /tmp 缓存（100M tmpfs） |
+| **并发限制** | 限制单个 session 的并发文件操作数 |
+
+#### 4.4.10 测试验证
+
+**E2E 测试场景**：
+
+```python
+async def test_e2e_s3_workspace():
+    """S3 workspace 挂载端到端测试"""
+
+    # 1. 创建会话（S3 workspace）
+    session = await create_session(template_id="python-basic")
+    assert session.workspace_path.startswith("s3://")
+
+    # 2. 上传文件
+    await upload_file(session.id, "uploads/data.csv", content)
+    file_info = await s3_storage.file_exists(f"{session.workspace_path}/uploads/data.csv")
+    assert file_info is True
+
+    # 3. 在容器内读取上传的文件
+    result = await execute_code(session.id, """
+        import os
+        with open('/workspace/uploads/data.csv', 'r') as f:
+            content = f.read()
+        print(content)
+    """)
+    assert content in result.stdout
+
+    # 4. 在容器内写入新文件
+    await execute_code(session.id, """
+        with open('/workspace/artifacts/output.txt', 'w') as f:
+            f.write('generated content')
+    """)
+
+    # 5. 下载生成的文件
+    downloaded = await download_file(session.id, "artifacts/output.txt")
+    assert downloaded == "generated content"
+
+    # 6. 删除会话，验证 S3 文件被清理
+    await terminate_session(session.id)
+    files = await s3_storage.list_files(f"{session.workspace_path}/")
+    assert len(files) == 0
+```
+
 ## 5. Python 依赖配置
 
 ### 5.1 核心依赖
