@@ -52,6 +52,7 @@ This roadmap outlines the remaining features to implement for the Sandbox Platfo
 | **Runtime Abstraction** | Docker + K8s dual runtime not unified | **P1 (High)** | 1 week |
 | **Security Hardening** | Rate limiting, audit logging missing | P1 | 3-5 days |
 | **Prometheus Metrics** | No observability integration | **P2 (Lowest)** | 3-5 days |
+| **Python Dependency Installation** | No third-party package support (pip install) | **P1 (Highest)** | TBD |
 
 ### Deferred (Not Planned)
 
@@ -69,6 +70,7 @@ This roadmap outlines the remaining features to implement for the Sandbox Platfo
 > **Priority Notes** (from user):
 > - Python execution is the primary focus (multi-language support deprioritized)
 > - **Docker + K8s Runtime support is HIGH PRIORITY**
+> - **Python dependency installation (pip install) is HIGH PRIORITY** - implementation approach TBD
 > - SDK/CLI tools are lower priority
 > - Warm Pool removed (not implementing)
 > - Observability is lowest priority
@@ -139,6 +141,29 @@ This roadmap outlines the remaining features to implement for the Sandbox Platfo
 - `sandbox_control_plane/config/logging.py` - Add audit logging
 
 **Deliverable**: Production-ready platform with Docker + K8s dual runtime support
+
+#### Sprint 1.5: Python Dependency Installation (P1 - Highest, Implementation TBD)
+- [ ] **Design discussion required**: Implementation approach for pip install support
+- [ ] Possible approaches to evaluate:
+  - Per-session isolated virtual environments
+  - Template-level pre-installed packages
+  - Runtime pip install with persistence across executions
+  - Hybrid approach (common packages in template + user packages per session)
+- [ ] Security considerations:
+  - Package verification and sandboxing
+  - Dependency conflicts between sessions
+  - Disk space management and cleanup
+- [ ] API design for dependency management
+- [ ] Tests for package installation and isolation
+
+**Status**: HIGH PRIORITY - Implementation approach to be discussed
+
+**Files to create**:
+- `runtime/executor/application/dependency_manager.py` (new) - Package installation logic
+- `sandbox_control_plane/src/interfaces/rest/api/v1/dependencies.py` (new) - Dependency management API
+- Template enhancement to support pre-installed packages
+
+**Deliverable**: Support for third-party Python package installation in sandboxed executions
 
 ---
 
@@ -257,6 +282,7 @@ These items are deprioritized and can be implemented later based on actual user 
 - [ ] Docker and K8s schedulers share common interface
 - [ ] Runtime nodes can be Docker or K8s (selectable via config)
 - [ ] Security tests pass (rate limiting, audit logging)
+- [ ] **Python dependency installation supported** (implementation approach defined)
 
 ### Phase 2 Complete When (Observability - Optional):
 - [ ] Prometheus metrics exported at `/metrics`
@@ -284,6 +310,10 @@ sandbox_control_plane/src/application/scheduler_service.py
 
 # Sprint 1.4: Security
 sandbox_control_plane/src/interfaces/rest/middleware/rate_limit.py
+
+# Sprint 1.5: Python Dependency Installation (Implementation TBD)
+runtime/executor/application/dependency_manager.py
+sandbox_control_plane/src/interfaces/rest/api/v1/dependencies.py
 
 # Phase 2: Observability (Optional)
 sandbox_control_plane/src/interfaces/rest/metrics.py
@@ -358,4 +388,9 @@ sandbox_control_plane/src/interfaces/rest/api/v1/health.py                 # Enh
    - Refactor Docker scheduler to common interface
    - Implement runtime selection logic
 
-4. **Documentation**: Save this roadmap to `docs/roadmap.md` for reference
+4. **Sprint 1.5 (Python Dependency Installation)**: HIGH PRIORITY - Design Discussion Required
+   - Evaluate implementation approaches (per-session venv vs template-level vs hybrid)
+   - Define API for dependency management
+   - Consider security and isolation implications
+
+5. **Documentation**: This roadmap is saved at `docs/roadmap.md` for reference
