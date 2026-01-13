@@ -120,19 +120,30 @@ ignore = [
 # Pytest 配置
 [tool.pytest.ini_options]
 minversion = "7.0"
+# 使用 strict 模式确保每个测试函数使用独立的事件循环
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = "."
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 norecursedirs = [".."]
+# 默认不启用覆盖率，避免拖慢测试速度。需要时使用 --cov 选项
 addopts = [
     "--strict-markers",
-    "--cov=src",
-    "--cov-report=html",
-    "--cov-report=term-missing",
+    "-v",  # 详细输出
+    "--tb=short",  # 简短的错误回溯
 ]
+# 注册自定义 pytest markers
+markers = [
+    "contract: Contract tests for API endpoints",
+    "integration: Integration tests requiring external services",
+    "unit: Unit tests that don't require external services",
+    "slow: Tests that take a long time to run",
+]
+# 按顺序执行测试，不使用 pytest-xdist 并行执行
+# 如需并行测试，可使用 pytest -n auto (需要安装 pytest-xdist)
 
 # Mypy 配置
 [tool.mypy]

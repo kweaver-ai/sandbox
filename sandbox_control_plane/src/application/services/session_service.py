@@ -117,15 +117,16 @@ class SessionService:
                     node_id=runtime_node.id,  # 传入调度选择的节点 ID
                 )
 
-                # 更新会话状态为 RUNNING
+                # 只保存 container_id，不立即设置状态为 RUNNING
+                # 等待 executor 通过 ready 回调来设置状态
                 session.container_id = container_id
-                session.status = SessionStatus.RUNNING
                 await self._session_repo.save(session)
 
                 import logging
                 logging.info(
-                    f"Session {session_id} created successfully, "
-                    f"container={container_id}, node={runtime_node.id}"
+                    f"Session {session_id} container created successfully, "
+                    f"container={container_id}, node={runtime_node.id}, "
+                    f"waiting for executor ready callback..."
                 )
         except Exception as e:
             # 容器创建失败，销毁部分创建的容器（如有），标记会话为失败状态
@@ -275,16 +276,13 @@ class SessionService:
     async def list_executions(
         self,
         session_id: str,
-        status_filter: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> List[ExecutionDTO]:
         """列出会话的所有执行用例"""
         executions = await self._execution_repo.find_by_session_id(
             session_id=session_id,
-            status=status_filter,
-            limit=limit,
-            offset=offset
+            limit=limit
         )
 
         return [ExecutionDTO.from_entity(e) for e in executions]

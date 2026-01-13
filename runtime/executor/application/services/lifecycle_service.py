@@ -59,6 +59,8 @@ class LifecycleService(ILifecyclePort):
         Send container_ready event to Control Plane on startup.
 
         Should be called after HTTP server starts listening.
+        This is now called from @app.on_event("startup") which ensures
+        the HTTP server is ready before this method is invoked.
 
         Returns:
             True if successful, False otherwise

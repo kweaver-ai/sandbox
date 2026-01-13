@@ -195,9 +195,14 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         }
 
         # 如果不使用 S3 workspace，保持原有安全配置
+        # 注意: Bubblewrap 需要用户命名空间支持，如果遇到权限错误：
+        # 1. 在宿主机启用: sudo sysctl -w kernel.unprivileged_userns_clone=1
+        # 2. 或者设置环境变量 DISABLE_BWRAP=true 来禁用 bubblewrap
         if not use_s3_mount:
             container_config["HostConfig"]["CapDrop"] = ["ALL"]
             container_config["HostConfig"]["SecurityOpt"] = ["no-new-privileges"]
+            # 添加 seccomp 配置以允许用户命名空间
+            container_config["HostConfig"]["SecurityOpt"].append("seccomp=default")
             container_config["HostConfig"]["User"] = "1000:1000"
 
         # 如果使用 S3 workspace 挂载，添加必要的配置

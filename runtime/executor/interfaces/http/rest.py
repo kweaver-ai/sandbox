@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from executor.application.commands.execute_code import ExecuteCodeCommand
 from executor.application.dto.execute_request import ExecuteRequestDTO
 from executor.application.services.heartbeat_service import HeartbeatService
-from executor.application.services.lifecycle_service import LifecycleService
+from executor.application.services.lifecycle_service import LifecycleService, register_lifecycle_service
 from executor.domain.value_objects import (
     ExecutionRequest as DomainExecutionRequest,
     ExecutionResult,
@@ -258,6 +258,7 @@ async def lifespan(app: FastAPI):
         heartbeat_port=heartbeat_service,
     )
     _lifecycle_service = lifecycle_service
+    register_lifecycle_service(lifecycle_service)
 
     # Register signal handlers
     # Note: Uvicorn handles SIGINT/SIGTERM by default and will trigger lifespan shutdown
@@ -277,11 +278,67 @@ async def lifespan(app: FastAPI):
 
     logger.info("Executor startup complete")
 
-    # T076 [US5]: Send container_ready after HTTP server starts listening
-    # Run in background to avoid blocking startup if HTTP client creation hangs
+    # Send container_ready signal in background after HTTP server is ready
+    # We use asyncio.create_task() to run this in the background so it doesn't
+    # block the HTTP server from starting. The signal will be sent after we verify
+    # the HTTP server is ready by checking the health endpoint.
+    async def send_ready_signal():
+        """Send container_ready signal after HTTP server is ready.
+
+        Uses a health check to verify the HTTP server is actually ready
+        before signaling the Control Plane, avoiding race conditions where
+        the Control Plane tries to connect before the server is listening.
+        """
+        import asyncio
+        import httpx
+
+        health_url = f"http://localhost:{executor_port}/health"
+        logger.info("Waiting for HTTP server to be ready...", health_url=health_url)
+
+        # Wait for HTTP server to be ready with exponential backoff
+        # Start with 50ms, max 500ms, total timeout ~3 seconds
+        base_delay = 0.05
+        max_delay = 0.5
+        max_attempts = 30
+
+        for attempt in range(max_attempts):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        health_url,
+                        timeout=httpx.Timeout(1.0, connect=0.5)
+                    )
+                    if response.status_code == 200:
+                        logger.info(
+                            "HTTP server health check passed",
+                            attempt=attempt + 1,
+                            response_time=response.elapsed.total_seconds()
+                        )
+                        break
+            except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
+                # Server not ready yet, wait with exponential backoff
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                logger.debug(
+                    "HTTP server not ready, retrying...",
+                    attempt=attempt + 1,
+                    delay=delay,
+                    error=str(e)
+                )
+                await asyncio.sleep(delay)
+        else:
+            # All attempts failed - log warning but still try to send signal
+            logger.warning(
+                "HTTP server health check failed after all attempts",
+                max_attempts=max_attempts
+            )
+
+        # Send container_ready signal to Control Plane
+        logger.info("HTTP server ready, sending container_ready signal")
+        await lifecycle_service.send_container_ready()
+
     import asyncio
-    asyncio.create_task(lifecycle_service.send_container_ready())
-    logger.info("Container ready signal task started in background")
+    asyncio.create_task(send_ready_signal())
+    logger.info("Container ready signal scheduled to run in background")
 
     yield
 

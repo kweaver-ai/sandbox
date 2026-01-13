@@ -189,7 +189,8 @@ class ExecutionResult:
             "stderr": self.stderr,
             "exit_code": self.exit_code,
             "execution_time_ms": self.execution_time_ms,
-            "artifacts": [a.to_dict() for a in self.artifacts],
+            # Send file paths (strings) instead of full artifact objects
+            "artifacts": [str(a.path) for a in self.artifacts],
             "error": self.error,
             "return_value": self.return_value,
             "metrics": self.metrics.to_dict() if self.metrics else None,

@@ -137,7 +137,6 @@ async def get_execution_result(
 @router.get("/sessions/{session_id}/executions")
 async def list_executions(
     session_id: str,
-    status_filter: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     service: SessionService = Depends(_get_session_service)
@@ -146,9 +145,7 @@ async def list_executions(
     try:
         executions = await service.list_executions(
             session_id=session_id,
-            status=status_filter,
-            limit=limit,
-            offset=offset
+            limit=limit
         )
 
         return {

@@ -139,7 +139,8 @@ class CallbackClient(ICallbackPort):
             "execution_time": execution_time,
             "return_value": result.return_value,
             "metrics": result.metrics.to_dict() if result.metrics else None,
-            "artifacts": [a.to_dict() for a in result.artifacts],
+            # Send file paths (strings) instead of full artifact objects
+            "artifacts": [str(a.path) for a in result.artifacts],
         }
         print("report body:",payload)
 

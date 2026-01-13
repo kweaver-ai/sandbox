@@ -1,8 +1,8 @@
 """
 Background Tasks Integration Tests
 
-Tests for background task management including health checks,
-warm pool cleanup, and warm pool replenishment.
+Tests for background task management including health checks
+and session cleanup service.
 """
 import pytest
 import asyncio
@@ -21,7 +21,7 @@ class TestBackgroundTaskManager:
         Test that background tasks are properly started.
 
         Verifies that the control plane has started its background
-        tasks for health checks and warm pool maintenance.
+        tasks for health checks and session cleanup.
         """
         # Check health endpoint - should indicate system is running
         response = await http_client.get("/health")
@@ -122,121 +122,6 @@ class TestBackgroundTaskManager:
         # Wait a bit and verify system is still healthy
         await asyncio.sleep(5)
 
-        response = await http_client.get("/health")
-        assert response.status_code == 200
-
-
-@pytest.mark.asyncio
-class TestWarmPoolBackgroundTasks:
-    """Warm pool background task integration tests."""
-
-    async def test_warm_pool_replenishment_task(
-        self,
-        http_client: AsyncClient,
-        test_template_id: str
-    ):
-        """
-        Test that warm pool replenishment task works.
-
-        Creates multiple sessions to use warm pool instances,
-        then verifies replenishment occurs.
-        """
-        # Create sessions to use warm pool instances
-        session_ids = []
-
-        for i in range(3):
-            session_data = {
-                "template_id": test_template_id,
-                "timeout": 300,
-                "cpu": "1",
-                "memory": "512Mi",
-                "disk": "1Gi",
-                "env_vars": {}
-            }
-
-            response = await http_client.post("/sessions", json=session_data)
-            assert response.status_code in (201, 200)
-            session = response.json()
-            session_ids.append(session["id"])
-
-        # Wait for sessions to be ready
-        for session_id in session_ids:
-            for _ in range(30):
-                response = await http_client.get(f"/sessions/{session_id}")
-                if response.status_code == 200:
-                    session_data = response.json()
-                    if session_data.get("status") in ("running", "ready"):
-                        break
-                await asyncio.sleep(1)
-
-        # Wait for replenishment cycle (2 minutes default)
-        # We'll wait a shorter time and just verify system works
-        await asyncio.sleep(10)
-
-        # Create another session - should still work
-        session_data = {
-            "template_id": test_template_id,
-            "timeout": 300,
-            "cpu": "1",
-            "memory": "512Mi",
-            "disk": "1Gi",
-            "env_vars": {}
-        }
-
-        response = await http_client.post("/sessions", json=session_data)
-        assert response.status_code in (201, 200)
-
-        # Cleanup
-        for session_id in session_ids:
-            await http_client.delete(f"/sessions/{session_id}")
-
-    async def test_warm_pool_cleanup_task(
-        self,
-        http_client: AsyncClient,
-        test_template_id: str
-    ):
-        """
-        Test that warm pool cleanup task works.
-
-        Creates sessions and terminates them, then verifies
-        that cleanup mechanism is functional.
-        """
-        # Create sessions to initialize warm pool
-        session_ids = []
-
-        for i in range(2):
-            session_data = {
-                "template_id": test_template_id,
-                "timeout": 300,
-                "cpu": "1",
-                "memory": "512Mi",
-                "disk": "1Gi",
-                "env_vars": {}
-            }
-
-            response = await http_client.post("/sessions", json=session_data)
-            assert response.status_code in (201, 200)
-            session = response.json()
-            session_ids.append(session["id"])
-
-        # Wait for sessions to be ready
-        for session_id in session_ids:
-            for _ in range(30):
-                response = await http_client.get(f"/sessions/{session_id}")
-                if response.status_code == 200:
-                    session_data = response.json()
-                    if session_data.get("status") in ("running", "ready"):
-                        break
-                await asyncio.sleep(1)
-
-        # Terminate sessions
-        for session_id in session_ids:
-            await http_client.delete(f"/sessions/{session_id}")
-
-        # Wait a bit for cleanup to potentially run
-        await asyncio.sleep(5)
-
-        # Verify system is still healthy
         response = await http_client.get("/health")
         assert response.status_code == 200
 
