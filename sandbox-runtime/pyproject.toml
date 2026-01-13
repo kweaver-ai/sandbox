@@ -10,10 +10,13 @@ authors = [
 ]
 description = "Sandbox environment for code execution"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE.txt"]
+keywords = ["sandbox", "security", "code-execution", "lambda"]
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent"
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "aiohttp==3.12.0",
