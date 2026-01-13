@@ -1,7 +1,6 @@
 import aiohttp
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
-import os
 from sandbox_runtime.sdk.base import Sandbox
 from sandbox_runtime.sdk.utils.common import safe_unescape
 import json
@@ -69,7 +68,16 @@ class SharedEnvSandbox(Sandbox):
             **kwargs,
         )
 
-    async def _request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
+    @staticmethod
+    def _unwrap_result(response: Any) -> Any:
+        """兼容处理服务端是否包 result 的返回结构。"""
+        if isinstance(response, dict) and "result" in response:
+            return response["result"]
+        return response
+
+    async def _request(
+        self, method: str, path: str, **kwargs
+    ) -> Dict[str, Any]:
         """
         发送请求到服务
 
@@ -106,7 +114,10 @@ class SharedEnvSandbox(Sandbox):
                 async with session.request(method, url, **kwargs) as response:
                     if response.status >= 400:
                         err_msg = await response.json()
-                        error_msg = f"HTTP request failed: {method} {url} - Status: {response.status}, Message: {err_msg}"
+                        error_msg = (
+                            f"HTTP request failed: {method} {url} - "
+                            f"Status: {response.status}, Message: {err_msg}"
+                        )
                         DEFAULT_LOGGER.error(error_msg)
                         raise SandboxError(
                             error_msg,
@@ -133,13 +144,17 @@ class SharedEnvSandbox(Sandbox):
             error_msg = f"Network request failed: {method} {url} - {e}"
             DEFAULT_LOGGER.error(error_msg)
             raise SandboxError(
-                error_msg, original_error=e, context={"method": method, "url": url}
+                error_msg,
+                original_error=e,
+                context={"method": method, "url": url},
             )
         except Exception as e:
             error_msg = f"Request failed: {method} {url} - {e}"
             DEFAULT_LOGGER.error(error_msg)
             raise SandboxError(
-                error_msg, original_error=e, context={"method": method, "url": url}
+                error_msg,
+                original_error=e,
+                context={"method": method, "url": url},
             )
 
     async def create_session(self, size: str = DEFAULT_SESSION_SIZE) -> str:
@@ -156,10 +171,13 @@ class SharedEnvSandbox(Sandbox):
         DEFAULT_LOGGER.info(f"Creating session with size={size}")
         try:
             result = await self._request(
-                "POST", f"/workspace/se/session/{self.session_id}", json={"size": size}
+                "POST",
+                f"/workspace/se/session/{self.session_id}",
+                json={"size": size},
             )
-            DEFAULT_LOGGER.info(f"Session created successfully: {result['result']}")
-            return result["result"]
+            unwrapped = self._unwrap_result(result)
+            DEFAULT_LOGGER.info(f"Session created successfully: {unwrapped}")
+            return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -175,7 +193,9 @@ class SharedEnvSandbox(Sandbox):
         """删除会话"""
         DEFAULT_LOGGER.info(f"Deleting session: {self.session_id}")
         try:
-            await self._request("DELETE", f"/workspace/se/session/{self.session_id}")
+            await self._request(
+                "DELETE", f"/workspace/se/session/{self.session_id}"
+            )
             DEFAULT_LOGGER.info("Session deleted successfully")
             return True
         except SandboxError:
@@ -184,17 +204,25 @@ class SharedEnvSandbox(Sandbox):
             error_msg = f"Failed to delete session: {e}"
             DEFAULT_LOGGER.error(error_msg)
             raise SandboxError(
-                error_msg, original_error=e, context={"session_id": self.session_id}
+                error_msg,
+                original_error=e,
+                context={"session_id": self.session_id},
             )
 
     async def upload_file(
-        self, file_path: Union[str, Path], target_filename: Optional[str] = None
+        self,
+        file_path: Union[str, Path],
+        target_filename: Optional[str] = None,
     ) -> Dict[str, Any]:
         """上传文件"""
         file_path = Path(file_path)
         target_filename = target_filename or file_path.name
 
-        DEFAULT_LOGGER.info(f"Uploading file: {file_path} -> {target_filename}")
+        DEFAULT_LOGGER.info(
+            "Uploading file: %s -> %s",
+            file_path,
+            target_filename,
+        )
 
         if not file_path.exists():
             error_msg = f"File not found: {file_path}"
@@ -214,10 +242,13 @@ class SharedEnvSandbox(Sandbox):
                 data.add_field("file", f, filename=target_filename)
 
                 result = await self._request(
-                    "POST", f"/workspace/se/upload/{self.session_id}", data=data
+                    "POST",
+                    f"/workspace/se/upload/{self.session_id}",
+                    data=data,
                 )
-                DEFAULT_LOGGER.info(f"File uploaded successfully: {result['result']}")
-                return result["result"]
+                unwrapped = self._unwrap_result(result)
+                DEFAULT_LOGGER.info(f"File uploaded successfully: {unwrapped}")
+                return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -233,7 +264,9 @@ class SharedEnvSandbox(Sandbox):
                 },
             )
 
-    async def download_file(self, filename: str, target_path: Union[str, Path]) -> bool:
+    async def download_file(
+        self, filename: str, target_path: Union[str, Path]
+    ) -> bool:
         """下载文件"""
         target_path = Path(target_path)
 
@@ -248,16 +281,24 @@ class SharedEnvSandbox(Sandbox):
                 if not server:
                     raise SandboxError(
                         "No available server found",
-                        context={"filename": filename, "target_path": str(target_path)},
+                        context={
+                            "filename": filename,
+                            "target_path": str(target_path),
+                        },
                     )
                 base_url = server
             else:
                 base_url = "http://localhost:8899"
 
-            url = f"{base_url.rstrip('/')}/workspace/se/download/{self.session_id}/{filename}"
+            url = (
+                f"{base_url.rstrip('/')}/workspace/se/download/"
+                f"{self.session_id}/{filename}"
+            )
 
             # 设置超时：总超时300秒，连接超时10秒，读取超时300秒
-            timeout = aiohttp.ClientTimeout(total=300, connect=10, sock_read=300)
+            timeout = aiohttp.ClientTimeout(
+                total=300, connect=10, sock_read=300
+            )
 
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
@@ -308,8 +349,9 @@ class SharedEnvSandbox(Sandbox):
                 f"/workspace/se/create/{self.session_id}",
                 json={"content": content, "filename": filename, "mode": mode},
             )
-            DEFAULT_LOGGER.info(f"File created successfully: {result['result']}")
-            return result["result"]
+            unwrapped = self._unwrap_result(result)
+            DEFAULT_LOGGER.info(f"File created successfully: {unwrapped}")
+            return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -345,13 +387,16 @@ class SharedEnvSandbox(Sandbox):
                 f"/workspace/se/execute/{self.session_id}",
                 json={"command": command, "args": args_list},
             )
+            unwrapped = self._unwrap_result(result)
             DEFAULT_LOGGER.info(
-                f"Command executed successfully, return code: {result['result'].get('returncode', 'unknown')}"
+                "Command executed successfully, return code: %s",
+                unwrapped.get("returncode", "unknown"),
             )
             DEFAULT_LOGGER.debug(
-                f"Command stdout: {result['result'].get('stdout', '')[:200]}..."
+                "Command stdout: %s...",
+                unwrapped.get("stdout", "")[:200],
             )
-            return result["result"]
+            return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -397,20 +442,23 @@ class SharedEnvSandbox(Sandbox):
                     "output_params": output_params or [],
                 },
             )
-
+            unwrapped = self._unwrap_result(result)
             DEFAULT_LOGGER.info(
-                f"Code executed successfully, return code: {result['result'].get('returncode', 'unknown')}"
+                "Code executed successfully, return code: %s",
+                unwrapped.get("returncode", "unknown"),
             )
             DEFAULT_LOGGER.debug(
-                f"Code stdout: {result['result'].get('stdout', '')[:200]}..."
+                "Code stdout: %s...",
+                unwrapped.get("stdout", "")[:200],
             )
 
-            if output_params and "output_variables" in result["result"]:
+            if output_params and "output_variables" in unwrapped:
                 DEFAULT_LOGGER.info(
-                    f"Output variables: {list(result['result']['output_variables'].keys())}"
+                    "Output variables: %s",
+                    list(unwrapped["output_variables"].keys()),
                 )
 
-            return result["result"]
+            return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -434,7 +482,9 @@ class SharedEnvSandbox(Sandbox):
     ) -> List[Dict[str, Any]]:
         """列出文件"""
         DEFAULT_LOGGER.info(
-            f"Listing files in directory: '{directory}' (recursive: {recursive})"
+            "Listing files in directory: '%s' (recursive: %s)",
+            directory,
+            recursive,
         )
 
         try:
@@ -450,9 +500,12 @@ class SharedEnvSandbox(Sandbox):
                 params["recursive"] = "false"
 
             result = await self._request("GET", url, params=params)
-            files = result["result"]["files"]
+            unwrapped = self._unwrap_result(result)
+            files = unwrapped["files"]
             DEFAULT_LOGGER.info(f"Found {len(files)} files")
-            DEFAULT_LOGGER.debug(f"Files: {[f['filename'] for f in files]}")
+            DEFAULT_LOGGER.debug(
+                "Files: %s", [f["filename"] for f in files]
+            )
             return files
         except SandboxError:
             raise
@@ -460,7 +513,9 @@ class SharedEnvSandbox(Sandbox):
             error_msg = f"Failed to list files: {e}"
             DEFAULT_LOGGER.error(error_msg)
             raise SandboxError(
-                error_msg, original_error=e, context={"session_id": self.session_id}
+                error_msg,
+                original_error=e,
+                context={"session_id": self.session_id},
             )
 
     async def read_file(
@@ -468,7 +523,10 @@ class SharedEnvSandbox(Sandbox):
     ) -> Dict[str, Any]:
         """读取文件"""
         DEFAULT_LOGGER.info(
-            f"Reading file: {filename} (offset={offset}, buffer_size={buffer_size})"
+            "Reading file: %s (offset=%s, buffer_size=%s)",
+            filename,
+            offset,
+            buffer_size,
         )
 
         try:
@@ -477,9 +535,10 @@ class SharedEnvSandbox(Sandbox):
                 f"/workspace/se/readfile/{self.session_id}/{filename}",
                 params={"offset": offset, "buffer_size": buffer_size},
             )
-            content = result["result"]
+            content = self._unwrap_result(result)
             DEFAULT_LOGGER.info(
-                f"File read successfully, content length: {len(content.get('content', ''))}"
+                "File read successfully, content length: %s",
+                len(content.get("content", "")),
             )
             return content
         except SandboxError:
@@ -512,9 +571,9 @@ class SharedEnvSandbox(Sandbox):
             file_params: 下载文件参数, 结构示例:
             [
                 {
-                    'docid': 'gns://00328E97423F42AC9DEE87B4F4B4631E/83D893844A0B4A34A64DFFB343BEF416/A5AAE8168BAF4C49A7E10FFF800DB2A2',
+                    'docid': 'gns://.../A5AAE8168BAF4C49A7E10FFF800DB2A2',
                     'rev': '9EB18A32ADBB466991396E4D5942E72D',
-                    'savename': '新能源汽车产业分析 (9).docx'
+                    'savename': '新能源汽车产业分析.docx'
                 }
             ]
             save_path: 保存路径, 可选, 默认保存到会话目录
@@ -542,8 +601,9 @@ class SharedEnvSandbox(Sandbox):
                 f"/workspace/se/download_from_efast/{self.session_id}",
                 json=payload,
             )
-            DEFAULT_LOGGER.info(f"Files downloaded successfully: {result['result']}")
-            return result["result"]
+            unwrapped = self._unwrap_result(result)
+            DEFAULT_LOGGER.info(f"Files downloaded successfully: {unwrapped}")
+            return unwrapped
         except SandboxError:
             raise
         except Exception as e:
@@ -552,7 +612,10 @@ class SharedEnvSandbox(Sandbox):
             raise SandboxError(
                 error_msg,
                 original_error=e,
-                context={"file_params": file_params, "session_id": self.session_id},
+                context={
+                    "file_params": file_params,
+                    "session_id": self.session_id,
+                },
             )
 
     async def get_status(self) -> Dict[str, Any]:
@@ -564,14 +627,16 @@ class SharedEnvSandbox(Sandbox):
                 "GET", f"/workspace/se/status/{self.session_id}"
             )
             DEFAULT_LOGGER.info("Session status retrieved successfully")
-            return result["result"]
+            return self._unwrap_result(result)
         except SandboxError:
             raise
         except Exception as e:
             error_msg = f"Failed to get session status: {e}"
             DEFAULT_LOGGER.error(error_msg)
             raise SandboxError(
-                error_msg, original_error=e, context={"session_id": self.session_id}
+                error_msg,
+                original_error=e,
+                context={"session_id": self.session_id},
             )
 
     async def close(self):
