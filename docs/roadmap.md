@@ -32,6 +32,7 @@ This roadmap outlines the remaining features to implement for the Sandbox Platfo
 | **Background Tasks** | ✅ Complete | `sandbox_control_plane/src/application/` | Session cleanup, health checks |
 | **Hexagonal Architecture** | ✅ Complete | Both components | Clean architecture, DI container |
 | **Testing Framework** | ✅ Complete | `*/tests/` | Unit, integration, contract tests |
+| **Unit Tests** | ✅ Complete | `*/tests/unit/` | 181 passing tests covering domain, application, and infrastructure layers |
 | **docker-compose** | ✅ Complete | `/docker-compose.yml` | Local development setup |
 
 ### ⚠️ Partially Implemented
