@@ -60,4 +60,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 # Start the executor daemon
 # The executor runs as PID 1 and manages its lifecycle
+# Note: When dependencies are specified, control plane will inject
+# a custom entrypoint script to install them before starting the executor
 CMD ["python", "-m", "executor.interfaces.http.rest"]

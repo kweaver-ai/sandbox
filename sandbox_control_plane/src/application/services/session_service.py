@@ -88,6 +88,9 @@ class SessionService:
         settings = get_settings()
         workspace_path = f"s3://{settings.s3_bucket}/sessions/{session_id}"
 
+        # 获取依赖列表（新增）
+        dependencies = command.dependencies or []
+
         session = Session(
             id=session_id,
             template_id=command.template_id,
@@ -97,7 +100,10 @@ class SessionService:
             runtime_type=runtime_type,
             runtime_node=runtime_node.id,
             env_vars=command.env_vars or {},
-            timeout=command.timeout
+            timeout=command.timeout,
+            # 依赖安装相关字段（新增）
+            requested_dependencies=dependencies,
+            dependency_install_status="installing" if dependencies else "completed",
         )
 
         # 5. 保存到仓储
@@ -115,6 +121,7 @@ class SessionService:
                     env_vars=session.env_vars,
                     workspace_path=workspace_path,
                     node_id=runtime_node.id,  # 传入调度选择的节点 ID
+                    dependencies=dependencies,  # 新增：传递依赖列表
                 )
 
                 # 只保存 container_id，不立即设置状态为 RUNNING
@@ -126,6 +133,7 @@ class SessionService:
                 logging.info(
                     f"Session {session_id} container created successfully, "
                     f"container={container_id}, node={runtime_node.id}, "
+                    f"dependencies={len(dependencies)}, "
                     f"waiting for executor ready callback..."
                 )
         except Exception as e:
@@ -137,6 +145,9 @@ class SessionService:
                     pass  # 忽略清理错误
 
             session.status = SessionStatus.FAILED
+            # 如果有依赖，标记依赖安装失败
+            if session.has_dependencies():
+                session.set_dependencies_failed(str(e))
             await self._session_repo.save(session)
             raise ValidationError(f"Failed to create container: {e}")
 

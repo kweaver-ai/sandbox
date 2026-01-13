@@ -172,16 +172,19 @@ class SubprocessRunner:
         Returns:
             Tuple of (command_list, environment_dict)
         """
+        import os
         language = execution.language.lower()
         code = execution.code
 
-        # Build environment variables
-        env_args = {
+        # Build environment variables - inherit from current process
+        env_args = os.environ.copy()
+        # Override specific variables
+        env_args.update({
             "PATH": "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
             "HOME": str(self.workspace_path),
             "USER": "sandbox",
             "WORKSPACE_PATH": str(self.workspace_path),
-        }
+        })
 
         # Add user-provided environment variables
         if execution.context.env_vars:

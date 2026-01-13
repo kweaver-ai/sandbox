@@ -121,6 +121,7 @@ class DockerSchedulerService(IScheduler):
         env_vars: dict,
         workspace_path: str,
         node_id: str,
+        dependencies: list = None,
     ) -> str:
         """
         为会话创建容器（同步）
@@ -135,16 +136,22 @@ class DockerSchedulerService(IScheduler):
             env_vars: 环境变量
             workspace_path: 工作空间路径
             node_id: 目标节点 ID
+            dependencies: Python 依赖列表（pip 规范）[新增]
 
         Returns:
             容器ID（使用容器名称作为 ID）
         """
+        import json
+
         # 获取节点信息
         node = await self.get_node(node_id)
         if not node:
             raise RuntimeError(f"Node not found: {node_id}")
 
         # 创建容器配置
+        # dependencies_json 传递给 docker_scheduler.py 用于动态生成 entrypoint 脚本
+        dependencies_json = json.dumps(dependencies) if dependencies else ""
+
         config = ContainerConfig(
             image=image,
             name=f"sandbox-{session_id}",
@@ -163,6 +170,7 @@ class DockerSchedulerService(IScheduler):
                 "session_id": session_id,
                 "template_id": template_id,
                 "managed_by": "sandbox-control-plane",
+                "dependencies": dependencies_json,  # 传递给 docker_scheduler.py
             },
         )
 

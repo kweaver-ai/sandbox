@@ -73,6 +73,18 @@ class SessionModel(Base):
     )
     completed_at = Column(DateTime, nullable=True)
 
+    # Dependency installation fields (新增)
+    requested_dependencies = Column(JSON, nullable=True)  # List[str]: 用户请求的依赖
+    installed_dependencies = Column(JSON, nullable=True)  # List[Dict]: 实际安装的依赖
+    dependency_install_status = Column(
+        Enum("pending", "installing", "completed", "failed", name="dependency_install_status"),
+        nullable=False,
+        default="pending",
+    )
+    dependency_install_error = Column(Text, nullable=True)  # 安装失败原因
+    dependency_install_started_at = Column(DateTime, nullable=True)
+    dependency_install_completed_at = Column(DateTime, nullable=True)
+
     # Indexes
     __table_args__ = (
         Index("ix_sessions_status", "status"),
@@ -84,12 +96,12 @@ class SessionModel(Base):
 
     def to_entity(self):
         """转换为领域实体"""
-        from src.domain.entities.session import Session
+        from src.domain.entities.session import Session, InstalledDependency
         from src.domain.value_objects.resource_limit import ResourceLimit
         from src.domain.value_objects.execution_status import SessionStatus
 
         # 数据库中已存储格式化后的字符串，直接使用
-        return Session(
+        session = Session(
             id=self.id,
             template_id=self.template_id,
             status=SessionStatus(self.status),
@@ -109,12 +121,45 @@ class SessionModel(Base):
             created_at=self.created_at,
             updated_at=self.updated_at,
             completed_at=self.completed_at,
-            last_activity_at=self.last_activity_at
+            last_activity_at=self.last_activity_at,
+            # 依赖安装字段（新增）
+            requested_dependencies=self.requested_dependencies or [],
+            dependency_install_status=self.dependency_install_status or "pending",
+            dependency_install_error=self.dependency_install_error,
         )
+
+        # 转换 installed_dependencies JSON 为 InstalledDependency 对象列表
+        if self.installed_dependencies:
+            session.installed_dependencies = [
+                InstalledDependency(
+                    name=dep.get("name"),
+                    version=dep.get("version"),
+                    install_location=dep.get("install_location", "/workspace/.venv/"),
+                    install_time=datetime.fromisoformat(dep["install_time"]) if dep.get("install_time") else datetime.now(),
+                    is_from_template=dep.get("is_from_template", False)
+                )
+                for dep in self.installed_dependencies
+            ]
+
+        return session
 
     @classmethod
     def from_entity(cls, session):
         """从领域实体创建 ORM 模型"""
+        # 转换 installed_dependencies 对象列表为 JSON
+        installed_dependencies_json = None
+        if session.installed_dependencies:
+            installed_dependencies_json = [
+                {
+                    "name": dep.name,
+                    "version": dep.version,
+                    "install_location": dep.install_location,
+                    "install_time": dep.install_time.isoformat(),
+                    "is_from_template": dep.is_from_template,
+                }
+                for dep in session.installed_dependencies
+            ]
+
         return cls(
             id=session.id,
             template_id=session.template_id,
@@ -133,4 +178,9 @@ class SessionModel(Base):
             last_activity_at=session.last_activity_at,
             created_at=session.created_at,
             updated_at=session.updated_at,
+            # 依赖安装字段（新增）
+            requested_dependencies=session.requested_dependencies or None,
+            installed_dependencies=installed_dependencies_json,
+            dependency_install_status=session.dependency_install_status,
+            dependency_install_error=session.dependency_install_error,
         )

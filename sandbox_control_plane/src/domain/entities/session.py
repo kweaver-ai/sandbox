@@ -5,11 +5,26 @@
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 from src.domain.value_objects.resource_limit import ResourceLimit
 from src.domain.value_objects.execution_status import SessionStatus
 from src.domain.entities.execution import Execution
+
+
+@dataclass
+class InstalledDependency:
+    """
+    已安装的依赖
+
+    用于跟踪会话中实际安装的依赖包信息。
+    按照 sandbox-design-v2.1.md 章节 5.6 设计。
+    """
+    name: str
+    version: str
+    install_location: str  # 如 "/workspace/.venv/"
+    install_time: datetime
+    is_from_template: bool  # 是否来自 Template 预装包
 
 
 @dataclass
@@ -18,6 +33,7 @@ class Session:
     会话实体
 
     聚合根，负责管理会话的生命周期和相关的执行记录。
+    扩展支持依赖安装功能，按照 sandbox-design-v2.1.md 章节 5.6 设计。
     """
     id: str
     template_id: str
@@ -35,6 +51,12 @@ class Session:
     completed_at: datetime | None = None
     last_activity_at: datetime = field(default_factory=datetime.now)
     _executions: List[Execution] = field(default_factory=list)
+
+    # 依赖安装相关字段（新增）
+    requested_dependencies: List[str] = field(default_factory=list)
+    installed_dependencies: List[InstalledDependency] = field(default_factory=list)
+    dependency_install_status: str = "pending"  # pending/installing/completed/failed
+    dependency_install_error: Optional[str] = None
 
     def __post_init__(self):
         """初始化后验证"""
@@ -132,3 +154,44 @@ class Session:
     def get_running_executions(self) -> List[Execution]:
         """获取正在运行的执行"""
         return [e for e in self._executions if e.is_running()]
+
+    # ============== 依赖管理 ==============
+
+    def set_dependencies_installing(self) -> None:
+        """标记依赖安装中"""
+        self.dependency_install_status = "installing"
+        self.updated_at = datetime.now()
+
+    def set_dependencies_completed(self, installed: List[InstalledDependency]) -> None:
+        """
+        标记依赖安装完成
+
+        Args:
+            installed: 实际安装的依赖列表
+        """
+        self.dependency_install_status = "completed"
+        self.installed_dependencies = installed
+        self.updated_at = datetime.now()
+
+    def set_dependencies_failed(self, error: str) -> None:
+        """
+        标记依赖安装失败
+
+        Args:
+            error: 失败原因
+        """
+        self.dependency_install_status = "failed"
+        self.dependency_install_error = error
+        self.updated_at = datetime.now()
+
+    def has_dependencies(self) -> bool:
+        """是否有依赖需要安装"""
+        return len(self.requested_dependencies) > 0
+
+    def is_dependency_install_pending(self) -> bool:
+        """依赖是否正在安装或待安装"""
+        return self.dependency_install_status in ("pending", "installing")
+
+    def is_dependency_install_successful(self) -> bool:
+        """依赖是否安装成功"""
+        return self.dependency_install_status == "completed"

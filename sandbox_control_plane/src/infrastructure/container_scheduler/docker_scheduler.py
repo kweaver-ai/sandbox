@@ -5,11 +5,14 @@ Docker 容器调度器
 
 支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
 容器会通过 s3fs 将 S3 bucket 挂载到 /workspace 目录。
+
+支持 Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
 """
 import asyncio
+import json
 import logging
 import os
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import urlparse
 
 from aiodocker import Docker
@@ -85,9 +88,10 @@ class DockerScheduler(IContainerScheduler):
         s3_endpoint_url: str,
         s3_access_key: str,
         s3_secret_key: str,
+        dependencies: Optional[List[str]] = None,
     ) -> str:
         """
-        构建容器启动脚本，用于挂载 S3 bucket
+        构建容器启动脚本，用于挂载 S3 bucket 并安装依赖
 
         Args:
             s3_bucket: S3 bucket 名称
@@ -95,6 +99,7 @@ class DockerScheduler(IContainerScheduler):
             s3_endpoint_url: S3 端点 URL
             s3_access_key: S3 访问密钥 ID
             s3_secret_key: S3 访问密钥
+            dependencies: pip 包规范列表（如 ["requests==2.31.0", "pandas>=2.0"]）
 
         Returns:
             Shell 脚本字符串
@@ -102,12 +107,53 @@ class DockerScheduler(IContainerScheduler):
         工作原理:
         1. 挂载 S3 bucket 到 /workspace/s3-root
         2. 创建符号链接 /workspace -> /workspace/s3-root/sessions/{session_id}
-        3. 这样 /workspace 直接指向 session 的 workspace
+        3. 安装依赖到 /workspace/.venv/（如果指定）
+        4. 使用 gosu 切换到 sandbox 用户运行 executor
         """
         # 对于 MinIO，需要使用 use_path_request_style
         path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
 
-        return f"""#!/bin/sh
+        # 依赖安装脚本片段
+        dependency_install_script = ""
+        if dependencies:
+            # 转换依赖格式：[{"name": "requests", "version": "==2.31.0"}] -> ["requests==2.31.0"]
+            pip_specs = []
+            for dep in dependencies:
+                if isinstance(dep, dict):
+                    name = dep.get("name", "")
+                    version = dep.get("version", "")
+                    if version:
+                        pip_specs.append(f"{name}{version}")
+                    else:
+                        pip_specs.append(name)
+                elif isinstance(dep, str):
+                    pip_specs.append(dep)
+
+            deps_json = json.dumps(dependencies)
+            deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+            dependency_install_script = f"""
+# ========== 安装 Python 依赖 ==========
+echo "📦 Installing dependencies: {deps_json}"
+echo "📦 Pip specs: {pip_specs}"
+mkdir -p /workspace/.venv/
+
+if pip3 install \\
+    --target /workspace/.venv/ \\
+    --isolated \\
+    --no-warn-script-location \\
+    --disable-pip-version-check \\
+    --index-url https://pypi.org/simple/ \\
+    {deps_list}; then
+    echo "✅ Dependencies installed successfully"
+    # 修改属主为 sandbox 用户（gosu 切换前以 root 安装）
+    chown -R sandbox:sandbox /workspace/.venv/
+else
+    echo "❌ Failed to install dependencies"
+    exit 1
+fi
+"""
+
+        return f"""#!/bin/bash
 set -e
 
 # 创建 s3fs 凭证文件
@@ -138,9 +184,82 @@ ln -s "$SESSION_PATH" /workspace
 # 5. 验证符号链接
 echo "Workspace symlink: $(ls -la /workspace)"
 
+# ========== ✅ 新增：安装依赖 ==========
+{dependency_install_script}
+
 # 6. 使用 gosu 切换到 sandbox 用户运行 executor
+# 通过 bash -c 在 gosu 之后设置环境变量
 echo "Starting sandbox executor as sandbox user..."
-exec gosu sandbox python -m executor.interfaces.http.rest
+exec gosu sandbox bash -c 'export PYTHONPATH=/app:/workspace/.venv:/workspace; export SANDBOX_VENV_PATH=/workspace/.venv/; exec python -m executor.interfaces.http.rest'
+"""
+
+    def _build_dependency_install_entrypoint(
+        self,
+        dependencies: Optional[List[str]] = None,
+    ) -> str:
+        """
+        构建依赖安装脚本（非 S3 模式）
+
+        Args:
+            dependencies: pip 包规范列表（如 ["requests==2.31.0", "pandas>=2.0"]）
+
+        Returns:
+            Shell 脚本字符串
+
+        工作原理:
+        1. 以 sandbox 用户运行
+        2. 安装依赖到 /workspace/.venv/
+        3. 启动 executor
+        """
+        # 依赖安装脚本片段
+        dependency_install_script = ""
+        if dependencies:
+            # 转换依赖格式：[{"name": "requests", "version": "==2.31.0"}] -> ["requests==2.31.0"]
+            pip_specs = []
+            for dep in dependencies:
+                if isinstance(dep, dict):
+                    name = dep.get("name", "")
+                    version = dep.get("version", "")
+                    if version:
+                        pip_specs.append(f"{name}{version}")
+                    else:
+                        pip_specs.append(name)
+                elif isinstance(dep, str):
+                    pip_specs.append(dep)
+
+            deps_json = json.dumps(dependencies)
+            deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+            dependency_install_script = f"""
+# ========== 安装 Python 依赖 ==========
+echo "📦 Installing dependencies: {deps_json}"
+echo "📦 Pip specs: {pip_specs}"
+mkdir -p /workspace/.venv/
+
+if pip3 install \\
+    --target /workspace/.venv/ \\
+    --isolated \\
+    --no-warn-script-location \\
+    --disable-pip-version-check \\
+    --index-url https://pypi.org/simple/ \\
+    {deps_list}; then
+    echo "✅ Dependencies installed successfully"
+else
+    echo "❌ Failed to install dependencies"
+    exit 1
+fi
+"""
+
+        return f"""#!/bin/bash
+set -e
+
+echo "🚀 Starting sandbox executor (non-S3 mode)..."
+
+# ========== 安装依赖 ==========
+{dependency_install_script}
+
+# 启动 executor
+echo "🎯 Starting executor daemon..."
+exec python -m executor.interfaces.http.rest
 """
 
     async def create_container(self, config: ContainerConfig) -> str:
@@ -199,6 +318,27 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         # 1. 在宿主机启用: sudo sysctl -w kernel.unprivileged_userns_clone=1
         # 2. 或者设置环境变量 DISABLE_BWRAP=true 来禁用 bubblewrap
         if not use_s3_mount:
+            # 从 config.labels 中提取依赖列表
+            dependencies_json = config.labels.get("dependencies", "")
+            dependencies = json.loads(dependencies_json) if dependencies_json else None
+
+            # 添加 PYTHONPATH 环境变量以支持依赖导入
+            if dependencies:
+                container_config["Env"].append("PYTHONPATH=/workspace/.venv/:/workspace:$PYTHONPATH")
+                container_config["Env"].append("SANDBOX_VENV_PATH=/workspace/.venv/")
+
+                # 如果有依赖，使用动态 entrypoint 脚本
+                entrypoint_script = self._build_dependency_install_entrypoint(
+                    dependencies=dependencies,
+                )
+                container_config["Entrypoint"] = ["/bin/sh", "-c"]
+                container_config["Cmd"] = [entrypoint_script]
+
+                logger.info(
+                    f"Configuring dependency installation for {config.name}: "
+                    f"dependencies={len(dependencies)}"
+                )
+
             container_config["HostConfig"]["CapDrop"] = ["ALL"]
             container_config["HostConfig"]["SecurityOpt"] = ["no-new-privileges"]
             # 添加 seccomp 配置以允许用户命名空间
@@ -208,6 +348,10 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         # 如果使用 S3 workspace 挂载，添加必要的配置
         if use_s3_mount:
             settings = get_settings()
+
+            # 新增：从 config.labels 中提取依赖列表
+            dependencies_json = config.labels.get("dependencies", "")
+            dependencies = json.loads(dependencies_json) if dependencies_json else None
 
             # 以 root 用户启动（覆盖 Dockerfile 中的 USER sandbox）
             # 这样 entrypoint 脚本可以以 root 执行 s3fs 挂载
@@ -242,20 +386,28 @@ exec gosu sandbox python -m executor.interfaces.http.rest
             for k, v in s3_env_vars.items():
                 container_config["Env"].append(f"{k}={v}")
 
-            # 构建并设置 entrypoint 脚本
+            # 新增：添加 PYTHONPATH 环境变量以支持依赖导入
+            # /app 必须在最前面，以便 executor 模块能被找到
+            if dependencies:
+                container_config["Env"].append("PYTHONPATH=/app:/workspace/.venv/:/workspace")
+                container_config["Env"].append("SANDBOX_VENV_PATH=/workspace/.venv/")
+
+            # 修改：传递依赖列表到 entrypoint 脚本
             entrypoint_script = self._build_s3_mount_entrypoint(
                 s3_bucket=s3_workspace["bucket"],
                 s3_prefix=s3_workspace["prefix"],
                 s3_endpoint_url=settings.s3_endpoint_url or "",
                 s3_access_key=settings.s3_access_key_id,
                 s3_secret_key=settings.s3_secret_access_key,
+                dependencies=dependencies,  # 新增参数
             )
             container_config["Entrypoint"] = ["/bin/sh", "-c"]
             container_config["Cmd"] = [entrypoint_script]
 
             logger.info(
                 f"Configuring S3 workspace mount for {config.name}: "
-                f"bucket={s3_workspace['bucket']}, prefix={s3_workspace['prefix']}"
+                f"bucket={s3_workspace['bucket']}, prefix={s3_workspace['prefix']}, "
+                f"dependencies={len(dependencies) if dependencies else 0}"
             )
 
         try:

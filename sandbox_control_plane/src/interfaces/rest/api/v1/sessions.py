@@ -35,6 +35,10 @@ async def create_session(
     - **memory**: 内存限制，如 "512Mi", "1Gi"
     - **disk**: 磁盘限制，如 "1Gi", "10Gi"
     - **env_vars**: 环境变量字典
+    - **dependencies**: 会话级依赖包列表（新增）
+    - **install_timeout**: 依赖安装超时时间（秒），默认 300（新增）
+    - **fail_on_dependency_error**: 依赖安装失败时是否终止会话创建（新增）
+    - **allow_version_conflicts**: 是否允许版本冲突（新增）
     """
     from src.domain.value_objects.resource_limit import ResourceLimit
 
@@ -46,11 +50,19 @@ async def create_session(
             disk=request.disk
         )
 
+        # 转换依赖列表为 pip 规范
+        dependencies_pip_specs = [dep.to_pip_spec() for dep in request.dependencies]
+
         command = CreateSessionCommand(
             template_id=request.template_id,
             timeout=request.timeout,
             resource_limit=resource_limit,
-            env_vars=request.env_vars
+            env_vars=request.env_vars,
+            # 依赖安装相关字段（新增）
+            dependencies=dependencies_pip_specs,
+            install_timeout=request.install_timeout,
+            fail_on_dependency_error=request.fail_on_dependency_error,
+            allow_version_conflicts=request.allow_version_conflicts,
         )
 
         # 调用应用服务

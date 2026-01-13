@@ -3,12 +3,62 @@ REST API 请求模式
 
 定义 FastAPI 的请求 Pydantic 模型。
 """
-from pydantic import BaseModel, Field, field_validator
-from typing import Literal, Optional, Dict
+import re
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Literal, Optional, Dict, List
+
+
+class DependencySpec(BaseModel):
+    """
+    依赖包规范
+
+    用于指定会话创建时需要安装的 Python 包。
+    按照 sandbox-design-v2.1.md 章节 5.3.1 设计。
+    """
+    name: str = Field(..., min_length=1, max_length=100, description="包名称")
+    version: Optional[str] = Field(None, description="版本约束 (如: ==2.31.0, >=1.0)")
+
+    @field_validator("name")
+    @classmethod
+    def validate_package_name(cls, v: str) -> str:
+        """
+        验证包名格式
+
+        禁止：
+        - 路径穿越字符 (..)
+        - 绝对路径 (/)
+        - URL (://)
+        - 非法字符（仅允许字母、数字、._-）
+        """
+        # 禁止路径穿越
+        if ".." in v or v.startswith("/"):
+            raise ValueError("Package name cannot contain path traversal characters")
+        # 禁止 URL
+        if "://" in v:
+            raise ValueError("Package name cannot contain URL")
+        # PyPI 包名规范：仅允许字母、数字、._-
+        if not re.match(r"^[a-zA-Z0-9._-]+$", v):
+            raise ValueError("Invalid package name format")
+        return v
+
+    def to_pip_spec(self) -> str:
+        """
+        转换为 pip 安装规范
+
+        Returns:
+            pip 包规范字符串，如 "requests==2.31.0" 或 "pandas"
+        """
+        if self.version:
+            return f"{self.name}{self.version}"
+        return self.name
 
 
 class CreateSessionRequest(BaseModel):
-    """创建会话请求"""
+    """
+    创建会话请求
+
+    按照 sandbox-design-v2.1.md 章节 5.3.1 设计，扩展支持依赖安装。
+    """
     template_id: str = Field(..., min_length=1, max_length=64, description="模板 ID")
     timeout: int = Field(300, ge=1, le=3600, description="超时时间（秒）")
     cpu: str = Field("1", description="CPU 核心数")
@@ -16,6 +66,27 @@ class CreateSessionRequest(BaseModel):
     disk: str = Field("1Gi", description="磁盘限制")
     env_vars: Dict[str, str] = Field(default_factory=dict, description="环境变量")
     event: Optional[Dict] = Field(None, description="事件数据")
+
+    # 依赖安装相关字段（新增）
+    dependencies: List[DependencySpec] = Field(
+        default_factory=list,
+        max_length=50,
+        description="会话级依赖包列表"
+    )
+    install_timeout: int = Field(
+        300,
+        ge=30,
+        le=1800,
+        description="依赖安装超时时间（秒）"
+    )
+    fail_on_dependency_error: bool = Field(
+        True,
+        description="依赖安装失败时是否终止会话创建"
+    )
+    allow_version_conflicts: bool = Field(
+        False,
+        description="是否允许版本冲突（Template 预装包 vs 用户请求包）"
+    )
 
     @field_validator("cpu")
     @classmethod
@@ -36,8 +107,8 @@ class ExecuteCodeRequest(BaseModel):
     timeout: int = Field(30, ge=1, le=3600, description="执行超时（秒）")
     event: Optional[Dict] = Field(None, description="事件数据")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "examples": [
                 {
                     "code": 'def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}',
@@ -53,6 +124,7 @@ class ExecuteCodeRequest(BaseModel):
                 }
             ]
         }
+    )
 
 
 class TerminateSessionRequest(BaseModel):
