@@ -1,4 +1,13 @@
 import pytest
+import sys
+
+# fcntl 等依赖仅在类 Unix 环境可用，Windows 跳过
+if sys.platform.startswith("win"):
+    pytest.skip(
+        "Skipping shared_env tests on Windows (requires fcntl)",
+        allow_module_level=True,
+    )
+
 import asyncio
 import os
 import tempfile

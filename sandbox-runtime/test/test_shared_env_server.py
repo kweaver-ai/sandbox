@@ -1,9 +1,19 @@
-import pytest
 import os
-import tempfile
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+import pytest
+
+# fcntl 等依赖仅在类 Unix 环境可用，Windows 跳过
+if sys.platform.startswith("win"):
+    pytest.skip(
+        "Skipping shared_env server tests on Windows (requires fcntl)",
+        allow_module_level=True,
+    )
+
 from fastapi.testclient import TestClient
 from sandbox_runtime.sandbox.shared_env.shared_env import (
     create_app,
