@@ -3,6 +3,7 @@
 
 配置和提供应用所需的所有依赖项。
 """
+import os
 from functools import lru_cache
 import logging
 from typing import Optional
@@ -27,10 +28,18 @@ from src.infrastructure.config.settings import get_settings
 # Configuration flag to switch between Mock and SQL repositories
 USE_SQL_REPOSITORIES = True  # Set to False to use Mock repositories
 
-# Configuration flag to switch between Mock and Docker scheduler
-USE_DOCKER_SCHEDULER = True  # Set to False to use Mock scheduler
+# Auto-detect runtime environment
+# In Kubernetes, KUBERNETES_SERVICE_HOST environment variable is automatically set
+IS_IN_KUBERNETES = os.getenv("KUBERNETES_SERVICE_HOST") is not None
+
+# Configuration flag to switch between schedulers
+# - In Kubernetes: auto-detect and use K8s scheduler
+# - In local development: use Docker scheduler
+# - Set to False to use Mock scheduler
+USE_MOCK_SCHEDULER = False  # Set to True to use Mock scheduler
 
 logger = logging.getLogger(__name__)
+logger.info(f"Runtime environment: {'Kubernetes' if IS_IN_KUBERNETES else 'Local Docker'}")
 
 
 def _get_docker_url() -> str:
@@ -400,25 +409,34 @@ def initialize_dependencies(app: FastAPI):
         app.state.execution_repo = execution_repo
         app.state.template_repo = template_repo
 
-    # 创建容器调度器（模块级单例，仅在 Docker 调度模式下）
+    # 创建容器调度器（模块级单例）
     global _container_scheduler_singleton, _scheduler_singleton
 
-    if USE_DOCKER_SCHEDULER:
+    if USE_MOCK_SCHEDULER:
+        # Mock 模式：不创建真实调度器
+        _container_scheduler_singleton = None
+        _scheduler_singleton = MockScheduler()
+    elif IS_IN_KUBERNETES:
+        # Kubernetes 环境：使用 K8s 调度器
+        from src.infrastructure.container_scheduler.k8s_scheduler import K8sScheduler
+        settings = get_settings()
+
+        _container_scheduler_singleton = K8sScheduler(
+            namespace=settings.kubernetes_namespace,
+        )
+        logger.info(f"Initialized K8s scheduler with namespace: {settings.kubernetes_namespace}")
+
+        # 调度器服务延迟初始化
+        _scheduler_singleton = None
+    else:
+        # 本地开发环境：使用 Docker 调度器
         from src.infrastructure.container_scheduler.docker_scheduler import DockerScheduler
 
-        # 创建容器调度器（模块级单例）
         _container_scheduler_singleton = DockerScheduler(docker_url=_get_docker_url())
+        logger.info(f"Initialized Docker scheduler with URL: {_get_docker_url()}")
 
-        # 创建调度器服务（模块级单例，用于状态恢复）
-        # 需要获取 template_repo 和 runtime_node_repo
-        if USE_SQL_REPOSITORIES:
-            # 使用已创建的仓储（需要从 app.state 获取）
-            # 注意：这些仓储在初始化时可能还未完全创建
-            # 暂时使用 Mock，后续在 get_state_sync_service 中重新创建
-            _scheduler_singleton = None  # 延迟初始化
-        else:
-            # Mock 模式
-            _scheduler_singleton = MockScheduler()
+        # 调度器服务延迟初始化
+        _scheduler_singleton = None
 
 
 async def cleanup_dependencies(app: FastAPI):
@@ -482,12 +500,11 @@ def get_template_repository(
 
 
 def get_scheduler() -> IScheduler:
-    """获取调度器（Mock 或 Docker）"""
-    if USE_DOCKER_SCHEDULER:
-        from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
-        # 需要通过 Depends() 获取运行时节点仓储和容器调度器
-        # 这里暂时返回 Mock，实际使用时需要通过 session-scoped 依赖
+    """获取调度器（Mock、Docker 或 K8s）"""
+    if USE_MOCK_SCHEDULER:
         return MockScheduler()
+
+    # 实际使用时需要通过 session-scoped 依赖获取
     return MockScheduler()
 
 
@@ -511,11 +528,9 @@ def get_docker_scheduler_service(
     runtime_node_repo = Depends(get_runtime_node_repository),
     template_repo = Depends(get_template_repository),
 ) -> IScheduler:
-    """获取 Docker 调度服务"""
-    if not USE_DOCKER_SCHEDULER:
+    """获取调度服务（Docker 或 K8s）"""
+    if USE_MOCK_SCHEDULER:
         return MockScheduler()
-
-    from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
 
     # 使用模块级单例
     container_scheduler = _container_scheduler_singleton
@@ -527,17 +542,34 @@ def get_docker_scheduler_service(
         retry_delay=0.5,
     )
 
-    # 为每个请求创建新的 DockerSchedulerService 实例
+    # 为每个请求创建新的调度服务实例
     settings = get_settings()
-    return DockerSchedulerService(
-        runtime_node_repo=runtime_node_repo,
-        container_scheduler=container_scheduler,
-        template_repo=template_repo,
-        executor_client=executor_client,
-        executor_port=8080,
-        control_plane_url=settings.control_plane_url,
-        disable_bwrap=settings.disable_bwrap,
-    )
+
+    if IS_IN_KUBERNETES:
+        # K8s 环境：使用 K8sSchedulerService
+        from src.infrastructure.schedulers.k8s_scheduler_service import K8sSchedulerService
+
+        return K8sSchedulerService(
+            container_scheduler=container_scheduler,
+            template_repo=template_repo,
+            executor_client=executor_client,
+            executor_port=8080,
+            control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
+            disable_bwrap=settings.disable_bwrap,
+        )
+    else:
+        # 本地环境：使用 DockerSchedulerService
+        from src.infrastructure.schedulers.docker_scheduler_service import DockerSchedulerService
+
+        return DockerSchedulerService(
+            runtime_node_repo=runtime_node_repo,
+            container_scheduler=container_scheduler,
+            template_repo=template_repo,
+            executor_client=executor_client,
+            executor_port=8080,
+            control_plane_url=settings.control_plane_url,
+            disable_bwrap=settings.disable_bwrap,
+        )
 
 
 # Storage service singleton (cached at module level for use with Depends)
@@ -728,8 +760,34 @@ def get_state_sync_service():
 
     # 创建 scheduler（如果还没有）
     scheduler = _scheduler_singleton
-    if scheduler is None and USE_DOCKER_SCHEDULER:
-        scheduler = MockScheduler()
+    if scheduler is None:
+        # 创建 scheduler 服务（用于状态恢复）
+        settings = get_settings()
+
+        if USE_MOCK_SCHEDULER:
+            scheduler = MockScheduler()
+        elif IS_IN_KUBERNETES:
+            # K8s 环境
+            from src.infrastructure.schedulers.k8s_scheduler_service import K8sSchedulerService
+            from src.domain.repositories.template_repository import ITemplateRepository
+
+            # 创建一个简单的 template repo 用于 scheduler
+            class SimpleTemplateRepo:
+                async def find_by_id(self, template_id: str):
+                    return None
+
+            scheduler = K8sSchedulerService(
+                container_scheduler=container_scheduler,
+                template_repo=SimpleTemplateRepo(),
+                executor_client=None,
+                executor_port=8080,
+                control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
+                disable_bwrap=settings.disable_bwrap,
+            )
+        else:
+            # 本地 Docker 环境
+            scheduler = MockScheduler()
+
         _scheduler_singleton = scheduler
 
     # 每次都创建新的 StateSyncService 实例，使用最新的仓储
