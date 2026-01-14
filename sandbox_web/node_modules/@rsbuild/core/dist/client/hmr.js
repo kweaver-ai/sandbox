@@ -1,0 +1,206 @@
+import { logger } from "./59.js";
+let createOverlay;
+let clearOverlay;
+const registerOverlay = (createFn, clearFn)=>{
+    createOverlay = createFn;
+    clearOverlay = clearFn;
+};
+function init(token, config, serverHost, serverPort, liveReload, browserLogs, logLevel) {
+    logger.level = logLevel;
+    const queuedMessages = [];
+    const clientErrors = [];
+    let lastHash;
+    let hasBuildErrors = false;
+    function formatURL(fallback) {
+        const { location } = self;
+        const hostname = (fallback ? serverHost : config.host) || location.hostname;
+        const port = (fallback ? serverPort : config.port) || location.port;
+        const protocol = config.protocol || ('https:' === location.protocol ? 'wss' : 'ws');
+        const pathname = config.path;
+        if ("u" > typeof URL) {
+            const url = new URL('http://localhost');
+            url.port = String(port);
+            url.hostname = hostname;
+            url.protocol = protocol;
+            url.pathname = pathname;
+            url.searchParams.append('token', token);
+            return url.toString();
+        }
+        const colon = -1 === protocol.indexOf(':') ? ':' : '';
+        return `${protocol}${colon}//${hostname}:${port}${pathname}?token=${token}`;
+    }
+    function clearBuildErrors() {
+        if (console.clear && hasBuildErrors) console.clear();
+        hasBuildErrors = false;
+    }
+    function handleSuccess() {
+        clearBuildErrors();
+        tryApplyUpdates();
+    }
+    function handleWarnings({ text }) {
+        clearBuildErrors();
+        for(let i = 0; i < text.length; i++){
+            if (5 === i) {
+                logger.warn('[rsbuild] Additional warnings detected. View complete log in terminal for details.');
+                break;
+            }
+            logger.warn(text[i]);
+        }
+        tryApplyUpdates();
+    }
+    function handleErrors({ text, html }) {
+        clearBuildErrors();
+        hasBuildErrors = true;
+        for (const error of text)logger.error(error);
+        if (createOverlay) createOverlay('Build failed', html);
+    }
+    function handleResolvedClientError({ id, message }) {
+        if (!createOverlay || hasBuildErrors) return;
+        for (const item of clientErrors)if (item.id === id) item.message = message;
+        createOverlay('Runtime errors', clientErrors.map((item)=>item.message).filter(Boolean).join('\n\n'));
+    }
+    const shouldUpdate = ()=>lastHash !== __webpack_hash__;
+    const handleApplyUpdates = (err, updatedModules)=>{
+        const forcedReload = err || !updatedModules;
+        if (forcedReload) {
+            if (err) logger.error('[rsbuild] HMR update failed, performing full reload:', err);
+            reloadPage();
+            return;
+        }
+        tryApplyUpdates();
+    };
+    function tryApplyUpdates() {
+        if (!shouldUpdate()) return;
+        if (import.meta.webpackHot) {
+            if ('idle' !== import.meta.webpackHot.status()) return;
+            import.meta.webpackHot.check(true).then((updatedModules)=>{
+                handleApplyUpdates(null, updatedModules);
+            }, (err)=>{
+                handleApplyUpdates(err, null);
+            });
+            return;
+        }
+        reloadPage();
+    }
+    let socket = null;
+    let reconnectCount = 0;
+    let pingIntervalId;
+    const isSocketReady = ()=>socket && socket.readyState === socket.OPEN;
+    const socketSend = (data)=>{
+        if (isSocketReady()) socket.send(JSON.stringify(data));
+    };
+    function onOpen() {
+        logger.info('[rsbuild] WebSocket connected.');
+        reconnectCount = 0;
+        pingIntervalId = setInterval(()=>{
+            socketSend({
+                type: 'ping'
+            });
+        }, 30000);
+        if (queuedMessages.length) {
+            queuedMessages.forEach(socketSend);
+            queuedMessages.length = 0;
+        }
+    }
+    function onMessage(e) {
+        const message = JSON.parse(e.data);
+        switch(message.type){
+            case 'hash':
+                lastHash = message.data;
+                if (clearOverlay && shouldUpdate()) clearOverlay();
+                break;
+            case 'ok':
+                handleSuccess();
+                break;
+            case 'static-changed':
+            case 'content-changed':
+                reloadPage();
+                break;
+            case 'warnings':
+                handleWarnings(message.data);
+                break;
+            case 'errors':
+                handleErrors(message.data);
+                break;
+            case 'resolved-client-error':
+                handleResolvedClientError(message.data);
+                break;
+        }
+    }
+    function onClose() {
+        if (reconnectCount >= config.reconnect) {
+            if (config.reconnect > 0) logger.warn('[rsbuild] WebSocket connection failed after maximum retry attempts.');
+            return;
+        }
+        if (0 === reconnectCount) logger.info('[rsbuild] WebSocket connection lost. Reconnecting...');
+        removeListeners();
+        socket = null;
+        reconnectCount++;
+        setTimeout(connect, 1000 * 1.5 ** reconnectCount);
+    }
+    function onSocketError() {
+        if (formatURL() !== formatURL(true)) {
+            logger.error('[rsbuild] WebSocket connection failed. Trying direct connection fallback.');
+            removeListeners();
+            socket = null;
+            connect(true);
+        }
+    }
+    function sendError(message, stack) {
+        const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+        const messageInfo = {
+            type: 'client-error',
+            id,
+            message,
+            stack
+        };
+        clientErrors.push({
+            id
+        });
+        if (isSocketReady()) socketSend(messageInfo);
+        else queuedMessages.push(messageInfo);
+    }
+    function onUnhandledRejection({ reason }) {
+        let message;
+        let stack;
+        if (reason instanceof Error) {
+            message = reason.name ? `${reason.name}: ${reason.message}` : reason.message;
+            stack = reason.stack;
+        } else if ('string' == typeof reason) message = reason;
+        else try {
+            message = JSON.stringify(reason);
+        } catch (_) {
+            return;
+        }
+        sendError(`Uncaught (in promise) ${message}`, stack);
+    }
+    function connect(fallback = false) {
+        if (0 === reconnectCount) logger.info('[rsbuild] WebSocket connecting...');
+        const socketUrl = formatURL(fallback);
+        socket = new WebSocket(socketUrl);
+        socket.addEventListener('open', onOpen);
+        socket.addEventListener('close', onClose);
+        socket.addEventListener('message', onMessage);
+        if (!fallback) socket.addEventListener('error', onSocketError);
+    }
+    function removeListeners() {
+        clearInterval(pingIntervalId);
+        if (socket) {
+            socket.removeEventListener('open', onOpen);
+            socket.removeEventListener('close', onClose);
+            socket.removeEventListener('message', onMessage);
+            socket.removeEventListener('error', onSocketError);
+        }
+    }
+    function reloadPage() {
+        if (liveReload) window.location.reload();
+    }
+    if (browserLogs && "u" > typeof window) {
+        window.addEventListener('error', ({ message, error })=>{
+            sendError(message, error instanceof Error ? error.stack : void 0);
+        });
+        window.addEventListener('unhandledrejection', onUnhandledRejection);
+    }
+    connect();
+}
+export { init, registerOverlay };

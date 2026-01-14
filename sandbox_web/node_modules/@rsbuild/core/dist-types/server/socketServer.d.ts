@@ -1,0 +1,81 @@
+import type { IncomingMessage } from 'node:http';
+import type { Socket } from 'node:net';
+import type { DevConfig, InternalContext, Rspack } from '../types';
+export type ServerMessageStaticChanged = {
+    type: 'static-changed' | 'content-changed';
+};
+export type ServerMessageHash = {
+    type: 'hash';
+    data: string;
+};
+export type ServerMessageOk = {
+    type: 'ok';
+};
+export type ServerMessageWarnings = {
+    type: 'warnings';
+    data: {
+        text: string[];
+    };
+};
+export type ServerMessageErrors = {
+    type: 'errors';
+    data: {
+        text: string[];
+        html: string;
+    };
+};
+export type ServerMessageResolvedClientError = {
+    type: 'resolved-client-error';
+    data: {
+        id: string;
+        message: string;
+    };
+};
+export type ServerMessage = ServerMessageOk | ServerMessageStaticChanged | ServerMessageHash | ServerMessageWarnings | ServerMessageErrors | ServerMessageResolvedClientError;
+export type ClientMessageError = {
+    type: 'client-error';
+    id: string;
+    message: string;
+    stack?: string;
+};
+export type ClientMessagePing = {
+    type: 'ping';
+};
+export type ClientMessage = ClientMessagePing | ClientMessageError;
+export declare class SocketServer {
+    private wsServer;
+    private readonly socketsMap;
+    private readonly options;
+    private readonly context;
+    private initialChunksMap;
+    private heartbeatTimer;
+    private getOutputFileSystem;
+    private reportedBrowserLogs;
+    private currentHash;
+    constructor(context: InternalContext, options: DevConfig, getOutputFileSystem: () => Rspack.OutputFileSystem);
+    upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void;
+    private checkSockets;
+    private clearHeartbeatTimer;
+    prepare(): void;
+    onBuildDone(): void;
+    /**
+     * Send error messages to the client and render error overlay
+     */
+    sendError(errors: Rspack.StatsError[], token: string): void;
+    /**
+     * Send warning messages to the client
+     */
+    sendWarning(warnings: Rspack.StatsError[], token: string): void;
+    /**
+     * Write message to each socket
+     * @param message - The message to send
+     * @param token - The token of the socket to send the message to,
+     * if not provided, the message will be sent to all sockets
+     */
+    sockWrite(message: ServerMessage, token?: string): void;
+    close(): Promise<void>;
+    private onConnect;
+    private getStats;
+    private sendStats;
+    private send;
+}

@@ -1,0 +1,53 @@
+{
+  "name": "@rsbuild/plugin-less",
+  "version": "1.5.0",
+  "description": "Less plugin for Rsbuild",
+  "homepage": "https://rsbuild.rs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/web-infra-dev/rsbuild",
+    "directory": "packages/plugin-less"
+  },
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "compiled"
+  ],
+  "dependencies": {
+    "deepmerge": "^4.3.1",
+    "reduce-configs": "^1.1.1"
+  },
+  "devDependencies": {
+    "@rslib/core": "0.12.2",
+    "@types/less": "^3.0.8",
+    "less": "4.3.0",
+    "less-loader": "^12.3.0",
+    "prebundle": "1.4.1",
+    "typescript": "^5.9.2",
+    "@scripts/test-helper": "1.0.1",
+    "@rsbuild/core": "1.5.0"
+  },
+  "peerDependencies": {
+    "@rsbuild/core": "1.x"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "rslib build",
+    "dev": "rslib build --watch",
+    "prebundle": "prebundle",
+    "bump": "pnpx bumpp --no-tag"
+  }
+}

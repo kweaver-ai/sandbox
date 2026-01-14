@@ -92,6 +92,7 @@ class SessionModel(Base):
         Index("ix_sessions_created_at", "created_at"),
         Index("ix_sessions_runtime_node", "runtime_node"),
         Index("ix_sessions_last_activity_at", "last_activity_at"),
+        Index("ix_sessions_dependency_install_status", "dependency_install_status"),  # 依赖安装状态索引
     )
 
     def to_entity(self):
