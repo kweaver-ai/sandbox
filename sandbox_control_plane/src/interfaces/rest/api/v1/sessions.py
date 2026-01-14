@@ -4,7 +4,7 @@
 定义会话相关的 HTTP 端点。
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List
+from typing import List, Optional
 
 from src.application.services.session_service import SessionService
 from src.application.commands.create_session import CreateSessionCommand
@@ -13,6 +13,7 @@ from src.application.dtos.session_dto import SessionDTO
 from src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
 from src.interfaces.rest.schemas.response import (
     SessionResponse,
+    SessionListResponse,
     ExecuteCodeResponse,
     ErrorResponse
 )
@@ -89,6 +90,64 @@ async def create_session(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
+@router.get("", response_model=SessionListResponse)
+async def list_sessions(
+    status: Optional[str] = None,
+    template_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    service: SessionService = Depends(get_session_service_db)
+):
+    """
+    列出会话
+
+    支持按 status 和 template_id 筛选，以及分页。
+
+    - **status**: 会话状态筛选（可选），如 "running", "terminated"
+    - **template_id**: 模板 ID 筛选（可选）
+    - **limit**: 返回数量限制（1-200，默认 50）
+    - **offset**: 偏移量（用于分页，默认 0）
+    """
+    try:
+        result = await service.list_sessions(
+            status=status,
+            template_id=template_id,
+            limit=limit,
+            offset=offset
+        )
+
+        # 转换为响应格式
+        return SessionListResponse(
+            items=[SessionResponse(
+                id=item.id,
+                template_id=item.template_id,
+                status=item.status,
+                resource_limit=item.resource_limit,
+                workspace_path=item.workspace_path,
+                runtime_type=item.runtime_type,
+                runtime_node=item.runtime_node,
+                container_id=item.container_id,
+                pod_name=item.pod_name,
+                env_vars=item.env_vars,
+                timeout=item.timeout,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                completed_at=item.completed_at,
+                last_activity_at=item.last_activity_at
+            ) for item in result["items"]],
+            total=result["total"],
+            limit=result["limit"],
+            offset=result["offset"],
+            has_more=result["has_more"]
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
 

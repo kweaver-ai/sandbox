@@ -110,9 +110,70 @@ class TestSessionsAPI:
     async def test_list_sessions(self, http_client: AsyncClient):
         """Test listing all sessions."""
         response = await http_client.get("/sessions")
-        # Note: GET /sessions might not be implemented (405 Method Not Allowed)
-        # If it returns 405, that's expected behavior
-        assert response.status_code in (200, 405)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "items" in data
+        assert "total" in data
+        assert "limit" in data
+        assert "offset" in data
+        assert "has_more" in data
+        assert isinstance(data["items"], list)
+
+    async def test_list_sessions_with_status_filter(self, http_client: AsyncClient):
+        """Test listing sessions with status filter."""
+        response = await http_client.get("/sessions?status=running")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "items" in data
+        # Verify all returned sessions have the requested status
+        for session in data["items"]:
+            assert session["status"] == "running"
+
+    async def test_list_sessions_with_template_filter(self, http_client: AsyncClient):
+        """Test listing sessions with template_id filter."""
+        response = await http_client.get("/sessions?template_id=python3.11-baseline")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "items" in data
+        # Verify all returned sessions have the requested template
+        for session in data["items"]:
+            assert session["template_id"] == "python3.11-baseline"
+
+    async def test_list_sessions_with_pagination(self, http_client: AsyncClient):
+        """Test listing sessions with pagination."""
+        # First page with limit=2
+        response = await http_client.get("/sessions?limit=2&offset=0")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "items" in data
+        assert data["limit"] == 2
+        assert data["offset"] == 0
+        assert len(data["items"]) <= 2
+
+        # Second page
+        response2 = await http_client.get("/sessions?limit=2&offset=2")
+        assert response2.status_code == 200
+
+        data2 = response2.json()
+        assert data2["limit"] == 2
+        assert data2["offset"] == 2
+
+        # Verify has_more flag
+        if data["total"] > 2:
+            assert data["has_more"] is True
+
+    async def test_list_sessions_limit_validation(self, http_client: AsyncClient):
+        """Test that limit is properly validated (max 200)."""
+        # Request limit > 200, should be clamped to 200
+        response = await http_client.get("/sessions?limit=300")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["limit"] == 200
 
     async def test_terminate_session(self, http_client: AsyncClient, test_template_id: str):
         """Test terminating a session."""

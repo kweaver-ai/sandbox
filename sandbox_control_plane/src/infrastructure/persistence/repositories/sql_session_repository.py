@@ -133,3 +133,72 @@ class SqlSessionRepository(ISessionRepository):
         )
         result = await self._session.execute(stmt)
         return result.scalar() or 0
+
+    async def find_sessions(
+        self,
+        status: Optional[str] = None,
+        template_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Session]:
+        """
+        查找会话列表（支持筛选和分页）
+
+        Args:
+            status: 会话状态筛选（可选）
+            template_id: 模板 ID 筛选（可选）
+            limit: 返回数量限制（1-200，默认 50）
+            offset: 偏移量（用于分页）
+
+        Returns:
+            会话列表
+        """
+        # 验证 limit 范围
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+
+        # 构建查询
+        stmt = select(SessionModel)
+
+        # 添加筛选条件
+        if status:
+            stmt = stmt.where(SessionModel.status == status)
+        if template_id:
+            stmt = stmt.where(SessionModel.template_id == template_id)
+
+        # 排序和分页
+        stmt = (
+            stmt
+            .order_by(SessionModel.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+
+        result = await self._session.execute(stmt)
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def count_sessions(
+        self,
+        status: Optional[str] = None,
+        template_id: Optional[str] = None
+    ) -> int:
+        """
+        统计会话数量（支持筛选）
+
+        Args:
+            status: 会话状态筛选（可选）
+            template_id: 模板 ID 筛选（可选）
+
+        Returns:
+            会话总数
+        """
+        stmt = select(func.count()).select_from(SessionModel)
+
+        # 添加筛选条件
+        if status:
+            stmt = stmt.where(SessionModel.status == status)
+        if template_id:
+            stmt = stmt.where(SessionModel.template_id == template_id)
+
+        result = await self._session.execute(stmt)
+        return result.scalar() or 0

@@ -161,6 +161,57 @@ class SessionService:
 
         return SessionDTO.from_entity(session)
 
+    async def list_sessions(
+        self,
+        status: Optional[str] = None,
+        template_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> dict:
+        """
+        列出会话用例
+
+        Args:
+            status: 会话状态筛选（可选）
+            template_id: 模板 ID 筛选（可选）
+            limit: 返回数量限制（1-200，默认 50）
+            offset: 偏移量（用于分页）
+
+        Returns:
+            包含 items, total, limit, offset, has_more 的字典
+        """
+        # 验证 limit 范围
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+
+        # 获取会话列表
+        sessions = await self._session_repo.find_sessions(
+            status=status,
+            template_id=template_id,
+            limit=limit,
+            offset=offset
+        )
+
+        # 获取总数
+        total = await self._session_repo.count_sessions(
+            status=status,
+            template_id=template_id
+        )
+
+        # 转换为 DTO
+        items = [SessionDTO.from_entity(s) for s in sessions]
+
+        # 计算是否有更多数据
+        has_more = (offset + len(items)) < total
+
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more
+        }
+
     async def terminate_session(self, session_id: str) -> SessionDTO:
         """
         终止会话用例

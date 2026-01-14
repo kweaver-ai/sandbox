@@ -35,6 +35,15 @@ class SessionResponse(BaseModel):
     last_activity_at: Optional[datetime] = None
 
 
+class SessionListResponse(BaseModel):
+    """会话列表响应"""
+    items: List[SessionResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class ArtifactResponse(BaseModel):
     """文件制品响应"""
     path: str
