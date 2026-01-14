@@ -130,8 +130,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             cleanup_svc = SessionCleanupService(
                 session_repo=session_repo,
                 scheduler=scheduler,
-                idle_timeout_minutes=30,
-                max_lifetime_hours=6,
+                idle_timeout_minutes=settings.idle_threshold_minutes,
+                max_lifetime_hours=settings.max_lifetime_hours,
                 storage_service=storage_service,
             )
             return await cleanup_svc.cleanup_idle_sessions()

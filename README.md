@@ -85,6 +85,24 @@ curl -X POST http://localhost:8000/api/v1/sessions/{session_id}/execute \
   }'
 ```
 
+## Service Access
+
+After starting the system, the following services are available:
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **API Documentation** | http://localhost:8000/docs | Swagger UI - Interactive API documentation |
+| **Control Plane Console** | http://localhost:1101 | Web management interface for monitoring and managing sessions |
+| **MinIO Console** | http://localhost:9001 | S3-compatible storage management interface |
+
+### Default Credentials
+
+MinIO Console (default credentials):
+- Username: `minioadmin`
+- Password: `minioadmin`
+
+**Note**: Please change the default credentials in production environments.
+
 ## Development
 
 ### Running Tests
