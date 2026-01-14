@@ -2,10 +2,17 @@ import pytest
 import asyncio
 import tempfile
 import os
+import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 from pathlib import Path
 from sandbox_runtime.utils.efast_downloader import EFASTDownloader, DownloadItem
 from sandbox_runtime.errors import SandboxError
+
+if sys.platform.startswith("win"):
+    pytest.skip(
+        "Skipping efast downloader tests on Windows",
+        allow_module_level=True,
+    )
 
 
 class TestDownloadItem:

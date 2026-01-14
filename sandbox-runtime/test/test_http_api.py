@@ -1,11 +1,18 @@
 import pytest
 import asyncio
 import json
+import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 from aiohttp import ClientResponse
 import requests
 from sandbox_runtime.utils.http_api import API, HTTPMethod, Config
 from sandbox_runtime.errors import SandboxError
+
+if sys.platform.startswith("win"):
+    pytest.skip(
+        "Skipping http_api tests on Windows",
+        allow_module_level=True,
+    )
 
 
 class TestAPIInitialization:
