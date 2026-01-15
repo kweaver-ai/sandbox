@@ -11,6 +11,7 @@ BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-sandbox-executor-base}"
 BASE_IMAGE_TAG="${BASE_IMAGE_TAG:-latest}"
 REGISTRY="${REGISTRY:-localhost:5000}"
 PUSH="${PUSH:-false}"
+USE_MIRROR="${USE_MIRROR:-false}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -33,10 +34,18 @@ log_error() {
 # Build base image
 build_base() {
     log_info "Building executor base image: ${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}"
+
+    local build_args=""
+    if [ "$USE_MIRROR" = "true" ]; then
+        build_args="--build-arg USE_MIRROR=true"
+        log_info "Using mirror sources for base image"
+    fi
+
     docker build \
         -f "${PROJECT_ROOT}/runtime/executor/Dockerfile" \
         -t "${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}" \
         -t "${BASE_IMAGE_NAME}:latest" \
+        $build_args \
         "${PROJECT_ROOT}"
 
     if [ "$PUSH" = "true" ]; then
@@ -50,6 +59,12 @@ build_base() {
 build_templates() {
     # local templates=("python-basic" "python-datascience" "nodejs-basic")
     local templates=("python-basic")
+
+    local build_args=""
+    if [ "$USE_MIRROR" = "true" ]; then
+        build_args="--build-arg USE_MIRROR=true"
+        log_info "Using mirror sources for template images"
+    fi
 
     for template in "${templates[@]}"; do
         log_info "Building template: ${template}"
@@ -66,6 +81,7 @@ build_templates() {
         docker build \
             -f "${template_dir}/Dockerfile" \
             --build-arg "BASE_IMAGE=${BASE_IMAGE_NAME}:${BASE_IMAGE_TAG}" \
+            $build_args \
             -t "${image_name}:${image_tag}" \
             -t "${image_name}:latest" \
             "${PROJECT_ROOT}"
@@ -112,6 +128,10 @@ while [[ $# -gt 0 ]]; do
             BASE_IMAGE_TAG="$2"
             shift 2
             ;;
+        --use-mirror)
+            USE_MIRROR=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -119,6 +139,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --push        Push images to registry"
             echo "  --registry    Docker registry (default: localhost:5000)"
             echo "  --base-tag    Base image tag (default: latest)"
+            echo "  --use-mirror  Use mirror sources for building images"
             echo "  -h, --help    Show this help message"
             exit 0
             ;;

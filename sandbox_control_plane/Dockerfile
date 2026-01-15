@@ -1,12 +1,23 @@
 # Sandbox Control Plane
 # FastAPI-based management service for sandbox code execution
 
+# Mirror configuration for special network environments
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+ARG PIP_MIRROR=mirrors.ustc.edu.cn
+
 FROM python:3.11-slim
 
 # Metadata
 LABEL maintainer="Sandbox Team"
 LABEL description="Sandbox Control Plane - Management API"
 LABEL version="2.1.0"
+
+# Configure APT mirror if needed
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi
 
 # Install system dependencies (optimized)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +40,10 @@ COPY pyproject.toml uv.lock README.md ./
 
 # Install uv and Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
+    if [ "$USE_MIRROR" = "true" ]; then \
+      pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
+      pip config set global.trusted-host $PIP_MIRROR; \
+    fi && \
     pip install --no-cache-dir uv && \
     uv sync --frozen && \
     # Clean up uv cache

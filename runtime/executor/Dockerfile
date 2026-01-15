@@ -2,13 +2,24 @@
 # This image serves as the base for all template images
 # Contains the executor daemon and Bubblewrap for secure code execution
 
+# Mirror configuration for special network environments
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+ARG PIP_MIRROR=mirrors.ustc.edu.cn
 ARG PYTHON_VERSION=3.11
+
 FROM python:${PYTHON_VERSION}-slim
 
 # Metadata
 LABEL maintainer="Sandbox Team"
 LABEL description="Sandbox Executor Base - Daemon + Bubblewrap Isolation"
 LABEL version="1.0.0"
+
+# Configure APT mirror if needed
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -35,6 +46,10 @@ COPY runtime/executor/ /app/executor/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
+    if [ "$USE_MIRROR" = "true" ]; then \
+      pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
+      pip config set global.trusted-host $PIP_MIRROR; \
+    fi && \
     pip install --no-cache-dir -r /app/executor/requirements.txt
 
 # Create workspace directory

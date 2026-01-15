@@ -158,6 +158,29 @@ cd images
 - `sandbox-executor-base:latest` - 执行器基础镜像
 - `sandbox-template-python-basic:latest` - Python 基础模板
 
+**注意**：`control-plane` 和 `sandbox-web` 镜像由 docker-compose 自动构建。
+
+### 使用镜像源（可选）
+
+如果在网络受限的环境下构建镜像（如中国大陆），可以使用镜像源：
+
+```bash
+# 使用镜像源构建执行器镜像
+cd images
+USE_MIRROR=true ./build.sh
+
+# 使用镜像源构建控制平面
+cd ../sandbox_control_plane
+docker build --build-arg USE_MIRROR=true -t sandbox-control-plane .
+
+# 使用镜像源构建 Web 控制台
+cd ../sandbox_web
+docker build --build-arg USE_MIRROR=true -t sandbox-web .
+```
+
+可用的镜像源：
+- **默认**：中科大镜像（Debian/APT、Alpine/APK、Python/pip）+ 淘宝（npm）
+- **自定义**：使用 `--build-arg APT_MIRROR=your-mirror` 指定自定义镜像
 
 ### 启动服务
 

@@ -158,7 +158,29 @@ The build script creates:
 - `sandbox-executor-base:latest` - Base executor image
 - `sandbox-template-python-basic:latest` - Python basic template
 
+**Note**: The `control-plane` and `sandbox-web` images are built automatically by docker-compose.
 
+### Using Mirror Sources (Optional)
+
+If you're building images in a network environment with limited access to official repositories (e.g., mainland China), you can use mirror sources:
+
+```bash
+# Build executor images with mirror support
+cd images
+USE_MIRROR=true ./build.sh
+
+# Build Control Plane with mirror
+cd ../sandbox_control_plane
+docker build --build-arg USE_MIRROR=true -t sandbox-control-plane .
+
+# Build Web Console with mirror
+cd ../sandbox_web
+docker build --build-arg USE_MIRROR=true -t sandbox-web .
+```
+
+Available mirror sources:
+- **Default**: USTC mirrors (Debian/APT, Alpine/APK, Python/pip) + Taobao (npm)
+- **Custom**: Use `--build-arg APT_MIRROR=your-mirror` to specify a custom mirror
 
 ### Start Services
 
