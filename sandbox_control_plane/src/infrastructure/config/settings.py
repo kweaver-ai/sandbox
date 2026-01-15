@@ -87,7 +87,7 @@ class Settings(BaseSettings):
 
     # ============== 日志配置 ==============
     log_level: str = Field(default="INFO")
-    log_format: str = Field(default="json")  # json, text
+    log_format: str = Field(default="text")  # json, text (default: text for human-readable)
 
     @field_validator("log_level")
     @classmethod

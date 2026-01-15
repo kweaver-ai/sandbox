@@ -109,7 +109,8 @@ class TestStateSyncService:
             # GET /sessions not implemented, skip verification
             return
         assert response.status_code == 200
-        all_sessions = response.json()
+        result = response.json()
+        all_sessions = result.get("items", [])
 
         container_ids = set()
         for session in all_sessions:

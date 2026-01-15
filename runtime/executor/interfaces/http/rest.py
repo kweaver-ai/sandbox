@@ -35,7 +35,10 @@ from executor.infrastructure.persistence.artifact_scanner import ArtifactScanner
 
 
 # Configure structured logging
-configure_logging(settings.log_level)
+configure_logging(
+    log_level=settings.log_level,
+    log_format=settings.log_format,
+)
 logger = get_logger()
 
 

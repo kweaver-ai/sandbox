@@ -6,7 +6,6 @@
 from typing import List, Optional
 from datetime import datetime, timedelta
 import uuid
-import logging
 
 from src.domain.entities.session import Session
 from src.domain.entities.execution import Execution
@@ -26,8 +25,9 @@ from src.application.queries.get_execution import GetExecutionQuery
 from src.application.dtos.session_dto import SessionDTO
 from src.application.dtos.execution_dto import ExecutionDTO
 from src.shared.errors.domain import NotFoundError, ValidationError
+from src.infrastructure.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SessionService:
@@ -64,13 +64,33 @@ class SessionService:
         6. 创建 Docker 容器
         7. 更新会话状态为 running
         """
+        logger.info(
+            "Creating session",
+            template_id=command.template_id,
+            has_dependencies=len(command.dependencies or []) > 0,
+        )
+
         # 1. 验证模板
         template = await self._template_repo.find_by_id(command.template_id)
         if not template:
+            logger.error(
+                "Template not found",
+                template_id=command.template_id,
+            )
             raise NotFoundError(f"Template not found: {command.template_id}")
+
+        logger.debug(
+            "Template validated",
+            template_id=template.id,
+            image=template.image,
+        )
 
         # 2. 生成会话 ID
         session_id = self._generate_session_id()
+        logger.debug(
+            "Generated session ID",
+            session_id=session_id,
+        )
 
         # 3. 调用调度器
         schedule_request = ScheduleRequest(
@@ -79,6 +99,13 @@ class SessionService:
             session_id=session_id
         )
         runtime_node = await self._scheduler.schedule(schedule_request)
+
+        logger.info(
+            "Runtime node selected",
+            session_id=session_id,
+            runtime_node=runtime_node.id,
+            node_type=runtime_node.type,
+        )
 
         # 4. 创建会话实体
         # 从模板镜像推断运行时类型
@@ -108,11 +135,22 @@ class SessionService:
 
         # 5. 保存到仓储
         await self._session_repo.save(session)
+        logger.debug(
+            "Session saved to repository",
+            session_id=session_id,
+        )
 
         # 6. 创建 Docker 容器（如果调度器支持）
         container_id = None
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
+                logger.info(
+                    "Creating container for session",
+                    session_id=session_id,
+                    image=template.image,
+                    dependencies_count=len(dependencies),
+                )
+
                 container_id = await self._scheduler.create_container_for_session(
                     session_id=session_id,
                     template_id=command.template_id,
@@ -129,18 +167,28 @@ class SessionService:
                 session.container_id = container_id
                 await self._session_repo.save(session)
 
-                import logging
-                logging.info(
-                    f"Session {session_id} container created successfully, "
-                    f"container={container_id}, node={runtime_node.id}, "
-                    f"dependencies={len(dependencies)}, "
-                    f"waiting for executor ready callback..."
+                logger.info(
+                    "Container created successfully, waiting for executor ready",
+                    session_id=session_id,
+                    container_id=container_id,
+                    runtime_node=runtime_node.id,
+                    dependencies_count=len(dependencies),
                 )
         except Exception as e:
+            logger.exception(
+                "Failed to create container",
+                session_id=session_id,
+                error=str(e),
+            )
+
             # 容器创建失败，销毁部分创建的容器（如有），标记会话为失败状态
             if container_id and hasattr(self._scheduler, 'destroy_container'):
                 try:
                     await self._scheduler.destroy_container(container_id)
+                    logger.debug(
+                        "Cleaned up failed container",
+                        container_id=container_id,
+                    )
                 except Exception:
                     pass  # 忽略清理错误
 
@@ -149,7 +197,20 @@ class SessionService:
             if session.has_dependencies():
                 session.set_dependencies_failed(str(e))
             await self._session_repo.save(session)
+
+            logger.error(
+                "Session creation failed",
+                session_id=session_id,
+                error=str(e),
+            )
             raise ValidationError(f"Failed to create container: {e}")
+
+        logger.info(
+            "Session created successfully",
+            session_id=session_id,
+            container_id=container_id,
+            status=session.status.value,
+        )
 
         return SessionDTO.from_entity(session)
 
@@ -223,22 +284,58 @@ class SessionService:
         4. 清理 S3 文件（如果配置了存储服务）
         5. 更新会话状态
         """
+        logger.info(
+            "Terminating session",
+            session_id=session_id,
+        )
+
         session = await self._session_repo.find_by_id(session_id)
         if not session:
+            logger.warning(
+                "Session not found for termination",
+                session_id=session_id,
+            )
             raise NotFoundError(f"Session not found: {session_id}")
 
         if session.is_terminated():
+            logger.info(
+                "Session already terminated",
+                session_id=session_id,
+                status=session.status.value,
+            )
             return SessionDTO.from_entity(session)
+
+        logger.debug(
+            "Terminating active session",
+            session_id=session_id,
+            container_id=session.container_id,
+            status=session.status.value,
+        )
 
         # 销毁 Docker 容器（如果调度器支持且容器存在）
         if session.container_id and hasattr(self._scheduler, 'destroy_container'):
             try:
+                logger.info(
+                    "Destroying container",
+                    session_id=session_id,
+                    container_id=session.container_id,
+                )
                 await self._scheduler.destroy_container(
                     container_id=session.container_id
                 )
+                logger.info(
+                    "Container destroyed successfully",
+                    session_id=session_id,
+                    container_id=session.container_id,
+                )
             except Exception as e:
                 # 记录错误但不中断流程
-                logger.warning(f"Failed to destroy container {session.container_id}: {e}")
+                logger.warning(
+                    "Failed to destroy container",
+                    session_id=session_id,
+                    container_id=session.container_id,
+                    error=str(e),
+                )
 
         # 清理 S3 文件（如果配置了存储服务）
         if self._storage_service:
@@ -246,19 +343,37 @@ class SessionService:
                 # workspace_path 格式: s3://bucket/sessions/{session_id}/
                 # 提取前缀用于批量删除
                 if session.workspace_path.startswith("s3://"):
+                    logger.info(
+                        "Cleaning up S3 workspace files",
+                        session_id=session_id,
+                        workspace_path=session.workspace_path,
+                    )
                     # 使用完整的 workspace_path 作为前缀
                     deleted_count = await self._storage_service.delete_prefix(session.workspace_path)
                     logger.info(
-                        f"Deleted {deleted_count} files for session {session_id} "
-                        f"(workspace: {session.workspace_path})"
+                        "S3 files deleted",
+                        session_id=session_id,
+                        deleted_count=deleted_count,
+                        workspace_path=session.workspace_path,
                     )
             except Exception as e:
                 # 记录错误但不中断流程
-                logger.warning(f"Failed to cleanup files for session {session_id}: {e}")
+                logger.warning(
+                    "Failed to cleanup S3 files",
+                    session_id=session_id,
+                    workspace_path=session.workspace_path,
+                    error=str(e),
+                )
 
         # 更新会话状态
         session.mark_as_terminated()
         await self._session_repo.save(session)
+
+        logger.info(
+            "Session terminated successfully",
+            session_id=session_id,
+            final_status=session.status.value,
+        )
 
         return SessionDTO.from_entity(session)
 
@@ -273,16 +388,44 @@ class SessionService:
         4. 保存到仓储
         5. 提交到执行器
         """
+        logger.info(
+            "Executing code",
+            session_id=command.session_id,
+            language=command.language,
+            code_length=len(command.code),
+        )
+
         # 1. 验证会话
         session = await self._session_repo.find_by_id(command.session_id)
         if not session:
+            logger.error(
+                "Session not found for execution",
+                session_id=command.session_id,
+            )
             raise NotFoundError(f"Session not found: {command.session_id}")
 
         if not session.is_active():
+            logger.warning(
+                "Session is not active",
+                session_id=command.session_id,
+                status=session.status.value,
+            )
             raise ValidationError(f"Session is not active: {command.session_id}")
+
+        logger.debug(
+            "Session validated for execution",
+            session_id=command.session_id,
+            container_id=session.container_id,
+        )
 
         # 2. 生成执行 ID
         execution_id = self._generate_execution_id()
+
+        logger.debug(
+            "Generated execution ID",
+            execution_id=execution_id,
+            session_id=command.session_id,
+        )
 
         # 3. 创建执行实体
         from src.domain.value_objects.execution_status import ExecutionState
@@ -299,12 +442,20 @@ class SessionService:
 
         # 4. 保存到仓储
         await self._execution_repo.save(execution)
+        logger.debug(
+            "Execution saved to repository",
+            execution_id=execution_id,
+        )
 
         # 4.5. 提交事务，确保执行记录在执行器回调之前可见
         await self._execution_repo.commit()
 
         # 5. 提交到执行器
         if not session.container_id:
+            logger.error(
+                "Session has no container",
+                session_id=command.session_id,
+            )
             raise ValidationError(f"Session has no container: {command.session_id}")
 
         # 构建执行请求
@@ -318,11 +469,25 @@ class SessionService:
             session_id=session.id,
         )
 
+        logger.info(
+            "Submitting execution to executor",
+            execution_id=execution_id,
+            session_id=command.session_id,
+            container_id=session.container_id,
+            timeout=execution_request.timeout,
+        )
+
         # 通过调度器提交到执行器
         await self._scheduler.execute(
             session_id=session.id,
             container_id=session.container_id,
             execution_request=execution_request,
+        )
+
+        logger.info(
+            "Execution submitted successfully",
+            execution_id=execution_id,
+            session_id=command.session_id,
         )
 
         return ExecutionDTO.from_entity(execution)

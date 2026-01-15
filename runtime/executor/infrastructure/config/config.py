@@ -25,6 +25,9 @@ class Settings(BaseModel):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", description="Logging level"
     )
+    log_format: Literal["text", "json"] = Field(
+        default="text", description="Logging format - text for human-readable, json for structured logs"
+    )
     workspace_path: str = Field(
         default="/workspace", description="Workspace directory for file operations"
     )

@@ -1,68 +1,197 @@
 # Sandbox Control Plane
 
-A FastAPI-based management service for secure code execution in isolated container environments.
+[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md) [![中文](https://img.shields.io/badge/lang-中文-red.svg)](README_ZH.md)
+
+A cloud-native, production-ready platform for secure code execution in isolated container environments, designed for AI agent applications.
 
 ## Overview
 
-The Sandbox Control Plane is a core component of the Sandbox Platform that manages:
-- **Session Lifecycle**: Create, monitor, and terminate sandbox execution sessions
-- **Code Execution**: Submit Python/JavaScript/Shell code for execution with result retrieval
-- **Template Management**: Define and manage sandbox environment templates
-- **File Operations**: Upload input files and download execution artifacts
-- **Container Monitoring**: Track container health, resource usage, and logs
+The Sandbox Control Plane is a **production-ready, enterprise-grade** platform that provides secure, isolated execution environments for running untrusted code. Built with a stateless architecture and intelligent scheduling, it's optimized for AI agent workflows, data pipelines, and serverless computing scenarios.
+
+### Key Advantages
+
+**Cloud-Native Architecture**
+- Stateless Control Plane supporting horizontal scaling with Kubernetes HPA
+- Dual runtime support: Docker (local/dev) and Kubernetes (production)
+- Protocol-driven decoupling for flexible deployment
+
+**Intelligent Scheduling**
+- Template affinity scheduling for optimal resource utilization
+- Session lifecycle controlled via API with global idle timeout and lifetime limits
+- Built-in session cleanup with configurable policies
+
+**Multi-Layer Security**
+- Container isolation with network restrictions and capability dropping
+- Optional Bubblewrap process-level namespace isolation
+- Resource quotas with CPU/memory limits and process constraints
+
+**Developer Experience**
+- AWS Lambda-compatible handler specification for easy migration
+- Web-based management console with real-time monitoring
+- Comprehensive RESTful API with interactive documentation
+- Template-based environment management
+
+**Production Ready**
+- State synchronization service for automatic recovery
+- Health probe system for container monitoring
+- S3-compatible storage integration for workspace persistence
+- Structured logging with request tracing
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Session Management** | Create, monitor, and terminate sandbox execution sessions with automatic cleanup |
+| **Code Execution** | Execute Python/JavaScript/Shell code with result retrieval and streaming output |
+| **Template System** | Define and manage sandbox environment templates with dependency caching |
+| **File Operations** | Upload input files and download execution artifacts via S3-compatible storage |
+| **Container Monitoring** | Real-time health checks, resource usage tracking, and log aggregation |
+| **Intelligent Scheduling** | Template affinity optimization and load-balanced cold start strategies |
+| **State Synchronization** | Automatic recovery of orphaned sessions on service restart |
+| **Web Console** | React-based management interface for visual operations and monitoring |
 
 ## Architecture
 
-The system uses a stateless architecture with:
-- **MariaDB**: Session and execution state storage
-- **S3-compatible storage**: Workspace file persistence
-- **Docker/Kubernetes**: Container runtime orchestration
-- **Warm Pool**: Pre-instantiated containers for fast session allocation
+The system adopts a **Control Plane + Container Scheduler** separation architecture:
+
+```mermaid
+graph TB
+    subgraph External["External Systems"]
+        Client["Client Applications"]
+        Developer["Developer<br/>(SDK/API)"]
+    end
+
+    subgraph ControlPlane["Control Plane"]
+        API["API Gateway<br/>(FastAPI)"]
+        Scheduler["Scheduler"]
+        SessionMgr["Session Manager"]
+        TemplateMgr["Template Manager"]
+        HealthProbe["Health Probe"]
+        Cleanup["Session Cleanup"]
+        StateSync["State Sync Service"]
+    end
+
+    subgraph ContainerScheduler["Container Scheduler"]
+        DockerRuntime["Docker Runtime"]
+        K8sRuntime["K8s Runtime"]
+    end
+
+    subgraph Storage["Storage Layer"]
+        MariaDB[(MariaDB)]
+        S3[(S3 Storage)]
+    end
+
+    subgraph Runtime["Sandbox Runtime"]
+        Executor["Executor"]
+        Container["Container"]
+    end
+
+    Client -->|REST API| API
+    Developer -->|REST API| API
+    API --> Scheduler
+    Scheduler --> SessionMgr
+    SessionMgr --> TemplateMgr
+    Scheduler --> ContainerScheduler
+    ContainerScheduler --> DockerRuntime
+    ContainerScheduler --> K8sRuntime
+    DockerRuntime --> Container
+    K8sRuntime --> Container
+    Container --> Executor
+    SessionMgr --> MariaDB
+    HealthProbe --> Container
+    StateSync --> MariaDB
+    StateSync --> ContainerScheduler
+    Cleanup --> SessionMgr
+    API --> S3
+
+    style ControlPlane fill:#e1f5ff
+    style ContainerScheduler fill:#fff4e6
+    style Storage fill:#f0f0f0
+    style Runtime fill:#e8f5e9
+```
+
+### Design Principles
+
+- **Control Plane Stateless**: Supports horizontal scaling with no local state
+- **Protocol-Driven**: All communication via standardized RESTful API
+- **Security-First**: Multi-layer isolation with defense-in-depth
+- **Cloud-Native**: Designed for Kubernetes deployment with auto-scaling
+- **Simplicity**: Direct container creation without warm pool complexity
+
+### Component Overview
+
+**Control Plane Components**:
+- API Gateway: FastAPI-based RESTful endpoints with automatic validation
+- Scheduler: Intelligent task distribution with template affinity
+- Session Manager: Database-backed session lifecycle management
+- Template Manager: Environment template CRUD operations
+- Health Probe: Container monitoring and metrics collection
+- Session Cleanup: Automatic resource reclamation
+- State Sync Service: Startup health checks and recovery
+
+**Container Scheduler**:
+- Docker Scheduler: Direct Docker socket access via aiodocker
+- K8s Scheduler: Kubernetes API integration for production deployments
+
+**Storage Layer**:
+- MariaDB: Session, execution, and template state storage
+- S3-Compatible Storage: Workspace file persistence (MinIO/AWS S3)
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- MariaDB 11.2+ or MySQL 8.0+
-- S3-compatible storage (MinIO or AWS S3)
-- Docker Engine (local) or Kubernetes cluster (production)
+- Docker Engine 20.10+ and Docker Compose 2.0+
+- 4GB+ available memory
+- 10GB+ available disk space
 
-### Installation
+### Build Images
+
+Before starting the services, build the executor base image and template images:
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd sandbox
-
-# Create virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -e ".[dev]"
-
-# Copy environment configuration
-cp .env.example .env
-# Edit .env with your configuration
-
-# Run database migrations (when implemented)
-# python -m sandbox_control_plane.db migrate
-
-# Start the service
-uvicorn sandbox_control_plane.api.main:app --reload
+cd images
+./build.sh
 ```
 
-### API Documentation
+The build script creates:
+- `sandbox-executor-base:latest` - Base executor image
+- `sandbox-template-python-basic:latest` - Python basic template
 
-Once running, access the API documentation at:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+
+
+### Start Services
+
+```bash
+cd sandbox_control_plane
+
+# Start all services (Control Plane, Web Console, MariaDB, MinIO)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f control-plane
+
+# Check service status
+docker-compose ps
+```
+
+### Access Services
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **API Documentation** | http://localhost:8000/docs | Swagger UI - Interactive API documentation |
+| **Web Console** | http://localhost:1101 | React-based management interface |
+| **MinIO Console** | http://localhost:9001 | S3-compatible storage management |
+
+**Default Credentials**:
+- MinIO: `minioadmin` / `minioadmin`
+
+**Note**: Change default credentials in production environments.
 
 ### Quick Example
 
 ```bash
-# Create a session
+# Create a session using Python template
 curl -X POST http://localhost:8000/api/v1/sessions \
   -H "Content-Type: application/json" \
   -d '{
@@ -75,7 +204,7 @@ curl -X POST http://localhost:8000/api/v1/sessions \
     }
   }'
 
-# Execute code
+# Execute code (replace {session_id} with actual session ID)
 curl -X POST http://localhost:8000/api/v1/sessions/{session_id}/execute \
   -H "Content-Type: application/json" \
   -d '{
@@ -85,29 +214,13 @@ curl -X POST http://localhost:8000/api/v1/sessions/{session_id}/execute \
   }'
 ```
 
-## Service Access
-
-After starting the system, the following services are available:
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| **API Documentation** | http://localhost:8000/docs | Swagger UI - Interactive API documentation |
-| **Control Plane Console** | http://localhost:1101 | Web management interface for monitoring and managing sessions |
-| **MinIO Console** | http://localhost:9001 | S3-compatible storage management interface |
-
-### Default Credentials
-
-MinIO Console (default credentials):
-- Username: `minioadmin`
-- Password: `minioadmin`
-
-**Note**: Please change the default credentials in production environments.
-
 ## Development
 
 ### Running Tests
 
 ```bash
+cd sandbox_control_plane
+
 # Run all tests
 pytest
 
@@ -136,28 +249,38 @@ mypy sandbox_control_plane/
 ## Project Structure
 
 ```
-sandbox_control_plane/
-├── api/                    # REST API endpoints
-│   ├── routes/            # Route handlers
-│   ├── middleware/        # Auth, error handling, request ID
-│   └── models/            # Pydantic request/response models
-├── scheduler/             # Intelligent task distribution
-│   └── strategies/        # Warm pool, affinity, load balancing
-├── session_manager/       # Session lifecycle management
-├── template_manager/      # Template CRUD operations
-├── container_scheduler/   # Docker/K8s integration
-├── health_probe/          # Container monitoring and metrics
-├── db/                    # Database layer
-│   └── repositories/      # Data access layer
-├── storage/               # S3 integration
-├── internal_api/          # Executor callback endpoints
-├── config/                # Configuration and logging
-└── utils/                 # Utilities (ID generation, validation)
-
-tests/
-├── contract/              # API contract tests
-├── integration/           # End-to-end workflow tests
-└── unit/                  # Unit tests
+sandbox/
+├── sandbox_control_plane/    # FastAPI control plane service
+│   ├── src/
+│   │   ├── application/      # Application services (business logic)
+│   │   ├── domain/           # Domain models and interfaces
+│   │   ├── infrastructure/   # External dependencies (DB, Docker, S3)
+│   │   ├── interfaces/       # REST API endpoints
+│   │   └── shared/           # Shared utilities
+│   ├── tests/                # Unit, integration, and contract tests
+│   └── docker-compose.yml    # Local development setup
+│
+├── sandbox_web/              # React web management console
+│   ├── src/                  # React components and pages
+│   │   ├── pages/            # Page components
+│   │   ├── components/       # Reusable components
+│   │   ├── services/         # API client services
+│   │   └── utils/            # Utilities
+│   └── package.json          # NPM dependencies
+│
+├── runtime/executor/          # Sandbox executor daemon
+│   ├── application/          # Execution logic
+│   ├── domain/               # Domain models
+│   ├── infrastructure/       # External dependencies
+│   ├── interfaces/           # HTTP API endpoints
+│   └── Dockerfile            # Executor container image
+│
+├── images/                    # Container image build scripts
+│   └── build.sh              # Build executor base and template images
+│
+├── scripts/                  # Utility scripts
+├── specs/                    # Implementation specifications
+└── docs/                     # Documentation
 ```
 
 ## Documentation
@@ -167,6 +290,7 @@ tests/
 - [API Contracts](specs/001-control-plane/contracts/)
 - [Quickstart Guide](specs/001-control-plane/quickstart.md)
 - [Research Decisions](specs/001-control-plane/research.md)
+- [Technical Design](docs/sandbox-design-v2.1.md)
 
 ## License
 

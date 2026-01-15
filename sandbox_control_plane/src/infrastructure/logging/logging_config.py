@@ -1,8 +1,8 @@
 """
-Structured logging configuration for sandbox-executor.
+Logging configuration for Sandbox Control Plane.
 
 Configures structlog for human-readable text logging (default) with optional JSON format.
-Supports execution context tracing and colored console output.
+Supports request context tracing and colored console output.
 """
 
 import logging
@@ -10,7 +10,7 @@ import sys
 from typing import Any, Optional
 
 import structlog
-from structlog.types import EventDict
+from structlog.types import EventDict, Processor
 
 # Color codes for terminal output
 COLORS = {
@@ -53,15 +53,15 @@ def human_readable_renderer(
     event_dict: EventDict
 ) -> str:
     """
-    Human-readable log format renderer for executor.
+    Human-readable log format renderer.
 
-    Format: [timestamp] [level] [component] message key=value key2=value2
-    Example: [2025-01-14 10:30:45] [INFO] [executor] Executing code execution_id=abc123
+    Format: [timestamp] [level] [logger] message key=value key2=value2
+    Example: [2025-01-14 10:30:45] [INFO] [session_service] Session created session_id=abc123
     """
     # Extract basic fields
     timestamp = event_dict.pop("timestamp", "")
     level = event_dict.pop("level", "INFO").upper()
-    logger_name = event_dict.pop("logger_name", event_dict.pop("logger", "executor"))
+    logger_name = event_dict.pop("logger_name", event_dict.pop("logger", "unknown"))
     message = event_dict.pop("event", "")
 
     # Build the log line
@@ -74,7 +74,7 @@ def human_readable_renderer(
     # Level with color (will be added by add_color processor)
     parts.append(f"[{level}]")
 
-    # Logger/component name
+    # Logger name
     if logger_name != "root":
         parts.append(f"[{logger_name}]")
 
@@ -108,7 +108,7 @@ def configure_logging(
     json_format: bool = False
 ) -> None:
     """
-    Configure structlog for the executor.
+    Configure structlog for the application.
 
     Args:
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -123,7 +123,7 @@ def configure_logging(
         format="%(message)s",
         stream=sys.stdout,
         level=getattr(logging, log_level.upper(), logging.INFO),
-        force=True,
+        force=True,  # Force reconfiguration
     )
 
     # Build processors list
@@ -160,33 +160,24 @@ def configure_logging(
     )
 
 
-def get_logger(
-    name: str = "executor",
-    execution_id: str = None,
-    container_id: str = None
-) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str = None, **context) -> structlog.stdlib.BoundLogger:
     """
-    Get a logger instance with optional context.
+    Get a configured logger instance.
 
     Args:
-        name: Logger name (default: "executor")
-        execution_id: Execution identifier for tracing
-        container_id: Container identifier for tracing
+        name: Logger name (usually __name__)
+        **context: Additional context to bind to the logger
 
     Returns:
         Configured logger instance
 
     Example:
-        logger = get_logger(execution_id="abc123", container_id="sandbox-xyz")
-        logger.info("Executing code", language="python")
+        logger = get_logger(__name__)
+        logger.info("Processing request", request_id="123", user_id="abc")
     """
-    context: dict[str, Any] = {}
-    if execution_id:
-        context["execution_id"] = execution_id
-    if container_id:
-        context["container_id"] = container_id
-
-    return structlog.get_logger(name, **context)
+    if name:
+        return structlog.get_logger(name, **context)
+    return structlog.get_logger(**context)
 
 
 def bind_context(**context) -> None:
@@ -194,7 +185,7 @@ def bind_context(**context) -> None:
     Bind global context to all loggers.
 
     Example:
-        bind_context(execution_id="123", session_id="abc")
+        bind_context(request_id="123", session_id="abc")
     """
     structlog.contextvars.bind_contextvars(**context)
 
@@ -204,18 +195,18 @@ def clear_context() -> None:
     structlog.contextvars.clear_contextvars()
 
 
-class ExecutionLogger:
+class RequestLogger:
     """
-    Helper class for execution-scoped logging with automatic context management.
+    Helper class for request-scoped logging with automatic context management.
 
     Example:
-        exec_logger = ExecutionLogger(execution_id="abc123", session_id="xyz")
-        exec_logger.info("Starting execution", language="python")
-        # Output: [2025-01-14 10:30:45] [INFO] [executor] Starting execution execution_id=abc123 session_id=xyz language=python
+        request_logger = RequestLogger(request_id="123", session_id="abc")
+        request_logger.info("Processing request")
+        # Output: [2025-01-14 10:30:45] [INFO] [api] Processing request request_id=123 session_id=abc
     """
 
     def __init__(self, **context):
-        """Initialize with execution context."""
+        """Initialize with request context."""
         self._context = context
         self._logger = get_logger(**context)
 
@@ -238,4 +229,3 @@ class ExecutionLogger:
     def exception(self, event: str, **kwargs):
         """Log exception message with context."""
         self._logger.exception(event, **{**self._context, **kwargs})
-

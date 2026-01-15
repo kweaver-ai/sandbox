@@ -10,7 +10,6 @@ Pod 会通过 s3fs sidecar 容器将 S3 bucket 挂载到 /workspace 目录。
 """
 import asyncio
 import json
-import logging
 import os
 from typing import Optional, List
 from urllib.parse import urlparse
@@ -43,8 +42,9 @@ from src.infrastructure.container_scheduler.base import (
     ContainerResult,
 )
 from src.infrastructure.config.settings import get_settings
+from src.infrastructure.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class K8sScheduler(IContainerScheduler):

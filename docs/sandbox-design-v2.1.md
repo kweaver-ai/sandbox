@@ -1214,47 +1214,54 @@ CMD ["/usr/local/bin/sandbox-executor"]
 ```
 
 #### 2.2.2 Kubernetes 运行时
+
+**Implementation Status**: ✅ Completed (2025-01-14)
+
+The K8s scheduler is implemented in `sandbox_control_plane/src/infrastructure/container_scheduler/k8s_scheduler.py` following the design specification below.
+
+Key implementation details:
+- **File**: `k8s_scheduler.py` (~29KB, 750+ lines)
+- **API Client**: Official Kubernetes Python client (`kubernetes` package)
+- **Config Methods**: In-cluster config (ServiceAccount), kubeconfig file, or default config
+- **Namespace**: Configurable (default: `sandbox-runtime`)
+- **Interface**: Implements `IContainerScheduler` base interface
+
 Pod 配置（第一层隔离）：
 ```python
-class K8sRuntime:
-    def _build_pod_spec(self, sandbox: Sandbox) -> V1Pod:
-        template = self.get_template(sandbox.spec.templateRef)
-        
+class K8sScheduler:
+    def _build_pod_spec(self, config: ContainerConfig) -> V1Pod:
         return V1Pod(
             metadata=V1ObjectMeta(
-                name=f"sandbox-{sandbox.name}",
+                name=config.name,
                 labels={
                     "app": "sandbox",
-                    "session": sandbox.name,
-                    "template": sandbox.spec.templateRef
+                    "session": config.name,
+                    **config.labels
                 }
             ),
             spec=V1PodSpec(
                 # 容器配置
                 containers=[V1Container(
                     name="executor",
-                    image=template.image,
+                    image=config.image,
                     command=["/usr/local/bin/sandbox-executor"],
-                    
+
                     # 环境变量
-                    env=[
-                        V1EnvVar(name="SESSION_ID", value=sandbox.name),
-                        V1EnvVar(name="CONTROL_PLANE_URL", value=self.control_plane_url)
-                    ],
-                    
+                    env=[V1EnvVar(name=k, value=v) for k, v in config.env_vars.items()],
+
                     # 资源限制
                     resources=V1ResourceRequirements(
                         limits={
-                            "cpu": sandbox.spec.resources.cpu,
-                            "memory": sandbox.spec.resources.memory,
-                            "ephemeral-storage": "1Gi"
+                            "cpu": config.cpu_limit,
+                            "memory": config.memory_limit,
+                            "ephemeral-storage": config.disk_limit
                         },
                         requests={
-                            "cpu": sandbox.spec.resources.cpu,
-                            "memory": sandbox.spec.resources.memory
+                            "cpu": config.cpu_limit,
+                            "memory": config.memory_limit
                         }
                     ),
-                    
+
                     # 安全上下文 - 容器层隔离
                     security_context=V1SecurityContext(
                         # 非特权模式
@@ -1276,7 +1283,7 @@ class K8sRuntime:
                             type="RuntimeDefault"
                         )
                     ),
-                    
+
                     # 卷挂载
                     volume_mounts=[
                         V1VolumeMount(
@@ -1285,7 +1292,7 @@ class K8sRuntime:
                         )
                     ]
                 )],
-                
+
                 # Pod 安全配置
                 security_context=V1PodSecurityContext(
                     fs_group=1000,
@@ -1296,35 +1303,112 @@ class K8sRuntime:
                         V1Sysctl(name="net.ipv4.ping_group_range", value="1000 1000")
                     ]
                 ),
-                
-                # 卷定义
-                volumes=[
-                    V1Volume(
-                        name="workspace",
-                        # 使用 PVC 挂载 S3 对象存储（通过 CSI Driver）
-                        persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-                            claim_name=f"sandbox-{sandbox.name}-workspace"
-                        )
-                    )
-                ],
-                
+
+                # 卷定义 - 支持两种模式：
+                # 1. S3 path (s3://...) - 使用 s3fs sidecar 或 PVC
+                # 2. EmptyDir - 临时存储
+                volumes=self._build_volumes(config),
+
                 # 重启策略
                 restart_policy="Never",
-                
+
                 # DNS 策略
                 dns_policy="None",  # 禁用 DNS
-                
+
                 # 主机网络配置
                 host_network=False,
                 host_pid=False,
                 host_ipc=False
             )
         )
+
+    def _build_volumes(self, config: ContainerConfig) -> List[V1Volume]:
+        """
+        构建卷定义
+
+        支持两种模式：
+        1. S3 workspace - 创建 PVC 或使用 s3fs sidecar
+        2. EmptyDir - 临时存储（用于本地测试）
+        """
+        workspace_path = config.workspace_path
+
+        if workspace_path.startswith("s3://"):
+            # S3 模式：创建 PVC（如果尚不存在）
+            pvc_name = f"{config.name}-workspace"
+            self._ensure_pvc_exists(pvc_name, workspace_path)
+
+            return [
+                V1Volume(
+                    name="workspace",
+                    persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                        claim_name=pvc_name
+                    )
+                )
+            ]
+        else:
+            # EmptyDir 模式（本地测试）
+            return [
+                V1Volume(
+                    name="workspace",
+                    empty_dir=V1EmptyDirVolumeSource(
+                        medium="Memory",
+                        size_limit=config.disk_limit
+                    )
+                )
+            ]
 ```
+
+**实际实现特性**:
+
+1. **多配置加载方式**:
+   - In-cluster config (ServiceAccount Token)
+   - kubeconfig 文件 (本地开发)
+   - 默认配置 (fallback)
+
+2. **S3 Workspace 支持**:
+   - 自动创建 PVC 用于 S3 挂载
+   - 解析 S3 URL 获取 bucket 和路径
+   - 支持 s3fs sidecar 容器模式
+
+3. **Pod 生命周期管理**:
+   - `create_container()` - 创建 Pod 并等待就绪
+   - `start_container()` - 启动 Pod
+   - `stop_container()` - 删除 Pod
+   - `get_container_status()` - 获取 Pod 状态
+   - `get_container_logs()` - 获取 Pod 日志
+   - `is_container_running()` - 检查运行状态
+
+4. **Python 依赖安装支持** (章节 5 设计):
+   - 预装包列表 (template level)
+   - 按需安装 (per-session)
+   - 依赖安装状态持久化
+
+**K8s 部署文件位置**:
+- `sandbox_control_plane/deploy/k8s/00-namespace.yaml` - 命名空间定义
+- `sandbox_control_plane/deploy/k8s/01-configmap.yaml` - 配置管理
+- `sandbox_control_plane/deploy/k8s/02-secret.yaml` - 密钥管理
+- `sandbox_control_plane/deploy/k8s/03-serviceaccount.yaml` - ServiceAccount
+- `sandbox_control_plane/deploy/k8s/04-role.yaml` - RBAC 权限
+- `sandbox_control_plane/deploy/k8s/05-control-plane-deployment.yaml` - Control Plane 部署
+- `sandbox_control_plane/deploy/k8s/07-minio-deployment.yaml` - MinIO 部署
+- `sandbox_control_plane/deploy/k8s/08-mariadb-deployment.yaml` - MariaDB 部署
+- `sandbox_control_plane/deploy/k8s/deploy.sh` - 一键部署脚本
 
 **S3 CSI Driver 配置说明**：
 
-Kubernetes 环境下使用 S3 CSI Driver 将对象存储挂载为 Pod Volume：
+**Implementation Status**: ⚠️ Partially Implemented
+
+Kubernetes 环境下支持 S3 workspace 挂载，通过以下方式实现：
+
+1. **PVC 模式** (推荐用于生产):
+   - 自动创建 PersistentVolumeClaim
+   - 需要预先配置 S3 CSI Driver 或 StorageClass
+
+2. **s3fs Sidecar 模式** (替代方案):
+   - 通过 sidecar 容器运行 s3fs
+   - 将 S3 bucket 挂载到共享 EmptyDir 卷
+
+当前实现支持 PVC 自动创建和 S3 URL 解析。
 
 ```yaml
 # StorageClass 定义

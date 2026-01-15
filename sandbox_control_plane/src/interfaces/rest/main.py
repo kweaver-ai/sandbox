@@ -11,9 +11,22 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from structlog import get_logger
 
-# 导入所有路由
+# Configure logging FIRST before any other imports
+from src.infrastructure.config.settings import get_settings
+from src.infrastructure.logging import configure_logging, get_logger
+
+# Initialize logging with settings
+_settings = get_settings()
+configure_logging(
+    log_level=_settings.log_level,
+    log_format=_settings.log_format,
+)
+
+# Now get logger
+logger = get_logger(__name__)
+
+# Import routes after logging is configured
 from src.interfaces.rest.api.v1 import (
     sessions,
     executions,
@@ -23,8 +36,6 @@ from src.interfaces.rest.api.v1 import (
     internal,
 )
 from src.interfaces.rest.schemas.response import HealthResponse
-
-logger = get_logger(__name__)
 
 
 # 应用启动时间
@@ -269,35 +280,10 @@ def _register_routes(app: FastAPI) -> None:
 def _register_middleware(app: FastAPI) -> None:
     """注册中间件"""
 
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        """记录所有请求"""
-        start_time = time.time()
+    # Add request logging middleware first (wraps all other middleware)
+    from src.interfaces.rest.middleware import RequestLoggingMiddleware
 
-        # 记录请求
-        logger.info(
-            "Incoming request",
-            method=request.method,
-            path=request.url.path,
-            client=request.client.host if request.client else None,
-        )
-
-        # 处理请求
-        response = await call_next(request)
-
-        # 记录响应
-        process_time = time.time() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-
-        logger.info(
-            "Request completed",
-            method=request.method,
-            path=request.url.path,
-            status_code=response.status_code,
-            process_time=process_time,
-        )
-
-        return response
+    app.add_middleware(RequestLoggingMiddleware)
 
 
 # 创建应用实例

@@ -3,14 +3,14 @@
 
 负责同步 Session 状态与实际容器状态，支持启动时同步和定时健康检查。
 """
-import logging
 from typing import Dict, List, Optional
 
 from src.domain.entities.session import Session, SessionStatus
 from src.domain.repositories.session_repository import ISessionRepository
 from src.infrastructure.container_scheduler.base import IContainerScheduler
+from src.infrastructure.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StateSyncService:
