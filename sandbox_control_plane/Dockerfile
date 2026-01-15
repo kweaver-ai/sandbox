@@ -50,7 +50,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
       pip config set global.trusted-host $PIP_MIRROR; \
     fi && \
     pip install --no-cache-dir uv && \
-    uv sync && \
+    uv sync --index-url https://$PIP_MIRROR/pypi/web/simple && \
     # Clean up uv cache
     rm -rf /root/.cache/uv /root/.cache/pip
 
