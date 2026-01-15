@@ -10,6 +10,11 @@ ARG PYTHON_VERSION=3.11
 
 FROM python:${PYTHON_VERSION}-slim
 
+# Re-declare ARG after FROM (ARGs don't persist across FROM)
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+ARG PIP_MIRROR=mirrors.ustc.edu.cn
+
 # Metadata
 LABEL maintainer="Sandbox Team"
 LABEL description="Sandbox Executor Base - Daemon + Bubblewrap Isolation"

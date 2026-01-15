@@ -6,6 +6,11 @@ ARG NPM_MIRROR=registry.npmmirror.com  # Taobao npm mirror
 
 FROM node:20-alpine AS builder
 
+# Re-declare ARG after FROM (ARGs don't persist across FROM)
+ARG USE_MIRROR=false
+ARG APK_MIRROR=mirrors.ustc.edu.cn
+ARG NPM_MIRROR=registry.npmmirror.com  # Taobao npm mirror
+
 WORKDIR /app
 
 # Configure APK mirror if needed

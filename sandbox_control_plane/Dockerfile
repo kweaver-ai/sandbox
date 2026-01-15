@@ -8,6 +8,11 @@ ARG PIP_MIRROR=mirrors.ustc.edu.cn
 
 FROM python:3.11-slim
 
+# Re-declare ARG after FROM (ARGs don't persist across FROM)
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+ARG PIP_MIRROR=mirrors.ustc.edu.cn
+
 # Metadata
 LABEL maintainer="Sandbox Team"
 LABEL description="Sandbox Control Plane - Management API"
