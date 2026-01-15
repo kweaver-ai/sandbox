@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy dependency files first (better layer caching)
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml  README.md ./
 
 # Install uv and Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
