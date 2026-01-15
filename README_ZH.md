@@ -179,7 +179,7 @@ docker build --build-arg USE_MIRROR=true -t sandbox-web .
 ```
 
 可用的镜像源：
-- **默认**：中科大镜像（Debian/APT、Alpine/APK、Python/pip）+ 淘宝（npm）
+- **默认**：中科大镜像（Debian/APT、Alpine/APK、Python/pip）
 - **自定义**：使用 `--build-arg APT_MIRROR=your-mirror` 指定自定义镜像
 
 ### 启动服务

@@ -2,30 +2,26 @@
 # Mirror configuration for special network environments
 ARG USE_MIRROR=false
 ARG APK_MIRROR=mirrors.ustc.edu.cn
-ARG NPM_MIRROR=registry.npmmirror.com  # Taobao npm mirror
+ARG NODE_IMAGE=node:20-alpine
 
-FROM node:20-alpine AS builder
+FROM ${NODE_IMAGE} AS builder
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false
 ARG APK_MIRROR=mirrors.ustc.edu.cn
-ARG NPM_MIRROR=registry.npmmirror.com  # Taobao npm mirror
 
 WORKDIR /app
 
 # Configure APK mirror if needed
 RUN if [ "$USE_MIRROR" = "true" ]; then \
-      sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
-    fi
+  sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
+  fi
 
 # Copy package files
 COPY package.json package-lock.json* ./
 
 # Install dependencies
-RUN if [ "$USE_MIRROR" = "true" ]; then \
-      npm config set registry https://$NPM_MIRROR/; \
-    fi && \
-    npm ci
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -37,25 +33,26 @@ RUN npm run build
 # Re-declare ARG for this stage (ARGs don't persist across stages)
 ARG USE_MIRROR=false
 ARG APK_MIRROR=mirrors.ustc.edu.cn
-ARG NPM_MIRROR=registry.npmmirror.com  # Taobao npm mirror
+ARG NODE_IMAGE=node:20-alpine
 
-FROM node:20-alpine AS production
+FROM ${NODE_IMAGE} AS production
+
+# Re-declare ARG after FROM (ARGs don't persist across FROM)
+ARG USE_MIRROR=false
+ARG APK_MIRROR=mirrors.ustc.edu.cn
 
 WORKDIR /app
 
 # Configure APK mirror if needed
 RUN if [ "$USE_MIRROR" = "true" ]; then \
-      sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
-    fi
+  sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
+  fi
 
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install production dependencies only and rsbuild
-RUN if [ "$USE_MIRROR" = "true" ]; then \
-      npm config set registry https://$NPM_MIRROR/; \
-    fi && \
-    npm ci --production && npm install -g @rsbuild/core
+# Install production dependencies only
+RUN npm ci --production
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
@@ -67,4 +64,4 @@ EXPOSE 3000
 ENV NODE_ENV=production
 
 # Start the application
-CMD ["rsbuild", "preview"]
+CMD ["npx", "rsbuild", "preview"]

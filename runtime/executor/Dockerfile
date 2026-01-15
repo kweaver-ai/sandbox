@@ -7,8 +7,9 @@ ARG USE_MIRROR=false
 ARG APT_MIRROR=mirrors.ustc.edu.cn
 ARG PIP_MIRROR=mirrors.ustc.edu.cn
 ARG PYTHON_VERSION=3.11
+ARG PYTHON_IMAGE=python:${PYTHON_VERSION}-slim
 
-FROM python:${PYTHON_VERSION}-slim
+FROM ${PYTHON_IMAGE}
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false

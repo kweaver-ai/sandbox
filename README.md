@@ -179,7 +179,7 @@ docker build --build-arg USE_MIRROR=true -t sandbox-web .
 ```
 
 Available mirror sources:
-- **Default**: USTC mirrors (Debian/APT, Alpine/APK, Python/pip) + Taobao (npm)
+- **Default**: USTC mirrors (Debian/APT, Alpine/APK, Python/pip)
 - **Custom**: Use `--build-arg APT_MIRROR=your-mirror` to specify a custom mirror
 
 ### Start Services
