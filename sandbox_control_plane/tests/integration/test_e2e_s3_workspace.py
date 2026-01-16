@@ -167,11 +167,6 @@ def handler(event):
             result = response.json()
             if result.get("status") in ["completed", "failed", "success"]:
                 stdout = result.get("stdout", "")
-                # Handle bubblewrap failures
-                if result.get("status") == "failed":
-                    stderr = result.get("stderr", "")
-                    if "bwrap" in stderr or "namespace" in stderr:
-                        pytest.skip(f"Execution failed due to bubblewrap: {stderr[:100]}")
                 assert "people.csv" in stdout, f"File not accessed. Output: {stdout}"
                 break
         await asyncio.sleep(1)

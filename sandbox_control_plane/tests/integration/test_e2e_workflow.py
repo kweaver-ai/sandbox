@@ -75,11 +75,6 @@ def handler(event):
 
         # Step 3: Get execution result
         result = await wait_for_execution_completion(execution_id, timeout=30)
-        # Handle bubblewrap failures
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
         assert "Full workflow test" in result["stdout"]
 
@@ -127,11 +122,6 @@ def handler(event):
         # Wait for all executions to complete
         for execution_id in execution_ids:
             result = await wait_for_execution_completion(execution_id, timeout=20)
-            # Handle bubblewrap failures
-            if result["status"] == "failed":
-                stderr = result.get("stderr", "")
-                if "bwrap" in stderr or "namespace" in stderr:
-                    pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
             assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
 
         # Verify all executions are recorded
@@ -182,11 +172,6 @@ def handler(event):
         execution_id_1 = execution_1.get("execution_id") or execution_1.get("id")
 
         result_1 = await wait_for_execution_completion(execution_id_1, timeout=20)
-        # Handle bubblewrap failures
-        if result_1["status"] == "failed":
-            stderr = result_1.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result_1["status"] in ("success", "completed"), f"Execution failed with status {result_1.get('status')}: {result_1.get('stderr', 'Unknown error')}"
 
         # Second execution: Read the file
@@ -217,11 +202,6 @@ def handler(event):
         execution_id_2 = execution_2.get("execution_id") or execution_2.get("id")
 
         result_2 = await wait_for_execution_completion(execution_id_2, timeout=20)
-        # Handle bubblewrap failures
-        if result_2["status"] == "failed":
-            stderr = result_2.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result_2["status"] in ("success", "completed"), f"Execution failed with status {result_2.get('status')}: {result_2.get('stderr', 'Unknown error')}"
         assert "state_value_123" in result_2["stdout"]
 
@@ -461,10 +441,5 @@ def handler(event):
         except Exception:
             pytest.skip("Execution timed out - executor may not be running")
 
-        # Handle bubblewrap failures
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
         assert "Hello from file!" in result["stdout"]

@@ -37,9 +37,7 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails (e.g., due to bubblewrap permissions), skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
 
         data = response.json()
         assert "execution_id" in data or "id" in data
@@ -48,11 +46,6 @@ def handler(event):
 
         # Wait for completion and check result
         result = await wait_for_execution_completion(execution_id, timeout=20)
-        # If execution failed due to bubblewrap, skip the test
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
         assert "Hello, World!" in result.get("stdout", "")
 
@@ -82,9 +75,7 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails (e.g., due to executor connection issues), skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
@@ -123,20 +114,13 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails, skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
 
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
         # Wait for completion
         result = await wait_for_execution_completion(execution_id, timeout=20)
-        # Handle bubblewrap failures
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
 
     async def test_get_execution_status(
@@ -162,9 +146,7 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails (e.g., due to executor connection issues), skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
@@ -199,9 +181,7 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails, skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
 
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
@@ -213,12 +193,6 @@ def handler(event):
         result_response = await http_client.get(f"/executions/{execution_id}/result")
         assert result_response.status_code == 200
         result_data = result_response.json()
-        # Handle bubblewrap failures
-        if result_data["status"] == "failed":
-            stderr = result_data.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
-            pytest.skip(f"Execution failed: {result_data.get('stderr', 'Unknown error')[:200]}")
         assert result_data["status"] in ("success", "completed"), f"Execution failed with status {result_data.get('status')}: {result_data.get('stderr', 'Unknown error')}"
         assert "stdout" in result_data
         assert "Result test" in result_data["stdout"]
@@ -244,19 +218,12 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails (e.g., due to executor connection issues), skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
         # Wait for completion
         result = await wait_for_execution_completion(execution_id, timeout=20)
-        # Handle bubblewrap failures - skip if executor can't start
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] == "failed"
         assert "stderr" in result
         assert len(result["stderr"]) > 0
@@ -289,21 +256,13 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails, skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
 
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
         # Wait for completion
         result = await wait_for_execution_completion(execution_id, timeout=30)
-        # Handle bubblewrap failures
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
-            pytest.skip(f"Execution failed: {result.get('stderr', 'Unknown error')[:200]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
         # Check return value
         assert result["return_value"]["statusCode"] == 200
@@ -332,9 +291,7 @@ def handler(event):
                 f"/executions/sessions/{test_session_id}/execute",
                 json=execution_data
             )
-            # If execution fails (e.g., due to bubblewrap), skip remaining
-            if resp.status_code != 201 and resp.status_code != 200:
-                pytest.skip(f"Execution creation failed: {resp.text}")
+            assert resp.status_code in (201, 200), f"Execution creation failed: {resp.text}"
             await asyncio.sleep(0.5)  # Small delay between executions
 
         # List executions
@@ -411,20 +368,13 @@ def handler(event):
             json=execution_data
         )
 
-        # If execution creation fails, skip
-        if response.status_code not in (201, 200):
-            pytest.skip(f"Execution creation failed: {response.text}")
+        assert response.status_code in (201, 200), f"Execution creation failed: {response.text}"
 
         data = response.json()
         execution_id = data.get("execution_id") or data.get("id")
 
         # Wait for completion
         result = await wait_for_execution_completion(execution_id, timeout=30)
-        # Handle bubblewrap failures
-        if result["status"] == "failed":
-            stderr = result.get("stderr", "")
-            if "bwrap" in stderr or "namespace" in stderr:
-                pytest.skip(f"Execution failed due to bubblewrap permissions: {stderr[:100]}")
         assert result["status"] in ("success", "completed"), f"Execution failed with status {result.get('status')}: {result.get('stderr', 'Unknown error')}"
         assert len(result["stdout"]) > 50000  # Should have large output
 
