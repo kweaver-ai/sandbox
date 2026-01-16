@@ -1,8 +1,8 @@
 # Build stage
 # Mirror configuration for special network environments
-ARG USE_MIRROR=false
-ARG APK_MIRROR=mirrors.ustc.edu.cn
 ARG NODE_IMAGE=node:20-alpine
+ARG PRO_IMAGE=nginx:latest
+
 
 FROM ${NODE_IMAGE} AS builder
 
@@ -17,11 +17,13 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
   sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
   fi
 
+RUN npm config set registry https://registry.npmmirror.com/
+
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy source code
 COPY . .
@@ -31,37 +33,18 @@ RUN npm run build
 
 # Production stage
 # Re-declare ARG for this stage (ARGs don't persist across stages)
-ARG USE_MIRROR=false
-ARG APK_MIRROR=mirrors.ustc.edu.cn
-ARG NODE_IMAGE=node:20-alpine
 
-FROM ${NODE_IMAGE} AS production
-
-# Re-declare ARG after FROM (ARGs don't persist across FROM)
-ARG USE_MIRROR=false
-ARG APK_MIRROR=mirrors.ustc.edu.cn
+FROM ${PRO_IMAGE} AS production
 
 WORKDIR /app
 
-# Configure APK mirror if needed
-RUN if [ "$USE_MIRROR" = "true" ]; then \
-  sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
-  fi
 
-# Copy package files
-COPY package.json package-lock.json* ./
-
-# Install serve for serving static files (lightweight HTTP server)
-RUN npm install -g serve
-
-# Copy built files from builder
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port
-EXPOSE 3000
+EXPOSE 80
 
-# Set environment to production
-ENV NODE_ENV=production
 
 # Start the application using serve to host static files
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["nginx", "-g", "daemon off;"]

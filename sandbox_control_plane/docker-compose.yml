@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: sandbox-control-plane
     ports:
-      - "8000:8000"  # Map to host for testing
+      - "8000:8000" # Map to host for testing
     networks:
       - sandbox_network
     volumes:
@@ -31,7 +31,7 @@ services:
       - DEFAULT_TIMEOUT=300
       - MAX_TIMEOUT=3600
       - WARM_POOL_ENABLED=false
-      - DISABLE_BWRAP=true  # 本地开发禁用 Bubblewrap
+      - DISABLE_BWRAP=true # 本地开发禁用 Bubblewrap
       # S3/MinIO Configuration
       - S3_ENDPOINT_URL=http://minio:9000
       - S3_ACCESS_KEY_ID=minioadmin
@@ -45,7 +45,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -57,7 +57,7 @@ services:
       dockerfile: Dockerfile
     container_name: sandbox-web
     ports:
-      - "1101:3000"  # Map internal 3000 to host 1101
+      - "1101:80" # Map internal 3000 to host 1101
     networks:
       - sandbox_network
     # 资源限制
@@ -77,7 +77,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -87,8 +87,8 @@ services:
     image: quay.io/minio/minio:latest
     container_name: sandbox-minio
     ports:
-      - "9000:9000"   # MinIO API
-      - "9001:9001"   # MinIO Console
+      - "9000:9000" # MinIO API
+      - "9001:9001" # MinIO Console
     networks:
       - sandbox_network
     # 资源限制
@@ -108,7 +108,7 @@ services:
       - minio_data:/data
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -136,7 +136,7 @@ services:
       - mariadb_data:/var/lib/mysql
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mariadb", "-u", "root", "-ppassword", "-e", "SELECT 1"]
+      test: [ "CMD", "mariadb", "-u", "root", "-ppassword", "-e", "SELECT 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
