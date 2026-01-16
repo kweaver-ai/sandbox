@@ -135,18 +135,28 @@ class DockerScheduler(IContainerScheduler):
 # ========== 安装 Python 依赖 ==========
 echo "📦 Installing dependencies: {deps_json}"
 echo "📦 Pip specs: {pip_specs}"
-mkdir -p /workspace/.venv/
+
+# 将依赖安装到容器本地文件系统（而非 S3 挂载点）
+# S3 挂载点是网络文件系统，不适合作为 pip 安装目标
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+mkdir -p /tmp/pip-cache
+
+echo "Installing dependencies to local filesystem: $VENV_DIR"
 
 if pip3 install \\
-    --target /workspace/.venv/ \\
-    --isolated \\
+    --target $VENV_DIR \\
+    --cache-dir /tmp/pip-cache \\
+    --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
     --index-url https://pypi.org/simple/ \\
     {deps_list}; then
-    echo "✅ Dependencies installed successfully"
+    echo "✅ Dependencies installed successfully to $VENV_DIR"
     # 修改属主为 sandbox 用户（gosu 切换前以 root 安装）
-    chown -R sandbox:sandbox /workspace/.venv/
+    chown -R sandbox:sandbox $VENV_DIR
+    # 清理缓存
+    rm -rf /tmp/pip-cache
 else
     echo "❌ Failed to install dependencies"
     exit 1
@@ -190,7 +200,16 @@ echo "Workspace symlink: $(ls -la /workspace)"
 # 6. 使用 gosu 切换到 sandbox 用户运行 executor
 # 通过 bash -c 在 gosu 之后设置环境变量
 echo "Starting sandbox executor as sandbox user..."
-exec gosu sandbox bash -c 'export PYTHONPATH=/app:/workspace/.venv:/workspace; export SANDBOX_VENV_PATH=/workspace/.venv/; exec python -m executor.interfaces.http.rest'
+# 如果安装了依赖，PYTHONPATH 包含本地 venv 目录
+if [ -d "/opt/sandbox-venv" ]; then
+    export PYTHONPATH="/opt/sandbox-venv:/app:/workspace"
+    export SANDBOX_VENV_PATH="/opt/sandbox-venv"
+    echo "Using installed dependencies from /opt/sandbox-venv"
+else
+    export PYTHONPATH="/app:/workspace"
+    echo "No dependencies installed, using default PYTHONPATH"
+fi
+exec gosu sandbox bash -c 'export PYTHONPATH=$PYTHONPATH; export SANDBOX_VENV_PATH=$SANDBOX_VENV_PATH; exec python -m executor.interfaces.http.rest'
 """
 
     def _build_dependency_install_entrypoint(
@@ -208,7 +227,7 @@ exec gosu sandbox bash -c 'export PYTHONPATH=/app:/workspace/.venv:/workspace; e
 
         工作原理:
         1. 以 sandbox 用户运行
-        2. 安装依赖到 /workspace/.venv/
+        2. 安装依赖到 /opt/sandbox-venv/（本地文件系统）
         3. 启动 executor
         """
         # 依赖安装脚本片段
@@ -233,16 +252,25 @@ exec gosu sandbox bash -c 'export PYTHONPATH=/app:/workspace/.venv:/workspace; e
 # ========== 安装 Python 依赖 ==========
 echo "📦 Installing dependencies: {deps_json}"
 echo "📦 Pip specs: {pip_specs}"
-mkdir -p /workspace/.venv/
+
+# 将依赖安装到容器本地文件系统
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+mkdir -p /tmp/pip-cache
+
+echo "Installing dependencies to: $VENV_DIR"
 
 if pip3 install \\
-    --target /workspace/.venv/ \\
-    --isolated \\
+    --target $VENV_DIR \\
+    --cache-dir /tmp/pip-cache \\
+    --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
     --index-url https://pypi.org/simple/ \\
     {deps_list}; then
     echo "✅ Dependencies installed successfully"
+    # 清理缓存
+    rm -rf /tmp/pip-cache
 else
     echo "❌ Failed to install dependencies"
     exit 1
@@ -286,10 +314,15 @@ exec python -m executor.interfaces.http.rest
         # 解析资源限制
         cpu_quota = int(float(config.cpu_limit) * 100000)
         memory_bytes = self._parse_memory_to_bytes(config.memory_limit)
+        disk_bytes = self._parse_memory_to_bytes(config.disk_limit)
 
         # 检查是否需要 S3 workspace 挂载
         s3_workspace = self._parse_s3_workspace(config.workspace_path)
         use_s3_mount = s3_workspace is not None
+
+        # 检查是否需要安装依赖
+        dependencies_json = config.labels.get("dependencies", "")
+        has_dependencies = bool(dependencies_json)
 
         # 基础环境变量
         env_vars = dict(config.env_vars)
@@ -313,6 +346,10 @@ exec python -m executor.interfaces.http.rest
             },
         }
 
+        # 注意：StorageOpt.size 仅在 Linux 的 overlay2 + xfs (pquota) 环境下支持
+        # Mac Docker Desktop 不支持，因此这里不设置 StorageOpt
+        # 生产环境可通过 K8s 的 ephemeral-storage 或 Linux 的磁盘配额来限制磁盘使用
+
         # 如果不使用 S3 workspace，保持原有安全配置
         # 注意: Bubblewrap 需要用户命名空间支持，如果遇到权限错误：
         # 1. 在宿主机启用: sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -324,8 +361,14 @@ exec python -m executor.interfaces.http.rest
 
             # 添加 PYTHONPATH 环境变量以支持依赖导入
             if dependencies:
-                container_config["Env"].append("PYTHONPATH=/workspace/.venv/:/workspace:$PYTHONPATH")
-                container_config["Env"].append("SANDBOX_VENV_PATH=/workspace/.venv/")
+                container_config["Env"].append("PYTHONPATH=/opt/sandbox-venv:/workspace")
+                container_config["Env"].append("SANDBOX_VENV_PATH=/opt/sandbox-venv")
+
+                # 为依赖安装添加 tmpfs 空间
+                container_config["HostConfig"]["Tmpfs"] = {
+                    "/tmp": "size=512M,mode=1777",
+                    "/root/.cache": "size=256M,mode=1777",
+                }
 
                 # 如果有依赖，使用动态 entrypoint 脚本
                 entrypoint_script = self._build_dependency_install_entrypoint(
@@ -369,10 +412,21 @@ exec python -m executor.interfaces.http.rest
                 }
             ]
 
-            # 添加 tmpfs 用于 s3fs 缓存
-            container_config["HostConfig"]["Tmpfs"] = {
-                "/tmp": "size=100M,mode=1777"
-            }
+            # 添加 tmpfs 用于 s3fs 缓存和依赖安装
+            if dependencies:
+                # 有依赖时需要更大的 tmpfs 空间
+                container_config["HostConfig"]["Tmpfs"] = {
+                    "/tmp": "size=512M,mode=1777",  # pip 缓存和临时文件
+                    "/root/.cache": "size=256M,mode=1777",  # pip 缓存
+                }
+                logger.info(
+                    f"Added tmpfs for dependency installation: /tmp=512M, /root/.cache=256M"
+                )
+            else:
+                # 无依赖时使用较小的 tmpfs
+                container_config["HostConfig"]["Tmpfs"] = {
+                    "/tmp": "size=100M,mode=1777"
+                }
 
             # 添加 S3 相关环境变量
             s3_env_vars = {
@@ -389,8 +443,8 @@ exec python -m executor.interfaces.http.rest
             # 新增：添加 PYTHONPATH 环境变量以支持依赖导入
             # /app 必须在最前面，以便 executor 模块能被找到
             if dependencies:
-                container_config["Env"].append("PYTHONPATH=/app:/workspace/.venv/:/workspace")
-                container_config["Env"].append("SANDBOX_VENV_PATH=/workspace/.venv/")
+                container_config["Env"].append("PYTHONPATH=/opt/sandbox-venv:/app:/workspace")
+                container_config["Env"].append("SANDBOX_VENV_PATH=/opt/sandbox-venv")
 
             # 修改：传递依赖列表到 entrypoint 脚本
             entrypoint_script = self._build_s3_mount_entrypoint(

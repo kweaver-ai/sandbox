@@ -190,22 +190,29 @@ class K8sScheduler(IContainerScheduler):
             dependency_install_script = f"""
 # 安装 Python 依赖
 echo "📦 Installing dependencies: {len(dependencies)} packages"
-mkdir -p /workspace/.venv/
+
+# 将依赖安装到容器本地文件系统
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+mkdir -p /tmp/pip-cache
+
+echo "Installing dependencies to: $VENV_DIR"
 
 if pip3 install \\
-    --target /workspace/.venv/ \\
-    --isolated \\
+    --target $VENV_DIR \\
+    --cache-dir /tmp/pip-cache \\
+    --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
     --index-url https://pypi.org/simple/ \\
     {deps_list}; then
     echo "✅ Dependencies installed successfully"
+    chown -R 1000:1000 $VENV_DIR
+    rm -rf /tmp/pip-cache
 else
     echo "❌ Failed to install dependencies"
     exit 1
 fi
-
-chown -R 1000:1000 /workspace/.venv/
 """
 
         # s3fs 挂载脚本
@@ -302,24 +309,15 @@ tail -f /dev/null
 
         # 添加 PYTHONPATH 环境变量以支持依赖导入
         if has_dependencies:
-            if use_s3_mount:
-                env_vars.append(V1EnvVar(
-                    name="PYTHONPATH",
-                    value="/app:/workspace/.venv:/workspace"
-                ))
-                env_vars.append(V1EnvVar(
-                    name="SANDBOX_VENV_PATH",
-                    value="/workspace/.venv/"
-                ))
-            else:
-                env_vars.append(V1EnvVar(
-                    name="PYTHONPATH",
-                    value="/workspace/.venv/:/workspace:$PYTHONPATH"
-                ))
-                env_vars.append(V1EnvVar(
-                    name="SANDBOX_VENV_PATH",
-                    value="/workspace/.venv/"
-                ))
+            # 依赖安装到本地 /opt/sandbox-venv，两种模式使用相同的 PYTHONPATH
+            env_vars.append(V1EnvVar(
+                name="PYTHONPATH",
+                value="/opt/sandbox-venv:/app:/workspace"
+            ))
+            env_vars.append(V1EnvVar(
+                name="SANDBOX_VENV_PATH",
+                value="/opt/sandbox-venv"
+            ))
 
         # 资源限制
         resources = V1ResourceRequirements(
@@ -384,15 +382,26 @@ tail -f /dev/null
 #!/bin/sh
 set -e
 echo "📦 Installing dependencies..."
-mkdir -p /workspace/.venv/
+
+# 将依赖安装到容器本地文件系统
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+mkdir -p /tmp/pip-cache
+
+echo "Installing dependencies to: $VENV_DIR"
+
 pip3 install \\
-    --target /workspace/.venv/ \\
-    --isolated \\
+    --target $VENV_DIR \\
+    --cache-dir /tmp/pip-cache \\
+    --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
     --index-url https://pypi.org/simple/ \\
     {deps_list}
+
 echo "✅ Dependencies installed"
+rm -rf /tmp/pip-cache
+
 # 启动 executor
 exec python -m executor.interfaces.http.rest
 """

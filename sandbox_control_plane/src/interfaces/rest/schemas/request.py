@@ -29,6 +29,7 @@ class DependencySpec(BaseModel):
         - 绝对路径 (/)
         - URL (://)
         - 非法字符（仅允许字母、数字、._-）
+        - 版本号混合在包名中 (如 pandas2.3.3 应该是 name="pandas", version="==2.3.3")
         """
         # 禁止路径穿越
         if ".." in v or v.startswith("/"):
@@ -39,16 +40,38 @@ class DependencySpec(BaseModel):
         # PyPI 包名规范：仅允许字母、数字、._-
         if not re.match(r"^[a-zA-Z0-9._-]+$", v):
             raise ValueError("Invalid package name format")
+
+        # 检测常见的版本号混合错误（如 pandas2.3.3, numpy1.24.0）
+        # 模式：字母开头 + 数字 + 点 + 数字（可能是版本号）
+        if re.match(r"^[a-zA-Z]+[0-9]+\.[0-9]", v):
+            # 提取包名和版本号用于错误提示
+            package_name = re.sub(r"[0-9]+\.[0-9].*", "", v)
+            version_num = re.sub(r"^[a-zA-Z]+", "", v)
+            raise ValueError(
+                f"Invalid package name '{v}'. It looks like a version number is mixed with the package name. "
+                f"Use separate 'name' and 'version' fields: "
+                f'{{"name": "{package_name}", "version": "=={version_num}"}}'
+            )
+
         return v
 
     def to_pip_spec(self) -> str:
         """
         转换为 pip 安装规范
 
+        自动为没有操作符的版本号添加 == 前缀。
+        例如：version="2.3.3" 会被转换为 "==2.3.3"
+
         Returns:
             pip 包规范字符串，如 "requests==2.31.0" 或 "pandas"
         """
         if self.version:
+            # 检查 version 是否以操作符开头
+            # pip 支持的操作符: ==, >=, <=, >, <, ~=, !=, ~, =
+            version_operators = ("==", ">=", "<=", ">", "<", "~=", "!=", "~", "=")
+            if not self.version.startswith(version_operators):
+                # 如果没有操作符，默认添加 ==
+                return f"{self.name}=={self.version}"
             return f"{self.name}{self.version}"
         return self.name
 

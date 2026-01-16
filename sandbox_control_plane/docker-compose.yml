@@ -13,6 +13,15 @@ services:
     volumes:
       # Mount Docker socket for container management
       - /var/run/docker.sock:/var/run/docker.sock
+    # 资源限制（实际运行约 600MB）
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 600M
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=mysql+aiomysql://root:password@mariadb:3306/sandbox
@@ -51,6 +60,15 @@ services:
       - "1101:3000"  # Map internal 3000 to host 1101
     networks:
       - sandbox_network
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     environment:
       - NODE_ENV=production
       - VITE_API_BASE_URL=http://control-plane:8000
@@ -73,6 +91,15 @@ services:
       - "9001:9001"   # MinIO Console
     networks:
       - sandbox_network
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -93,6 +120,15 @@ services:
     container_name: sandbox-mariadb
     networks:
       - sandbox_network
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
     environment:
       - MYSQL_ROOT_PASSWORD=password
       - MYSQL_DATABASE=sandbox

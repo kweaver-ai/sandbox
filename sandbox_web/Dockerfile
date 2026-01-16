@@ -51,8 +51,8 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install production dependencies only
-RUN npm ci --production
+# Install serve for serving static files (lightweight HTTP server)
+RUN npm install -g serve
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
@@ -63,5 +63,5 @@ EXPOSE 3000
 # Set environment to production
 ENV NODE_ENV=production
 
-# Start the application
-CMD ["npx", "rsbuild", "preview"]
+# Start the application using serve to host static files
+CMD ["serve", "-s", "dist", "-l", "3000"]
