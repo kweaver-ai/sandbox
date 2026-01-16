@@ -39,6 +39,7 @@ export default function SessionsPage() {
     useSessions();
   const { templates, fetchTemplates } = useTemplates();
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [detailSession, setDetailSession] = useState<SessionResponse | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -102,11 +103,15 @@ export default function SessionsPage() {
   };
 
   // 过滤会话
-  const filteredSessions = sessions.filter(
-    (s) =>
+  const filteredSessions = sessions.filter((s) => {
+    const matchesSearch =
       s.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.template_id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      s.template_id.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = !statusFilter ||
+      (statusFilter === 'starting' && (s.status.toLowerCase() === 'creating' || s.status.toLowerCase() === 'starting')) ||
+      (statusFilter !== 'starting' && s.status.toLowerCase() === statusFilter.toLowerCase());
+    return matchesSearch && matchesStatus;
+  });
 
   // 创建会话
   const handleCreate = async () => {
@@ -118,10 +123,19 @@ export default function SessionsPage() {
           .split('\n')
           .filter((line) => line.trim())
           .map((line) => {
-            const parts = line.trim().split(/==|>=|<=|>|~/);
-            const name = parts[0]?.trim();
-            const version = parts[1]?.trim();
-            return { name: name!, version };
+            const trimmed = line.trim();
+            // 匹配包名和版本（包含操作符）
+            // 格式: package_name 或 package_name==version 或 package_name>=version 等
+            const match = trimmed.match(/^([a-zA-Z0-9._-]+)(==|>=|<=|>|<|~=|!=|~|=)?(.*)$/);
+            if (match) {
+              const name = match[1];
+              const operator = match[2] || '';
+              const version = match[3] || '';
+              // 如果有版本号，保留操作符；如果没有版本号，version 为空字符串
+              return { name, version: operator ? `${operator}${version}` : '' };
+            }
+            // 如果无法匹配，返回整个字符串作为包名
+            return { name: trimmed, version: '' };
           })
           .filter((dep) => dep.name),
       };
@@ -356,14 +370,34 @@ export default function SessionsPage() {
       {/* 统计卡片 */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         <Card
-          style={{ flex: 1, borderRadius: 12, border: '1px solid #e7edf7' }}
+          style={{
+            flex: 1,
+            borderRadius: 12,
+            border: '1px solid #e7edf7',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            backgroundColor: statusFilter === null ? '#f0f5ff' : '#ffffff',
+            borderColor: statusFilter === null ? '#126ee3' : '#e7edf7',
+          }}
           bodyStyle={{ padding: 24 }}
+          hoverable
+          onClick={() => setStatusFilter(null)}
         >
           <Statistic title="总会话数（个）" value={stats.total} />
         </Card>
         <Card
-          style={{ flex: 1, borderRadius: 12, border: '1px solid #e7edf7' }}
+          style={{
+            flex: 1,
+            borderRadius: 12,
+            border: '1px solid #e7edf7',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            backgroundColor: statusFilter === 'starting' ? '#fff7e6' : '#ffffff',
+            borderColor: statusFilter === 'starting' ? '#faad14' : '#e7edf7',
+          }}
           bodyStyle={{ padding: 24 }}
+          hoverable
+          onClick={() => setStatusFilter(statusFilter === 'starting' ? null : 'starting')}
         >
           <Statistic
             title="启动中（个）"
@@ -372,8 +406,18 @@ export default function SessionsPage() {
           />
         </Card>
         <Card
-          style={{ flex: 1, borderRadius: 12, border: '1px solid #e7edf7' }}
+          style={{
+            flex: 1,
+            borderRadius: 12,
+            border: '1px solid #e7edf7',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            backgroundColor: statusFilter === 'running' ? '#e6f4ff' : '#ffffff',
+            borderColor: statusFilter === 'running' ? '#126ee3' : '#e7edf7',
+          }}
           bodyStyle={{ padding: 24 }}
+          hoverable
+          onClick={() => setStatusFilter(statusFilter === 'running' ? null : 'running')}
         >
           <Statistic
             title="运行中（个）"
@@ -382,8 +426,18 @@ export default function SessionsPage() {
           />
         </Card>
         <Card
-          style={{ flex: 1, borderRadius: 12, border: '1px solid #e7edf7' }}
+          style={{
+            flex: 1,
+            borderRadius: 12,
+            border: '1px solid #e7edf7',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            backgroundColor: statusFilter === 'terminated' ? '#f5f5f5' : '#ffffff',
+            borderColor: statusFilter === 'terminated' ? '#8c8c8c' : '#e7edf7',
+          }}
           bodyStyle={{ padding: 24 }}
+          hoverable
+          onClick={() => setStatusFilter(statusFilter === 'terminated' ? null : 'terminated')}
         >
           <Statistic
             title="已终止（个）"
@@ -392,6 +446,19 @@ export default function SessionsPage() {
           />
         </Card>
       </div>
+
+      {/* 筛选状态提示 */}
+      {statusFilter && (
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Tag
+            closable
+            onClose={() => setStatusFilter(null)}
+            style={{ fontSize: 13, padding: '4px 10px' }}
+          >
+            状态: {statusFilter === 'starting' ? '启动中' : statusFilter === 'running' ? '运行中' : '已终止'}
+          </Tag>
+        </div>
+      )}
 
       {/* 会话列表 */}
       <div

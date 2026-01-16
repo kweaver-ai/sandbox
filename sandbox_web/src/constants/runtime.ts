@@ -28,7 +28,7 @@ export const CODE_LANGUAGE_LABELS: Record<CodeLanguage, string> = {
 /** 会话状态显示名称映射 */
 export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
   PENDING: '等待中',
-  CREATING: '创建中',
+  CREATING: '启动中',
   STARTING: '启动中',
   RUNNING: '运行中',
   COMPLETED: '已完成',

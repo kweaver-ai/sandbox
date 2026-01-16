@@ -116,7 +116,6 @@ graph TB
 - **Protocol-Driven**: All communication via standardized RESTful API
 - **Security-First**: Multi-layer isolation with defense-in-depth
 - **Cloud-Native**: Designed for Kubernetes deployment with auto-scaling
-- **Simplicity**: Direct container creation without warm pool complexity
 
 ### Component Overview
 
@@ -138,12 +137,25 @@ graph TB
 - S3-Compatible Storage: Workspace file persistence (MinIO/AWS S3)
 
 ## Quick Start
-
 ### Prerequisites
 
-- Docker Engine 20.10+ and Docker Compose 2.0+
-- 4GB+ available memory
-- 10GB+ available disk space
+
+- **Docker**: 20.10+
+- **Docker Compose**: 2.0+
+- **Python**: 3.11+ (for local development)
+
+### Hardware Requirements (Development Environment)
+
+| Service | CPU | Memory |
+|---------|-----|--------|
+| control-plane | 0.25 ~ 1.0 cores | 600M ~ 1G |
+| sandbox-web | 0.1 ~ 0.5 cores | 64M ~ 256M |
+| minio | 0.1 ~ 0.5 cores | 128M ~ 512M |
+| mariadb | 0.1 ~ 0.5 cores | 256M ~ 512M |
+| **Total (Minimum)** | **~1 core** | **~1G** |
+| **Total (Recommended)** | **~2 cores** | **~2G** |
+
+> Note: The above resource requirements are for the docker-compose development environment. Adjust according to actual load in production environments.
 
 ### Build Images
 

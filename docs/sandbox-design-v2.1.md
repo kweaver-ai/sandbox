@@ -3235,8 +3235,8 @@ async def test_e2e_s3_workspace():
 | 需求项 | 说明 |
 |-------|------|
 | **安装时机** | 容器启动时（在 entrypoint 脚本中自动完成） |
-| **作用域** | 会话级别（持久化到 workspace/S3） |
-| **安装位置** | `/workspace/.venv/`（通过 PYTHONPATH 自动可导入） |
+| **作用域** | 会话级别（安装到容器本地文件系统） |
+| **安装位置** | `/opt/sandbox-venv/`（本地磁盘，非持久化） |
 | **网络访问** | 容器使用 `sandbox_network`（bridge），可访问 PyPI |
 | **用户代码隔离** | 用户代码仍然通过 Bubblewrap 执行（`--unshare-net` 无网络） |
 
@@ -3249,9 +3249,10 @@ async def test_e2e_s3_workspace():
 - ✅ Bubblewrap：用户代码执行隔离（`--unshare-net`）
 
 **新增逻辑**：
-- ✅ 在 `gosu` 切换前，以 root 身份安装依赖到 `/workspace/.venv/`
-- ✅ 安装完成后 `chown -R sandbox:sandbox /workspace/.venv/`
+- ✅ 在 `gosu` 切换前，以 root 身份安装依赖到 `/opt/sandbox-venv/`（本地磁盘）
+- ✅ 安装完成后 `chown -R sandbox:sandbox /opt/sandbox-venv/`
 - ✅ 然后执行 `gosu sandbox` 启动 executor
+- ✅ 设置 `PYTHONPATH=/opt/sandbox-venv:/app:/workspace` 使依赖可导入
 
 ### 5.2 核心流程
 
@@ -3286,12 +3287,12 @@ sequenceDiagram
     Entrypoint->>Entrypoint: 3. 检查 dependencies 环境变量
 
     alt 有依赖需要安装
-        Entrypoint->>Entrypoint: mkdir -p /workspace/.venv/
-        Entrypoint->>Pip: pip3 install --target /workspace/.venv/ requests==2.31.0
+        Entrypoint->>Entrypoint: mkdir -p /opt/sandbox-venv/
+        Entrypoint->>Pip: pip3 install --target /opt/sandbox-venv/ requests==2.31.0
         Pip->>Pip: 从 PyPI 下载并安装
-        Pip->>S3: 写入到 /workspace/.venv/（持久化到 S3）
+        Pip->>Entrypoint: 写入到 /opt/sandbox-venv/（本地磁盘）
         Pip-->>Entrypoint: 安装成功
-        Entrypoint->>Entrypoint: chown -R sandbox:sandbox /workspace/.venv/
+        Entrypoint->>Entrypoint: chown -R sandbox:sandbox /opt/sandbox-venv/
     end
 
     Entrypoint->>Entrypoint: 4. gosu sandbox 启动 executor
@@ -3456,18 +3457,24 @@ def _build_s3_mount_entrypoint(
         dependency_install_script = f"""
 # ========== 安装 Python 依赖 ==========
 echo "📦 Installing dependencies: {deps_json}"
-mkdir -p /workspace/.venv/
+
+# 将依赖安装到容器本地文件系统（S3 挂载点不适合 pip 安装）
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+mkdir -p /tmp/pip-cache
 
 if pip3 install \\
-    --target /workspace/.venv/ \\
-    --isolated \\
+    --target $VENV_DIR \\
+    --cache-dir /tmp/pip-cache \\
+    --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
     --index-url https://pypi.org/simple/ \\
     {" ".join(dependencies)}; then
     echo "✅ Dependencies installed successfully"
     # 修改属主为 sandbox 用户（gosu 切换前以 root 安装）
-    chown -R sandbox:sandbox /workspace/.venv/
+    chown -R sandbox:sandbox $VENV_DIR
+    rm -rf /tmp/pip-cache
 else
     echo "❌ Failed to install dependencies"
     exit 1
@@ -3683,9 +3690,9 @@ def _build_container_config_with_dependencies(
     # ✅ 将依赖列表放到 labels 中传递给 Docker Scheduler
     config.labels["dependencies"] = json.dumps(dependencies) if dependencies else ""
 
-    # ✅ 设置 PYTHONPATH 环境变量
-    config.env_vars["PYTHONPATH"] = "/workspace/.venv/:/workspace:$PYTHONPATH"
-    config.env_vars["SANDBOX_VENV_PATH"] = "/workspace/.venv/"
+    # ✅ 设置 PYTHONPATH 环境变量（依赖安装在本地 /opt/sandbox-venv）
+    config.env_vars["PYTHONPATH"] = "/opt/sandbox-venv:/app:/workspace"
+    config.env_vars["SANDBOX_VENV_PATH"] = "/opt/sandbox-venv"
 
     return config
 ```
@@ -3757,7 +3764,7 @@ class InstalledDependency:
     """已安装的依赖信息"""
     name: str
     version: str
-    install_location: str  # "/workspace/.venv/"
+    install_location: str  # "/opt/sandbox-venv/"（本地磁盘）
     install_time: datetime
     is_from_template: bool  # True=来自 Template 预装，False=会话动态安装
 
@@ -3845,15 +3852,15 @@ class SessionModel(Base):
 
 | 层级 | 网络访问 | 文件访问 | 用户身份 | 用途 |
 |------|---------|---------|---------|------|
-| **容器** | ✅ 有网络 | 读写 /workspace | root（启动时） | pip 安装依赖 |
+| **容器** | ✅ 有网络 | 读写 /workspace, /opt/sandbox-venv | root（启动时） | pip 安装依赖 |
 | **Bubblewrap** | ❌ 无网络 | 读写 /workspace | sandbox（非特权） | 用户代码执行 |
-| **用户代码** | ❌ 无网络 | 读写 /workspace/.venv/ | sandbox | 业务逻辑 |
+| **用户代码** | ❌ 无网络 | 只读 /opt/sandbox-venv（通过 PYTHONPATH） | sandbox | 业务逻辑 |
 
 **核心设计原则**：
 - pip 是**可信工具**，容器隔离已经足够
 - 容器使用 `sandbox_network`（bridge），可访问 PyPI
 - **用户代码仍然通过 Bubblewrap 隔离**（`--unshare-net` 无网络）
-- 依赖安装在 `gosu` 切换前，以 root 身份执行
+- 依赖安装在 `gosu` 切换前，以 root 身份执行，安装到本地 `/opt/sandbox-venv`
 - 安装完成后 `chown` 修改属主为 sandbox 用户
 
 #### 5.7.2 包名验证
@@ -3885,7 +3892,9 @@ def validate_package_name(name: str) -> bool:
 
 ```bash
 pip3 install \
-    --target /workspace/.venv/ \      # 限定安装目录
+    --target /opt/sandbox-venv/ \     # 限定安装目录（本地磁盘）
+    --cache-dir /tmp/pip-cache \      # 临时缓存目录
+    --no-cache-dir \                  # 禁用缓存，节省空间
     --isolated \                      # 隔离模式
     --no-warn-script-location \       # 禁用警告
     --disable-pip-version-check \     # 禁用版本检查
@@ -3894,7 +3903,8 @@ pip3 install \
 ```
 
 **安全特性**：
-- ✅ `--target` 限定安装目录，防止安装到系统路径
+- ✅ `--target` 限定安装目录到本地磁盘，防止安装到系统路径
+- ✅ 依赖安装到 `/opt/sandbox-venv`（非持久化），容器重建时重新安装
 - ✅ `--isolated` 隔离模式，忽略环境配置
 - ✅ 固定 PyPI 源，防止从恶意源安装
 - ✅ 不允许用户覆盖 pip 参数
@@ -3966,7 +3976,7 @@ curl -X POST http://localhost:8000/api/v1/sessions \
     {
       "name": "requests",
       "version": "2.31.0",
-      "install_location": "/workspace/.venv/",
+      "install_location": "/opt/sandbox-venv/",
       "install_time": "2025-01-13T10:30:15Z",
       "is_from_template": false
     }
@@ -3981,9 +3991,9 @@ def handler(event):
     """
     AWS Lambda-style handler
 
-    依赖已安装到 /workspace/.venv/，可通过 PYTHONPATH 自动导入
+    依赖已安装到 /opt/sandbox-venv/（本地磁盘），可通过 PYTHONPATH 自动导入
     """
-    import requests  # ✅ 已安装到 /workspace/.venv/
+    import requests  # ✅ 已安装到 /opt/sandbox-venv/
     import pandas as pd
     import numpy as np
 
@@ -4021,9 +4031,9 @@ async def install_dependencies(request: InstallDependenciesRequest):
     - 容器有网络（sandbox_network bridge）
     - 以 sandbox 用户执行（已限制权限）
     - 验证包名格式
-    - 限制安装目标为 /workspace/.venv/
+    - 限制安装目标为 /opt/sandbox-venv/（本地磁盘）
     """
-    target_dir = Path("/workspace/.venv/")
+    target_dir = Path("/opt/sandbox-venv/")
     target_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
