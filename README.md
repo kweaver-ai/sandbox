@@ -178,7 +178,6 @@ The build script creates:
 - `sandbox-executor-base:latest` - Base executor image
 - `sandbox-template-python-basic:latest` - Python basic template
 
-**Note**: The `control-plane` and `sandbox-web` images are built automatically by docker-compose.
 
 ### Using Mirror Sources (Optional)
 

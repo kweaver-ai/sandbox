@@ -179,7 +179,6 @@ cd images
 - `sandbox-executor-base:latest` - 执行器基础镜像
 - `sandbox-template-python-basic:latest` - Python 基础模板
 
-**注意**：`control-plane` 和 `sandbox-web` 镜像由 docker-compose 自动构建。
 
 ### 使用镜像源（可选）
 
