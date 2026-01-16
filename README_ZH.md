@@ -8,6 +8,73 @@
 
 Sandbox 控制平面是一个**生产就绪、企业级**平台，提供安全、隔离的执行环境用于运行不受信任的代码。采用无状态架构和智能调度构建，专为 AI 智能体工作流、数据管道和无服务器计算场景优化。
 
+## 架构
+
+系统采用**控制平面 + 容器调度器**分离架构：
+
+```mermaid
+flowchart TD
+    %% 定义全局样式
+    classDef external fill:#f9f9f9,stroke:#666,stroke-width:2px,color:#333;
+    classDef control fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#01579b;
+    classDef scheduler fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100;
+    classDef storage fill:#f5f5f5,stroke:#424242,stroke-width:2px,color:#424242;
+    classDef runtime fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#1b5e20;
+    classDef database fill:#ede7f6,stroke:#311b92,stroke-width:2px,color:#311b92;
+
+    subgraph External ["🌐 外部系统 (External)"]
+        Client(["📱 客户端应用"])
+        Developer(["👨‍💻 开发者 SDK/API"])
+    end
+
+    subgraph ControlPlane ["⚙️ 控制平面 (Control Plane)"]
+        direction TB
+        API[["🚀 API Gateway (FastAPI)"]]
+        Scheduler{{"📅 调度器 (Scheduler)"}}
+        SessionMgr["📂 会话管理器"]
+        TemplateMgr["📝 模板管理器"]
+        HealthProbe["🩺 健康检查"]
+        Cleanup["🧹 会话清理"]
+        StateSync["🔄 状态同步"]
+    end
+
+    subgraph ContainerScheduler ["📦 容器编排 (Scheduler)"]
+        DockerRuntime["Docker Runtime"]
+        K8sRuntime["Kubernetes"]
+    end
+
+    subgraph Storage ["💾 存储层 (Storage)"]
+        MariaDB[("🗄️ MariaDB")]
+        S3[("☁️ S3 Storage")]
+    end
+
+    subgraph Runtime ["🛡️ 沙箱运行时 (Sandbox)"]
+        Executor["⚡ 执行器 (Executor)"]
+        Container["📦 容器实例"]
+    end
+
+    %% 这里的连接线逻辑
+    Client & Developer --> API
+    API --> Scheduler
+    Scheduler --> SessionMgr & ContainerScheduler
+    SessionMgr --> TemplateMgr & MariaDB
+    ContainerScheduler --> DockerRuntime & K8sRuntime
+    DockerRuntime & K8sRuntime --> Container
+    Container --> Executor
+    HealthProbe -.-> Container
+    StateSync --> MariaDB & ContainerScheduler
+    Cleanup --> SessionMgr
+    API -.-> S3
+
+    %% 应用样式
+    class Client,Developer external;
+    class API,Scheduler,SessionMgr,TemplateMgr,HealthProbe,Cleanup,StateSync control;
+    class DockerRuntime,K8sRuntime scheduler;
+    class MariaDB,S3 database;
+    class Executor,Container runtime;
+
+```
+
 ### 核心优势
 
 **云原生架构**
@@ -50,65 +117,6 @@ Sandbox 控制平面是一个**生产就绪、企业级**平台，提供安全�
 | **状态同步** | 服务重启时自动恢复孤立会话 |
 | **Web 控制台** | 基于 React 的可视化管理界面和监控 |
 
-## 架构
-
-系统采用**控制平面 + 容器调度器**分离架构：
-
-```mermaid
-graph TB
-    subgraph External["外部系统"]
-        Client["客户端应用"]
-        Developer["开发者<br/>(SDK/API)"]
-    end
-
-    subgraph ControlPlane["控制平面"]
-        API["API 网关<br/>(FastAPI)"]
-        Scheduler["调度器"]
-        SessionMgr["会话管理器"]
-        TemplateMgr["模板管理器"]
-        HealthProbe["健康探针"]
-        Cleanup["会话清理服务"]
-        StateSync["状态同步服务"]
-    end
-
-    subgraph ContainerScheduler["容器调度器"]
-        DockerRuntime["Docker 运行时"]
-        K8sRuntime["K8s 运行时"]
-    end
-
-    subgraph Storage["存储层"]
-        MariaDB[(MariaDB)]
-        S3[(S3 存储)]
-    end
-
-    subgraph Runtime["沙箱运行时"]
-        Executor["执行器"]
-        Container["容器"]
-    end
-
-    Client -->|REST API| API
-    Developer -->|REST API| API
-    API --> Scheduler
-    Scheduler --> SessionMgr
-    SessionMgr --> TemplateMgr
-    Scheduler --> ContainerScheduler
-    ContainerScheduler --> DockerRuntime
-    ContainerScheduler --> K8sRuntime
-    DockerRuntime --> Container
-    K8sRuntime --> Container
-    Container --> Executor
-    SessionMgr --> MariaDB
-    HealthProbe --> Container
-    StateSync --> MariaDB
-    StateSync --> ContainerScheduler
-    Cleanup --> SessionMgr
-    API --> S3
-
-    style ControlPlane fill:#e1f5ff
-    style ContainerScheduler fill:#fff4e6
-    style Storage fill:#f0f0f0
-    style Runtime fill:#e8f5e9
-```
 
 ### 设计原则
 
