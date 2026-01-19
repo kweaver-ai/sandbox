@@ -46,6 +46,20 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = Field(default="")
     s3_endpoint_url: str = Field(default="")  # MinIO 支持
 
+    # ============== CSI Driver 配置 ==============
+    use_csi_driver: bool = Field(
+        default=False,
+        description="使用 CSI 驱动挂载 S3 (True) 或 s3fs sidecar (False)"
+    )
+    csi_storage_class: str = Field(
+        default="juicefs-sc",
+        description="CSI StorageClass 名称"
+    )
+    juicefs_metaurl: str = Field(
+        default="mysql://juicefs:juicefs_password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata",
+        description="JuiceFS 元数据存储 MariaDB 连接 URL"
+    )
+
     # ============== Docker 配置 ==============
     docker_host: str = Field(default="unix:///var/run/docker.sock")
     docker_tls_verify: bool = Field(default=False)

@@ -92,7 +92,7 @@ spec:
 
       containers:
         - name: control-plane
-          image: sandbox-control-plane:latest
+          image: sandbox-control-plane:csi-driver
           imagePullPolicy: IfNotPresent
 
           ports:
@@ -101,6 +101,14 @@ spec:
               protocol: TCP
 
           env:
+            # CSI Driver 配置
+            - name: USE_CSI_DRIVER
+              value: "true"
+            - name: CSI_STORAGE_CLASS
+              value: "juicefs-sc"
+            - name: JUICEFS_METAURL
+              value: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
+
             # 从 ConfigMap 读取配置
             - name: ENVIRONMENT
               valueFrom:

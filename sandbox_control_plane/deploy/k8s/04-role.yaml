@@ -22,6 +22,16 @@ rules:
     resources: ["pods/exec"]
     verbs: ["create"]
 
+  # PVC 管理权限（用于 CSI Driver 动态创建 S3 挂载卷）
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # StorageClass 读取权限（用于 CSI Driver）
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+
   # Event 读取权限
   - apiGroups: [""]
     resources: ["events"]
