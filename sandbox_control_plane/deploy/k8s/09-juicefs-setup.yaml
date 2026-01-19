@@ -1,0 +1,167 @@
+---
+# JuiceFS Configuration for Sandbox Platform
+#
+# This manifest configures JuiceFS for S3 workspace mounting.
+# It includes:
+# 1. Secret with MinIO credentials and MariaDB connection
+# 2. StorageClass for dynamic PVC provisioning
+# 3. MariaDB database initialization
+#
+# Prerequisites:
+# - MariaDB must be deployed (08-mariadb-deployment.yaml)
+# - MinIO must be deployed (07-minio-deployment.yaml)
+#
+# Installation:
+#   kubectl apply -f deploy/k8s/09-juicefs-setup.yaml
+#
+# Verification:
+#   kubectl get storageclass juicefs-sc
+#   kubectl get secret juicefs-secret -n sandbox-system
+
+---
+# JuiceFS Secret
+# Contains configuration for connecting to MinIO (data) and MariaDB (metadata)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: juicefs-secret
+  namespace: sandbox-system
+type: Opaque
+stringData:
+  # JuiceFS volume name
+  name: "sandbox-workspace"
+
+  # MariaDB connection URL for metadata storage
+  # Format: mysql://user:password@host:port/database
+  metaurl: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
+
+  # Storage backend type (minio, s3, oss, etc.)
+  storage: "minio"
+
+  # MinIO endpoint and bucket configuration
+  bucket: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+
+  # MinIO access credentials
+  access-key: "minioadmin"
+  secret-key: "minioadmin"
+
+---
+# JuiceFS StorageClass
+# Defines how PVCs are provisioned using JuiceFS CSI Driver
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: csi.juicefs.com
+parameters:
+  # Secret references for accessing JuiceFS configuration
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: sandbox-system
+  csi.storage.k8s.io/controller-publish-secret-name: juicefs-secret
+  csi.storage.k8s.io/controller-publish-secret-namespace: sandbox-system
+  csi.storage.k8s.io/node-publish-secret-name: juicefs-secret
+  csi.storage.k8s.io/node-publish-secret-namespace: sandbox-system
+  csi.storage.k8s.io/node-stage-secret-name: juicefs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: sandbox-system
+
+# Mount options for JuiceFS
+  # Cache size on the host (default: 0 = unlimited)
+  # This cache improves read performance
+  csi.storage.k8s.io/fstype: juicefs
+
+# Volume binding mode
+volumeBindingMode: Immediate
+
+# Allow volume expansion
+allowVolumeExpansion: true
+
+# Reclaim policy
+reclaimPolicy: Delete
+
+---
+# ConfigMap for JuiceFS database initialization script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: juicefs-init-script
+  namespace: sandbox-system
+data:
+  init-juicefs-db.sql: |
+    -- JuiceFS Metadata Database Initialization
+    --
+    -- This script creates the database and user for JuiceFS metadata storage.
+    -- JuiceFS stores file metadata (directory structure, attributes, chunks)
+    -- in MariaDB, while actual file data is stored in MinIO.
+    --
+    -- IMPORTANT: This script should be run manually during initial setup.
+    --
+    -- Usage:
+    --   kubectl exec -n sandbox-system deployment/mariadb -- mysql -u root -p"$MYSQL_ROOT_PASSWORD" < init-juicefs-db.sql
+
+    -- Create JuiceFS metadata database
+    CREATE DATABASE IF NOT EXISTS juicefs_metadata
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+    -- Create dedicated user for JuiceFS (optional, can reuse root)
+    -- CHANGE THE PASSWORD IN PRODUCTION!
+    CREATE USER IF NOT EXISTS 'juicefs'@'%' IDENTIFIED BY 'juicefs_password';
+
+    -- Grant all privileges on JuiceFS database
+    GRANT ALL PRIVILEGES ON juicefs_metadata.* TO 'juicefs'@'%';
+
+    -- Flush privileges to ensure changes take effect
+    FLUSH PRIVILEGES;
+
+    -- Create initial tables (JuiceFS will create these on first use, but we can verify database access)
+    USE juicefs_metadata;
+
+    -- Verification query (run this to confirm database is ready)
+    SELECT 'JuiceFS database initialized successfully' AS status;
+
+---
+# Job to initialize JuiceFS database (run once during installation)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: juicefs-db-init
+  namespace: sandbox-system
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mysql-client
+          image: mariadb:11.2
+          command:
+            - sh
+            - -c
+            - |
+              # Wait for MariaDB to be ready using mariadb command
+              echo "Waiting for MariaDB..."
+              until mariadb -h mariadb.sandbox-system.svc.cluster.local -u root -p"password" -e "SELECT 1" >/dev/null 2>&1; do
+                echo "MariaDB is unavailable - sleeping"
+                sleep 2
+              done
+
+              echo "MariaDB is ready - initializing JuiceFS database..."
+
+              # Run initialization script
+              mariadb -h mariadb.sandbox-system.svc.cluster.local \
+                    -u root \
+                    -p"password" \
+                    < /init/init-juicefs-db.sql
+
+              echo "JuiceFS database initialization completed!"
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "password"
+          volumeMounts:
+            - name: init-script
+              mountPath: /init
+      volumes:
+        - name: init-script
+          configMap:
+            name: juicefs-init-script

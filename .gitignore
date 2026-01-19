@@ -57,3 +57,5 @@ Thumbs.db
 *.tmp
 *.bak
 *.swp
+sandbox_web/node_modules/
+sandbox_web/dist/
