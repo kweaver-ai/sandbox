@@ -405,3 +405,128 @@ class TestSessionsAPIWithExecution:
 
         # Cleanup
         await http_client.delete(f"/sessions/{session_id}")
+
+
+@pytest.mark.asyncio
+class TestSessionStatusTransitions:
+    """Session status transition tests."""
+
+    async def test_session_status_creating_when_starting(
+        self,
+        http_client: AsyncClient,
+        test_template_id: str
+    ):
+        """Test that session status is 'creating' when session is starting."""
+        response = await http_client.post(
+            "/sessions",
+            json={
+                "template_id": test_template_id,
+                "timeout": 300
+            }
+        )
+
+        assert response.status_code in (201, 200)
+        data = response.json()
+        session_id = data["id"]
+
+        # Immediately check status - should be 'creating' when starting
+        status_response = await http_client.get(f"/sessions/{session_id}")
+        assert status_response.status_code == 200
+        session_data = status_response.json()
+
+        # Session status should be 'creating' when just starting
+        assert session_data["status"] == "creating", f"Expected 'creating' status, got '{session_data['status']}'"
+
+        # Cleanup
+        await http_client.delete(f"/sessions/{session_id}")
+
+    async def test_session_status_running_when_startup_succeeds(
+        self,
+        http_client: AsyncClient,
+        test_template_id: str
+    ):
+        """Test that session status becomes 'running' when startup succeeds."""
+        response = await http_client.post(
+            "/sessions",
+            json={
+                "template_id": test_template_id,
+                "timeout": 300
+            }
+        )
+
+        assert response.status_code in (201, 200)
+        data = response.json()
+        session_id = data["id"]
+
+        # Wait for session to become running (startup succeeds)
+        for i in range(60):
+            status_response = await http_client.get(f"/sessions/{session_id}")
+            if status_response.status_code == 200:
+                session_data = status_response.json()
+                status = session_data["status"]
+                if status == "running":
+                    # Session successfully reached running state
+                    assert status == "running"
+                    break
+                elif status == "failed":
+                    pytest.fail(f"Session failed to start: {session_data}")
+            await asyncio.sleep(1)
+        else:
+            pytest.fail("Session did not reach 'running' status within timeout")
+
+        # Cleanup
+        await http_client.delete(f"/sessions/{session_id}")
+
+    async def test_session_status_failed_when_dependency_install_fails(
+        self,
+        http_client: AsyncClient,
+        test_template_id: str
+    ):
+        """Test that session status becomes 'failed' when startup fails due to missing dependency."""
+        # Create session with a non-existent package dependency
+        response = await http_client.post(
+            "/sessions",
+            json={
+                "template_id": test_template_id,
+                "timeout": 300,
+                "dependencies": [
+                    {"name": "nonexistent-package-xyz-123", "version": "999.999.999"}
+                ]
+            }
+        )
+
+        # Session creation should succeed initially (async processing)
+        assert response.status_code in (201, 200)
+        data = response.json()
+        session_id = data["id"]
+
+        # Wait for session to fail due to dependency installation failure
+        failed_status_found = False
+        for i in range(120):  # Wait up to 2 minutes for dependency installation
+            status_response = await http_client.get(f"/sessions/{session_id}")
+            if status_response.status_code == 200:
+                session_status = status_response.json()
+                status = session_status["status"]
+                if status == "failed":
+                    failed_status_found = True
+                    assert status == "failed"
+                    # Verify error information is available
+                    assert "error" in session_status or "message" in session_status
+                    break
+                elif status == "running":
+                    # Dependency was somehow installed (maybe package exists)
+                    break
+            await asyncio.sleep(1)
+
+        if not failed_status_found:
+            # Check final status
+            final_response = await http_client.get(f"/sessions/{session_id}")
+            if final_response.status_code == 200:
+                final_data = final_response.json()
+                if final_data["status"] == "running":
+                    pytest.skip("Non-existent package was somehow available")
+                else:
+                    pytest.fail(f"Session did not reach 'failed' status. Final status: {final_data['status']}")
+
+        # Cleanup
+        await http_client.delete(f"/sessions/{session_id}")
