@@ -134,6 +134,69 @@ class TestTemplatesAPI:
             json={"default_cpu_cores": 1.0, "default_memory_mb": 512}
         )
 
+    async def test_update_template_name_success(self, http_client: AsyncClient, test_template_id: str):
+        """Test updating template name successfully."""
+        import uuid
+        new_name = f"Updated Template Name {uuid.uuid4().hex[:8]}"
+
+        # Get original name
+        get_response = await http_client.get(f"/templates/{test_template_id}")
+        assert get_response.status_code == 200
+        original_name = get_response.json()["name"]
+
+        # Update template name
+        update_data = {"name": new_name}
+        response = await http_client.put(
+            f"/templates/{test_template_id}",
+            json=update_data
+        )
+
+        # Note: This test will fail until name update is implemented
+        assert response.status_code in (200, 202)
+
+        # Verify name was updated
+        get_response = await http_client.get(f"/templates/{test_template_id}")
+        assert get_response.status_code == 200
+        data = get_response.json()
+        assert data["name"] == new_name
+
+        # Restore original name
+        await http_client.put(
+            f"/templates/{test_template_id}",
+            json={"name": original_name}
+        )
+
+    async def test_update_template_name_duplicate(self, http_client: AsyncClient, test_template_id: str):
+        """Test updating template name with an existing name should fail."""
+        import uuid
+
+        # Create another template to get a duplicate name
+        duplicate_template_id = f"test_template_dup_{uuid.uuid4().hex[:8]}"
+        duplicate_template_name = f"Duplicate Name Template {uuid.uuid4().hex[:8]}"
+
+        create_data = {
+            "id": duplicate_template_id,
+            "name": duplicate_template_name,
+            "image_url": "sandbox-template-python-basic:latest",
+            "runtime_type": "python3.11"
+        }
+
+        create_response = await http_client.post("/templates", json=create_data)
+        assert create_response.status_code in (201, 200)
+
+        # Try to update test_template_id with the same name
+        update_data = {"name": duplicate_template_name}
+        response = await http_client.put(
+            f"/templates/{test_template_id}",
+            json=update_data
+        )
+
+        # Should fail with conflict or validation error
+        assert response.status_code in (409, 400, 422)
+
+        # Cleanup
+        await http_client.delete(f"/templates/{duplicate_template_id}")
+
     async def test_delete_template(self, http_client: AsyncClient):
         """Test deleting a template."""
         # Create a template to delete
