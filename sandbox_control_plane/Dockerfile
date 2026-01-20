@@ -44,20 +44,15 @@ WORKDIR /app
 # Copy dependency files first (better layer caching)
 COPY pyproject.toml  README.md ./
 
-# Install uv and Python dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     if [ "$USE_MIRROR" = "true" ]; then \
       pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
       pip config set global.trusted-host $PIP_MIRROR; \
     fi && \
-    pip install --no-cache-dir uv && \
-    if [ "$USE_MIRROR" = "true" ]; then \
-      uv sync --index-url https://$PIP_MIRROR/pypi/web/simple; \
-    else \
-      uv sync; \
-    fi && \
-    # Clean up uv cache
-    rm -rf /root/.cache/uv /root/.cache/pip
+    pip install --no-cache-dir -e . && \
+    # Clean up pip cache
+    rm -rf /root/.cache/pip
 
 # Copy source code (dockerignore will exclude unnecessary files)
 COPY src/ ./src/
@@ -76,4 +71,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # Start the control plane
-CMD ["uv", "run", "uvicorn", "src.interfaces.rest.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.interfaces.rest.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -92,7 +92,7 @@ spec:
 
       containers:
         - name: control-plane
-          image: sandbox-control-plane:csi-driver
+          image: sandbox-control-plane:latest
           imagePullPolicy: IfNotPresent
 
           ports:
@@ -101,14 +101,6 @@ spec:
               protocol: TCP
 
           env:
-            # CSI Driver 配置
-            - name: USE_CSI_DRIVER
-              value: "true"
-            - name: CSI_STORAGE_CLASS
-              value: "juicefs-sc"
-            - name: JUICEFS_METAURL
-              value: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-
             # 从 ConfigMap 读取配置
             - name: ENVIRONMENT
               valueFrom:
@@ -175,6 +167,36 @@ spec:
                 configMapKeyRef:
                   name: sandbox-config
                   key: DISABLE_BWRAP
+            - name: JUICEFS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_ENABLED
+            - name: JUICEFS_HOST_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_HOST_PATH
+            - name: JUICEFS_CONTAINER_MOUNT_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_CONTAINER_MOUNT_PATH
+            - name: JUICEFS_METAURL
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_METAURL
+            - name: JUICEFS_STORAGE_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_STORAGE_TYPE
+            - name: JUICEFS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-config
+                  key: JUICEFS_BUCKET
 
             # 从 Secret 读取敏感信息
             - name: S3_ENDPOINT_URL
@@ -202,6 +224,16 @@ spec:
                 secretKeyRef:
                   name: sandbox-secrets
                   key: S3_REGION
+            - name: JUICEFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: S3_ACCESS_KEY_ID
+            - name: JUICEFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: S3_SECRET_ACCESS_KEY
 
             # 运行时配置
             - name: PYTHONUNBUFFERED
@@ -217,6 +249,13 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+
+          # JuiceFS hostPath volume mount for direct file access
+          volumeMounts:
+            - name: juicefs-workspace
+              mountPath: /mnt/jfs
+              mountPropagation: HostToContainer
+              readOnly: false
 
           # 健康检查
           livenessProbe:
@@ -236,6 +275,13 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
+
+      # Volumes - JuiceFS hostPath shared from mount helper
+      volumes:
+        - name: juicefs-workspace
+          hostPath:
+            path: /var/jfs
+            type: Directory
 
       # 重启策略
       restartPolicy: Always

@@ -1,11 +1,8 @@
 ---
-# JuiceFS Configuration for Sandbox Platform
+# JuiceFS Database Initialization for Sandbox Platform
 #
-# This manifest configures JuiceFS for S3 workspace mounting.
-# It includes:
-# 1. Secret with MinIO credentials and MariaDB connection
-# 2. StorageClass for dynamic PVC provisioning
-# 3. MariaDB database initialization
+# This manifest initializes the JuiceFS metadata database in MariaDB.
+# For hostPath mounting, we only need the database, not CSI Driver resources.
 #
 # Prerequisites:
 # - MariaDB must be deployed (08-mariadb-deployment.yaml)
@@ -15,70 +12,8 @@
 #   kubectl apply -f deploy/k8s/09-juicefs-setup.yaml
 #
 # Verification:
-#   kubectl get storageclass juicefs-sc
-#   kubectl get secret juicefs-secret -n sandbox-system
-
----
-# JuiceFS Secret
-# Contains configuration for connecting to MinIO (data) and MariaDB (metadata)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: juicefs-secret
-  namespace: sandbox-system
-type: Opaque
-stringData:
-  # JuiceFS volume name
-  name: "sandbox-workspace"
-
-  # MariaDB connection URL for metadata storage
-  # Format: mysql://user:password@host:port/database
-  metaurl: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-
-  # Storage backend type (minio, s3, oss, etc.)
-  storage: "minio"
-
-  # MinIO endpoint and bucket configuration
-  bucket: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
-
-  # MinIO access credentials
-  access-key: "minioadmin"
-  secret-key: "minioadmin"
-
----
-# JuiceFS StorageClass
-# Defines how PVCs are provisioned using JuiceFS CSI Driver
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: juicefs-sc
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "false"
-provisioner: csi.juicefs.com
-parameters:
-  # Secret references for accessing JuiceFS configuration
-  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
-  csi.storage.k8s.io/provisioner-secret-namespace: sandbox-system
-  csi.storage.k8s.io/controller-publish-secret-name: juicefs-secret
-  csi.storage.k8s.io/controller-publish-secret-namespace: sandbox-system
-  csi.storage.k8s.io/node-publish-secret-name: juicefs-secret
-  csi.storage.k8s.io/node-publish-secret-namespace: sandbox-system
-  csi.storage.k8s.io/node-stage-secret-name: juicefs-secret
-  csi.storage.k8s.io/node-stage-secret-namespace: sandbox-system
-
-# Mount options for JuiceFS
-  # Cache size on the host (default: 0 = unlimited)
-  # This cache improves read performance
-  csi.storage.k8s.io/fstype: juicefs
-
-# Volume binding mode
-volumeBindingMode: Immediate
-
-# Allow volume expansion
-allowVolumeExpansion: true
-
-# Reclaim policy
-reclaimPolicy: Delete
+#   kubectl get job -n sandbox-system juicefs-db-init
+#   kubectl logs -n sandbox-system job/juicefs-db-init
 
 ---
 # ConfigMap for JuiceFS database initialization script
@@ -95,10 +30,10 @@ data:
     -- JuiceFS stores file metadata (directory structure, attributes, chunks)
     -- in MariaDB, while actual file data is stored in MinIO.
     --
-    -- IMPORTANT: This script should be run manually during initial setup.
+    -- IMPORTANT: This script should be run during initial setup.
     --
     -- Usage:
-    --   kubectl exec -n sandbox-system deployment/mariadb -- mysql -u root -p"$MYSQL_ROOT_PASSWORD" < init-juicefs-db.sql
+    --   kubectl exec -n sandbox-system deployment/mariadb -- mysql -u root -p"password" < /init/init-juicefs-db.sql
 
     -- Create JuiceFS metadata database
     CREATE DATABASE IF NOT EXISTS juicefs_metadata
@@ -115,10 +50,9 @@ data:
     -- Flush privileges to ensure changes take effect
     FLUSH PRIVILEGES;
 
-    -- Create initial tables (JuiceFS will create these on first use, but we can verify database access)
+    -- Verification query (run this to confirm database is ready)
     USE juicefs_metadata;
 
-    -- Verification query (run this to confirm database is ready)
     SELECT 'JuiceFS database initialized successfully' AS status;
 
 ---
@@ -132,36 +66,73 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
-      containers:
-        - name: mysql-client
+      initContainers:
+        - name: wait-for-mariadb
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mariadb.sandbox-system.svc.cluster.local 3306; do
+                echo "Waiting for MariaDB..."
+                sleep 2
+              done
+              echo "MariaDB is ready!"
+        - name: create-db
           image: mariadb:11.2
           command:
             - sh
             - -c
             - |
-              # Wait for MariaDB to be ready using mariadb command
-              echo "Waiting for MariaDB..."
-              until mariadb -h mariadb.sandbox-system.svc.cluster.local -u root -p"password" -e "SELECT 1" >/dev/null 2>&1; do
-                echo "MariaDB is unavailable - sleeping"
-                sleep 2
-              done
-
-              echo "MariaDB is ready - initializing JuiceFS database..."
-
-              # Run initialization script
+              echo "Creating JuiceFS database..."
               mariadb -h mariadb.sandbox-system.svc.cluster.local \
                     -u root \
                     -p"password" \
                     < /init/init-juicefs-db.sql
-
-              echo "JuiceFS database initialization completed!"
-          env:
-            - name: MYSQL_ROOT_PASSWORD
-              value: "password"
+              echo "JuiceFS database created!"
+              echo "DB" > /shared/status
           volumeMounts:
             - name: init-script
               mountPath: /init
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: format-juicefs
+          image: juicedata/juicefs-fuse:ce-nightly
+          command:
+            - sh
+            - -c
+            - |
+              echo "Checking database status..."
+              ls -la /shared/
+
+              echo "Formatting JuiceFS filesystem..."
+
+              # Set up environment variables for S3/MinIO
+              export AWS_ACCESS_KEY_ID="minioadmin"
+              export AWS_SECRET_ACCESS_KEY="minioadmin"
+
+              # Find juicefs binary
+              JFS_BIN=$(command -v juicefs || echo "/usr/local/bin/juicefs")
+
+              # Format the JuiceFS filesystem
+              # This creates the necessary tables and structure in the database
+              "${JFS_BIN}" format \
+                  --storage="minio" \
+                  --bucket="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace" \
+                  --access-key="minioadmin" \
+                  --secret-key="minioadmin" \
+                  "mysql://root:password@tcp(mariadb.sandbox-system.svc.cluster.local:3306)/juicefs_metadata" \
+                  "sandbox-workspace"
+
+              echo "JuiceFS filesystem formatted successfully!"
+              echo "JuiceFS database initialization completed!"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
       volumes:
         - name: init-script
           configMap:
             name: juicefs-init-script
+        - name: shared
+          emptyDir: {}

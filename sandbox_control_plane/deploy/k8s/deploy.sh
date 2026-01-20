@@ -1,6 +1,8 @@
 #!/bin/bash
 # Kubernetes 本地部署脚本
-# 用于在本地 Kind/Minikube/K3s 环境中快速部署和测试
+# 用于在本地 Kind/Minikube/K3s/Docker Desktop 环境中快速部署和测试
+#
+# 使用 JuiceFS hostPath 方式挂载 S3 workspace（适合单节点开发环境）
 
 set -e
 
@@ -8,6 +10,7 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 函数：打印信息
@@ -21,6 +24,10 @@ warn() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+step() {
+    echo -e "${BLUE}[STEP]${NC} $1"
 }
 
 # 检查 kubectl 是否安装
@@ -49,6 +56,9 @@ detect_k8s_env() {
     else
         error "Cannot access Kubernetes cluster. Please start your K8s environment first."
         info ""
+        info "For Docker Desktop:"
+        info "  Start Docker Desktop, enable Kubernetes in settings"
+        info ""
         info "For Kind:"
         info "  kind create cluster --name sandbox"
         info ""
@@ -64,8 +74,8 @@ detect_k8s_env() {
 
 # 构建 Docker 镜像
 build_image() {
-    info "Building Docker image..."
-    docker build -t sandbox-control-plane:latest .
+    step "Building Docker image..."
+    docker build -t sandbox-control-plane:latest ../../.
     info "Docker image built successfully"
 }
 
@@ -73,7 +83,7 @@ build_image() {
 load_image() {
     local cluster_type=$1
 
-    info "Loading image to Kubernetes..."
+    step "Loading image to Kubernetes..."
 
     case $cluster_type in
         kind)
@@ -92,6 +102,9 @@ load_image() {
                 exit 1
             fi
             ;;
+        docker-desktop|orbstack)
+            info "$cluster_type shares images automatically, no need to load"
+            ;;
         k3s)
             info "K3s uses Docker images directly, no need to load"
             ;;
@@ -101,34 +114,68 @@ load_image() {
     esac
 }
 
-# 部署 K8s 资源
+# 部署 K8s 资源（按依赖顺序）
 deploy_resources() {
-    info "Deploying Kubernetes resources..."
+    step "Deploying Kubernetes resources in dependency order..."
 
-    # 按顺序部署
-    kubectl apply -f deploy/k8s/00-namespace.yaml
-    kubectl apply -f deploy/k8s/01-configmap.yaml
-    kubectl apply -f deploy/k8s/02-secret.yaml
-    kubectl apply -f deploy/k8s/03-serviceaccount.yaml
-    kubectl apply -f deploy/k8s/04-role.yaml
-    kubectl apply -f deploy/k8s/08-mariadb-deployment.yaml
-    kubectl apply -f deploy/k8s/07-minio-deployment.yaml
+    info ""
+    info "=== Step 1: 基础资源 ==="
+    kubectl apply -f 00-namespace.yaml
+    kubectl apply -f 01-configmap.yaml
+    kubectl apply -f 02-secret.yaml
+    kubectl apply -f 03-serviceaccount.yaml
+    kubectl apply -f 04-role.yaml
+    info "基础资源部署完成"
+
+    info ""
+    info "=== Step 2: 存储层 ==="
+    kubectl apply -f 08-mariadb-deployment.yaml
+    kubectl apply -f 07-minio-deployment.yaml
 
     info "Waiting for MariaDB to be ready..."
-    kubectl wait --for=condition=ready pod -l app=mariadb -n sandbox-system --timeout=120s
+    kubectl wait --for=condition=ready pod -l app=mariadb -n sandbox-system --timeout=120s || {
+        warn "MariaDB wait timeout, continuing anyway..."
+    }
 
     info "Waiting for MinIO to be ready..."
-    kubectl wait --for=condition=ready pod -l app=minio -n sandbox-system --timeout=120s
+    kubectl wait --for=condition=ready pod -l app=minio -n sandbox-system --timeout=120s || {
+        warn "MinIO wait timeout, continuing anyway..."
+    }
 
-    kubectl apply -f deploy/k8s/05-control-plane-deployment.yaml
-    # HPA 已禁用 - 本地开发环境使用固定 1 个副本
+    info "存储层部署完成"
 
-    info "Kubernetes resources deployed successfully"
+    info ""
+    info "=== Step 3: JuiceFS 数据库初始化 ==="
+    kubectl apply -f 09-juicefs-setup.yaml
+
+    info "Waiting for JuiceFS database initialization..."
+    kubectl wait --for=condition=complete job/juicefs-db-init -n sandbox-system --timeout=120s || {
+        warn "JuiceFS DB init may have already run, continuing..."
+    }
+
+    info "JuiceFS 数据库初始化完成"
+
+    info ""
+    info "=== Step 4: JuiceFS hostPath 挂载助手 ==="
+    kubectl apply -f 10-juicefs-hostpath-setup.yaml
+
+    info "Waiting for JuiceFS mount helper to be ready..."
+    kubectl wait --for=condition=ready pod -l app=juicefs-mount-helper -n sandbox-system --timeout=180s || {
+        warn "JuiceFS mount helper wait timeout, continuing anyway..."
+    }
+
+    info "JuiceFS hostPath 挂载助手部署完成"
+
+    info ""
+    info "=== Step 5: Control Plane ==="
+    kubectl apply -f 05-control-plane-deployment.yaml
+
+    info "Control Plane 部署完成"
 }
 
 # 等待 Control Plane 就绪
 wait_for_control_plane() {
-    info "Waiting for Control Plane to be ready..."
+    step "Waiting for Control Plane to be ready..."
     kubectl wait --for=condition=available deployment/sandbox-control-plane -n sandbox-system --timeout=300s
 
     info "Control Plane is ready!"
@@ -145,32 +192,139 @@ show_status() {
     info "Services:"
     kubectl get svc -n sandbox-system
     info ""
-    info "HPA:"
-    kubectl get hpa -n sandbox-system
+    info "Deployments:"
+    kubectl get deploy -n sandbox-system
     info ""
+    info "DaemonSets:"
+    kubectl get ds -n sandbox-system
+    info ""
+}
+
+# 验证部署
+verify_deployment() {
+    step "Verifying deployment..."
+
+    info ""
+    info "=== 验证 JuiceFS 挂载 ==="
+    info "检查挂载助手 Pod:"
+    kubectl get pods -n sandbox-system -l app=juicefs-mount-helper
+
+    info ""
+    info "检查 JuiceFS 挂载点:"
+    MOUNT_HELPER_POD=$(kubectl get pods -n sandbox-system -l app=juicefs-mount-helper -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "$MOUNT_HELPER_POD" ]; then
+        kubectl exec -n sandbox-system "$MOUNT_HELPER_POD" -- ls -la /jfs/sandbox-workspace 2>/dev/null || warn "Could not list mount point"
+    else
+        warn "Mount helper pod not found"
+    fi
+
+    info ""
+    info "=== 验证数据库连接 ==="
+    kubectl exec -n sandbox-system deployment/mariadb -- mariadb -u root -p"password" -e "SHOW DATABASES LIKE 'juicefs%';"
+
+    info ""
+    info "=== 验证 Control Plane ==="
+    kubectl exec -n sandbox-system deployment/sandbox-control-plane -- curl -s http://localhost:8000/api/v1/health || echo "Health check not accessible"
 }
 
 # 设置端口转发
 setup_port_forward() {
-    info "Setting up port forwarding..."
+    info ""
+    info "=== Port Forwarding ==="
     info "Run the following command to forward Control Plane port:"
     info ""
     echo -e "${YELLOW}kubectl port-forward svc/sandbox-control-plane 8000:8000 -n sandbox-system${NC}"
     info ""
-    info "Then access the API at http://localhost:8000"
+    info "Then access the API at:"
+    echo -e "${GREEN}  - API: http://localhost:8000${NC}"
+    echo -e "${GREEN}  - Docs: http://localhost:8000/docs${NC}"
+    echo -e "${GREEN}  - Health: http://localhost:8000/api/v1/health${NC}"
+    info ""
+}
+
+# 显示资源说明
+show_resource_info() {
+    cat << 'EOF'
+
+=== Kubernetes 资源说明 ===
+
+📦 基础资源 (00-04)
+  00-namespace.yaml         - 创建 sandbox-system 和 sandbox-runtime 命名空间
+  01-configmap.yaml        - 应用配置（环境变量、超时设置等）
+  02-secret.yaml           - 敏感信息（S3 凭证、数据库密码）
+  03-serviceaccount.yaml   - ServiceAccount（Pod 访问 K8s API 的身份）
+  04-role.yaml             - RBAC 权限（Pod 操作权限）
+
+💾 存储层 (07-08)
+  07-minio-deployment.yaml  - MinIO 对象存储（S3 兼容，存储 workspace 文件）
+  08-mariadb-deployment.yaml - MariaDB 数据库（存储会话、执行记录、JuiceFS 元数据）
+
+🗄️  JuiceFS (09-10) - hostPath 方式
+  09-juicefs-setup.yaml       - JuiceFS 数据库初始化（创建 juicefs_metadata 数据库）
+  10-juicefs-hostpath-setup.yaml - JuiceFS 挂载助手 DaemonSet
+                               • 在节点上挂载 JuiceFS 到 /jfs
+                               • 通过 hostPath (/mnt/jfs) 暴露给其他 Pod
+
+🎮 Control Plane (05)
+  05-control-plane-deployment.yaml - Control Plane 服务
+                                   • REST API（会话管理、执行调度）
+                                   • 支持 JuiceFS hostPath 挂载
+
+🚫 不需要的文件
+  06-juicefs-csi-driver.yaml - CSI Driver（hostPath 不需要）
+
+=== 架构说明 ===
+
+┌─────────────────────────────────────────────────────────────┐
+│                     Kubernetes Cluster                      │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  juicefs-mount-helper DaemonSet (Privileged)         │  │
+│  │  • 挂载 JuiceFS → /jfs (容器内)                      │  │
+│  │  • hostPath: /mnt/jfs (宿主机)                       │  │
+│  └──────────────────────┬───────────────────────────────┘  │
+│                         │                                    │
+│  ┌──────────────────────▼───────────────────────────────┐  │
+│  │       Executor Pod (hostPath 卷)                     │  │
+│  │  /workspace → /mnt/jfs/... (JuiceFS 挂载)           │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                         │                                       │
+│  ┌──────────────────────▼───────────────────────────────┐  │
+│  │            Storage Layer                                 │  │
+│  │  ┌──────────────┐  ┌──────────────┐                    │  │
+│  │  │ MariaDB      │  │ MinIO        │                    │  │
+│  │  │ (Metadata)   │  │ (File Data)  │                    │  │
+│  │  └──────────────┘  └──────────────┘                    │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+
+EOF
 }
 
 # 主函数
 main() {
     local cluster_type=${1:-auto}
     local skip_build=${2:-false}
+    local show_info=${3:-false}
 
     info "=== Sandbox Control Plane K8s Deployment ==="
+    info "Deployment Mode: JuiceFS hostPath (适合 OrbStack/Docker Desktop/单节点环境)"
     info ""
+
+    # 显示资源说明
+    if [ "$show_info" = "true" ]; then
+        show_resource_info
+        return 0
+    fi
 
     # 检测 K8s 类型
     if [ "$cluster_type" = "auto" ]; then
-        if kind get clusters 2>/dev/null | grep -q "kind"; then
+        # OrbStack detection (check before Docker Desktop)
+        if pgrep -f "OrbStack" > /dev/null || docker context inspect 2>/dev/null | grep -q "orbstack"; then
+            cluster_type="orbstack"
+        elif pgrep -f "Docker Desktop" > /dev/null || docker context inspect 2>/dev/null | grep -q "docker-desktop"; then
+            cluster_type="docker-desktop"
+        elif kind get clusters 2>/dev/null | grep -q "kind"; then
             cluster_type="kind"
         elif pgrep -f "minikube" > /dev/null; then
             cluster_type="minikube"
@@ -199,6 +353,7 @@ main() {
     deploy_resources
     wait_for_control_plane
     show_status
+    verify_deployment
     setup_port_forward
 
     info ""
@@ -208,24 +363,38 @@ main() {
 
 # 帮助信息
 show_help() {
-    echo "Usage: $0 [cluster_type] [skip_build]"
+    echo "Usage: $0 [cluster_type] [skip_build] [show_info]"
     echo ""
     echo "Arguments:"
-    echo "  cluster_type  Type of Kubernetes cluster (kind|minikube|k3s|auto)"
+    echo "  cluster_type  Type of Kubernetes cluster"
+    echo "                Options: orbstack, docker-desktop, kind, minikube, k3s, auto"
     echo "                Default: auto (automatically detect)"
-    echo "  skip_build    Skip Docker image build (true|false)"
+    echo "  skip_build    Skip Docker image build"
+    echo "                Options: true, false"
+    echo "                Default: false"
+    echo "  show_info     Show resource information only"
+    echo "                Options: true, false"
     echo "                Default: false"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Auto-detect cluster and build image"
-    echo "  $0 kind               # Deploy to Kind cluster"
-    echo "  $0 minikube true      # Deploy to Minikube without rebuilding"
+    echo "  $0                      # Auto-detect cluster and build image"
+    echo "  $0 docker-desktop        # Deploy to Docker Desktop"
+    echo "  $0 kind true            # Deploy to Kind without rebuilding"
+    echo "  $0 auto false true      # Show resource information only"
+    echo ""
+    echo "Resource Information:"
+    echo "  $0 --info               # Show detailed resource information"
     echo ""
 }
 
 # 处理帮助参数
 if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     show_help
+    exit 0
+fi
+
+if [ "$1" = "--info" ]; then
+    show_resource_info
     exit 0
 fi
 

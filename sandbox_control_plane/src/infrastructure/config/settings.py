@@ -46,18 +46,40 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = Field(default="")
     s3_endpoint_url: str = Field(default="")  # MinIO 支持
 
-    # ============== CSI Driver 配置 ==============
-    use_csi_driver: bool = Field(
-        default=False,
-        description="使用 CSI 驱动挂载 S3 (True) 或 s3fs sidecar (False)"
+    # ============== JuiceFS hostPath 配置 ==============
+    juicefs_host_path: str = Field(
+        default="/var/jfs/sandbox-workspace",
+        description="JuiceFS hostPath 挂载点（宿主机路径）"
     )
-    csi_storage_class: str = Field(
-        default="juicefs-sc",
-        description="CSI StorageClass 名称"
+    juicefs_container_mount_path: str = Field(
+        default="/mnt/jfs/sandbox-workspace",
+        description="JuiceFS 在容器内的挂载点（容器内路径）"
     )
     juicefs_metaurl: str = Field(
-        default="mysql://juicefs:juicefs_password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata",
+        default="mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata",
         description="JuiceFS 元数据存储 MariaDB 连接 URL"
+    )
+    juicefs_storage_type: str = Field(
+        default="minio",
+        description="JuiceFS 存储类型 (minio, s3, oss)"
+    )
+    juicefs_bucket: str = Field(
+        default="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace",
+        description="JuiceFS 存储桶 URL"
+    )
+    juicefs_access_key: str = Field(
+        default="minioadmin",
+        description="JuiceFS 存储访问密钥 ID"
+    )
+    juicefs_secret_key: str = Field(
+        default="minioadmin",
+        description="JuiceFS 存储访问密钥"
+    )
+
+    # ============== JuiceFS SDK 配置 ==============
+    juicefs_enabled: bool = Field(
+        default=False,
+        description="是否启用 JuiceFS SDK（直接写入元数据）"
     )
 
     # ============== Docker 配置 ==============

@@ -190,7 +190,7 @@ start_service() {
 
     if [[ "$background" == "true" ]]; then
         log_info "Starting $display_name in background..."
-        kubectl port-forward -n "$NAMESPACE" "$resource" "$local_port:$remote_port" > "$log_file" 2>&1 &
+        kubectl port-forward -n "$NAMESPACE" "$resource" --address 0.0.0.0 "$local_port:$remote_port" > "$log_file" 2>&1 &
         local pid=$!
         echo $pid > "$pid_file"
 
@@ -207,7 +207,7 @@ start_service() {
     else
         log_info "Starting $display_name on port $local_port..."
         log_info "Press Ctrl+C to stop"
-        kubectl port-forward -n "$NAMESPACE" "$resource" "$local_port:$remote_port"
+        kubectl port-forward -n "$NAMESPACE" "$resource" --address 0.0.0.0 "$local_port:$remote_port"
     fi
 
     return 0

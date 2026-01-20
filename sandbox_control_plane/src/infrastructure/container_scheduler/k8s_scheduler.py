@@ -4,7 +4,11 @@ Kubernetes 容器调度器
 使用官方 Python kubernetes 客户端实现 Pod 的创建和管理。
 
 支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
-Pod 会通过 JuiceFS CSI Driver 将 S3 bucket 挂载到 /workspace 目录。
+Pod 会通过 JuiceFS hostPath 方式将 S3 bucket 挂载到 /workspace 目录。
+
+JuiceFS 挂载架构：
+- Mount Helper DaemonSet：在每个节点上运行，负责挂载 JuiceFS 到 hostPath
+- Executor Pods：通过 hostPath 卷共享 JuiceFS 挂载点
 
 支持 Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
 """
@@ -25,9 +29,7 @@ from kubernetes.client import (
     V1ResourceRequirements,
     V1Volume,
     V1VolumeMount,
-    V1PersistentVolumeClaimVolumeSource,
-    V1PersistentVolumeClaim,
-    V1PersistentVolumeClaimSpec,
+    V1HostPathVolumeSource,
     V1SecurityContext,
     V1Capabilities,
     V1PodSecurityContext,
@@ -164,31 +166,21 @@ class K8sScheduler(IContainerScheduler):
         # 限制长度（K8s Pod 名称最多 253 字符）
         return pod_name[:253]
 
-    def _build_pvc_name(self, session_id: str) -> str:
+    def _build_juicefs_host_path(self, s3_prefix: str) -> str:
         """
-        生成 PVC 名称
+        构建 JuiceFS hostPath 路径
 
-        应用 Kubernetes DNS 子域名规则，确保 PVC 名称符合规范：
-        - 只能包含小写字母、数字和 '-'
-        - 必须以字母数字开头和结尾
-        - 最多 253 字符
+        将 S3 路径前缀映射到 hostPath 挂载点路径
 
         Args:
-            session_id: 会话 ID
+            s3_prefix: S3 路径前缀，如 "sessions/test-001/workspace"
 
         Returns:
-            DNS-compliant 的 PVC 名称
+            hostPath 完整路径，如 "/mnt/jfs/sandbox-workspace/sessions/test-001/workspace"
         """
-        # 转换为小写并替换下划线为连字符
-        sanitized = session_id.lower().replace('_', '-')
-        # 移除连续的连字符
-        while '--' in sanitized:
-            sanitized = sanitized.replace('--', '-')
-        # 移除开头和结尾的连字符
-        sanitized = sanitized.strip('-')
-        # 限制长度（K8s PVC 名称最多 253 字符）
-        sanitized = sanitized[:253]
-        return f"workspace-{sanitized}"
+        settings = get_settings()
+        base_path = settings.juicefs_host_path.rstrip('/')
+        return f"{base_path}/{s3_prefix}"
 
     def _build_executor_container(
         self,
@@ -334,97 +326,6 @@ exec python -m executor.interfaces.http.rest
             security_context=security_context,
         )
 
-    async def create_pvc_for_workspace(
-        self,
-        session_id: str,
-        workspace_path: str,
-    ) -> Optional[str]:
-        """
-        为 S3 workspace 创建 PVC (使用 CSI Driver)
-
-        当 use_csi_driver 配置启用时，此方法会创建一个指向 JuiceFS CSI Driver
-        的 PVC，该 PVC 会将 S3 bucket 挂载到容器中。
-
-        Args:
-            session_id: 会话 ID
-            workspace_path: S3 workspace 路径 (s3://bucket/sessions/xxx/)
-
-        Returns:
-            PVC 名称，如果不需要 PVC 则返回 None
-        """
-        s3_workspace = self._parse_s3_workspace(workspace_path)
-        if not s3_workspace:
-            return None
-
-        settings = get_settings()
-
-        # 检查是否启用 CSI Driver
-        if not settings.use_csi_driver:
-            return None
-
-        # 生成 DNS-compliant 的 PVC 名称
-        pvc_name = self._build_pvc_name(session_id)
-
-        pvc = V1PersistentVolumeClaim(
-            metadata=V1ObjectMeta(
-                name=pvc_name,
-                namespace=self._namespace,
-                labels={
-                    "app": "sandbox-executor",
-                    "sandbox-session": session_id,
-                    "s3-bucket": s3_workspace["bucket"],
-                    "s3-prefix": s3_prefix_from_path(s3_workspace["prefix"]),
-                },
-                annotations={
-                    "sandbox-session-id": session_id,
-                    "workspace-path": workspace_path,
-                },
-            ),
-            spec=V1PersistentVolumeClaimSpec(
-                access_modes=["ReadWriteMany"],
-                storage_class_name=settings.csi_storage_class,
-                resources=V1ResourceRequirements(
-                    requests={"storage": "1Pi"}  # JuiceFS 使用虚拟大小，不影响实际存储
-                ),
-            ),
-        )
-
-        try:
-            await asyncio.to_thread(
-                self._core_v1.create_namespaced_persistent_volume_claim,
-                namespace=self._namespace,
-                body=pvc,
-            )
-            logger.info(f"Created PVC {pvc_name} for session {session_id} using CSI driver")
-            return pvc_name
-        except ApiException as e:
-            logger.error(f"Failed to create PVC for session {session_id}: {e}")
-            raise
-
-    async def delete_pvc_for_workspace(
-        self,
-        pvc_name: str,
-        grace_period_seconds: int = 0
-    ) -> None:
-        """
-        删除 S3 workspace PVC
-
-        Args:
-            pvc_name: PVC 名称
-            grace_period_seconds: 宽限期（秒）
-        """
-        try:
-            await asyncio.to_thread(
-                self._core_v1.delete_namespaced_persistent_volume_claim,
-                name=pvc_name,
-                namespace=self._namespace,
-                grace_period_seconds=grace_period_seconds,
-            )
-            logger.info(f"Deleted PVC {pvc_name}")
-        except ApiException as e:
-            if e.status != 404:
-                logger.warning(f"Failed to delete PVC {pvc_name}: {e}")
-
     async def create_container(self, config: ContainerConfig) -> str:
         """
         创建 Kubernetes Pod
@@ -433,8 +334,8 @@ exec python -m executor.interfaces.http.rest
         - 主容器: executor（运行用户代码）
 
         S3 Workspace 挂载：
-        当 workspace_path 以 s3:// 开头时，使用 JuiceFS CSI Driver 创建 PVC，
-        S3 bucket 会自动挂载到容器的 /workspace 目录。
+        当 workspace_path 以 s3:// 开头时，使用 JuiceFS hostPath 方式挂载，
+        S3 bucket 会通过预先挂载的 hostPath 暴露到容器的 /workspace 目录。
 
         Python 依赖安装：
         - 如果有依赖，executor 容器会在启动时安装依赖
@@ -449,14 +350,6 @@ exec python -m executor.interfaces.http.rest
         dependencies_json = config.labels.get("dependencies", "")
         has_dependencies = bool(dependencies_json)
 
-        # 创建 PVC（如果需要 S3 挂载）
-        pvc_name = None
-        if use_s3_mount:
-            pvc_name = await self.create_pvc_for_workspace(
-                session_id=config.name,
-                workspace_path=config.workspace_path,
-            )
-
         # 构建容器列表
         containers = []
 
@@ -470,13 +363,15 @@ exec python -m executor.interfaces.http.rest
 
         # 构建卷
         volumes = []
-        if pvc_name:
-            # S3 挂载：使用 PVC
+        if use_s3_mount and s3_workspace:
+            # S3 挂载：使用 hostPath 指向 JuiceFS 挂载点
+            host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
             volumes.append(
                 V1Volume(
                     name="workspace",
-                    persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-                        claim_name=pvc_name,
+                    host_path=V1HostPathVolumeSource(
+                        path=host_path,
+                        type="DirectoryOrCreate",
                     ),
                 )
             )
@@ -495,8 +390,8 @@ exec python -m executor.interfaces.http.rest
             "sandbox-session": config.name,
             "sandbox-type": "execution",
         }
-        if pvc_name:
-            labels["csi-driver"] = "juicefs"
+        if use_s3_mount:
+            labels["mount-method"] = "hostPath"
         labels.update(config.labels)
 
         # 构建 Pod Spec
@@ -526,7 +421,7 @@ exec python -m executor.interfaces.http.rest
                 namespace=self._namespace,
                 body=pod,
             )
-            mount_method = "CSI" if pvc_name else "emptyDir"
+            mount_method = "hostPath" if use_s3_mount else "emptyDir"
             logger.info(
                 f"Created pod {created_pod.metadata.name} for session {config.name} "
                 f"in namespace {self._namespace} (mount method: {mount_method})"
@@ -535,9 +430,6 @@ exec python -m executor.interfaces.http.rest
 
         except ApiException as e:
             logger.error(f"Failed to create pod: {e}")
-            # 清理已创建的 PVC（如果存在）
-            if pvc_name:
-                await self.delete_pvc_for_workspace(pvc_name, grace_period_seconds=0)
             raise
 
     async def start_container(self, container_id: str) -> None:
@@ -558,28 +450,14 @@ exec python -m executor.interfaces.http.rest
         """
         停止（删除）Pod
 
-        如果使用 CSI Driver 且有关联的 PVC，也会在 Pod 删除后清理 PVC。
+        使用 hostPath 方式时，无需清理 PVC，JuiceFS 挂载点由
+        mount-helper DaemonSet 管理。
 
         Args:
             container_id: Pod 名称
             timeout: 优雅终止超时时间（秒）
         """
         await self._ensure_connected()
-
-        # 在删除 Pod 之前，先获取 PVC 名称（如果使用 CSI）
-        pvc_name = None
-        try:
-            pod = await asyncio.to_thread(
-                self._core_v1.read_namespaced_pod,
-                name=container_id,
-                namespace=self._namespace,
-            )
-            # 从 Pod 标签中获取会话 ID
-            session_id = pod.metadata.labels.get("sandbox-session")
-            if session_id and pod.metadata.labels.get("csi-driver") == "juicefs":
-                pvc_name = self._build_pvc_name(session_id)
-        except Exception:
-            pass
 
         # 删除 Pod
         try:
@@ -597,10 +475,6 @@ exec python -m executor.interfaces.http.rest
                 logger.error(f"Failed to stop pod {container_id}: {e}")
                 raise
 
-        # 删除 PVC（如果存在）
-        if pvc_name:
-            await self.delete_pvc_for_workspace(pvc_name)
-
     async def remove_container(
         self,
         container_id: str,
@@ -609,28 +483,14 @@ exec python -m executor.interfaces.http.rest
         """
         删除 Pod
 
-        如果使用 CSI Driver 且有关联的 PVC，也会在 Pod 删除后清理 PVC。
+        使用 hostPath 方式时，无需清理 PVC，JuiceFS 挂载点由
+        mount-helper DaemonSet 管理。
 
         Args:
             container_id: Pod 名称
             force: 是否强制删除（grace_period_seconds=0）
         """
         await self._ensure_connected()
-
-        # 在删除 Pod 之前，先获取 PVC 名称（如果使用 CSI）
-        pvc_name = None
-        try:
-            pod = await asyncio.to_thread(
-                self._core_v1.read_namespaced_pod,
-                name=container_id,
-                namespace=self._namespace,
-            )
-            # 从 Pod 标签中获取会话 ID
-            session_id = pod.metadata.labels.get("sandbox-session")
-            if session_id and pod.metadata.labels.get("csi-driver") == "juicefs":
-                pvc_name = self._build_pvc_name(session_id)
-        except Exception:
-            pass
 
         # 删除 Pod
         try:
@@ -646,10 +506,6 @@ exec python -m executor.interfaces.http.rest
                 logger.warning(f"Pod {container_id} not found")
             else:
                 logger.warning(f"Failed to remove pod {container_id}: {e}")
-
-        # 删除 PVC（如果存在）
-        if pvc_name:
-            await self.delete_pvc_for_workspace(pvc_name, grace_period_seconds=0 if force else 30)
 
     async def get_container_status(self, container_id: str) -> ContainerInfo:
         """

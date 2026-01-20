@@ -1388,111 +1388,348 @@ class K8sScheduler:
 - `sandbox_control_plane/deploy/k8s/01-configmap.yaml` - 配置管理
 - `sandbox_control_plane/deploy/k8s/02-secret.yaml` - 密钥管理
 - `sandbox_control_plane/deploy/k8s/03-serviceaccount.yaml` - ServiceAccount
-- `sandbox_control_plane/deploy/k8s/04-role.yaml` - RBAC 权限 (包含 PVC 权限)
+- `sandbox_control_plane/deploy/k8s/04-role.yaml` - RBAC 权限
 - `sandbox_control_plane/deploy/k8s/05-control-plane-deployment.yaml` - Control Plane 部署
-- `sandbox_control_plane/deploy/k8s/06-juicefs-csi-driver.yaml` - JuiceFS CSI Driver 部署
 - `sandbox_control_plane/deploy/k8s/07-minio-deployment.yaml` - MinIO 部署
 - `sandbox_control_plane/deploy/k8s/08-mariadb-deployment.yaml` - MariaDB 部署
-- `sandbox_control_plane/deploy/k8s/09-juicefs-setup.yaml` - JuiceFS 配置 (Secret/StorageClass)
+- `sandbox_control_plane/deploy/k8s/09-juicefs-setup.yaml` - JuiceFS 数据库初始化
+- `sandbox_control_plane/deploy/k8s/10-juicefs-hostpath-setup.yaml` - JuiceFS hostPath 挂载助手
 - `sandbox_control_plane/deploy/k8s/deploy.sh` - 一键部署脚本
 
-**S3 CSI Driver 配置说明**：
+**S3 Workspace 挂载配置说明**：
 
-**Implementation Status**: ✅ Fully Implemented (JuiceFS CSI Driver)
+**Implementation Status**: ✅ Fully Implemented (JuiceFS hostPath)
 
-Kubernetes 环境下支持 S3 workspace 挂载，通过以下方式实现：
+## Architecture Overview
 
-1. **JuiceFS CSI Driver 模式** (推荐用于生产):
-   - 使用 JuiceFS CSI Driver 动态创建 PVC
-   - 无需 sidecar 容器，无特权模式要求
-   - 复用现有 MariaDB 作为元数据存储
-   - 60-75% 性能提升相比 s3fs sidecar
+The Sandbox Platform uses **JuiceFS** to provide high-performance, POSIX-compliant file system access to S3-compatible object storage (MinIO) for workspace files. This architecture enables executor pods to access shared workspace files across multiple executions while maintaining cloud-native portability.
 
-2. **s3fs Sidecar 模式** (备用方案，通过 feature flag 禁用 CSI):
-   - 通过 sidecar 容器运行 s3fs
-   - 将 S3 bucket 挂载到共享 EmptyDir 卷
-   - 需要特权模式 (SYS_ADMIN capability)
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           Kubernetes Cluster (sandbox-system)                  │
+│                                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────────┐  │
+│  │  Control Plane Deployment (FastAPI)                                       │  │
+│  │  • Session Management • Template CRUD • Execution API                     │  │
+│  │  • Storage Service (JuiceFS SDK → S3 API fallback)                        │  │
+│  └─────────────────────────────────────┬────────────────────────────────────┘  │
+│                                        │ HTTP                                    │
+│  ┌─────────────────────────────────────▼────────────────────────────────────┐  │
+│  │                     K8s Scheduler Volume Mounting                         │  │
+│  │  ┌────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  juicefs-mount-helper DaemonSet (Privileged)                        │  │  │
+│  │  │  • Mounts JuiceFS → /var/jfs/sandbox-workspace (container)         │  │  │
+│  │  │  • Exposes via hostPath: /var/jfs (host)                           │  │  │
+│  │  │  • FUSE mount to MinIO + MariaDB                                   │  │  │
+│  │  └──────────────────────────┬─────────────────────────────────────────┘  │  │
+│  │                             │ hostPath                                   │  │
+│  │  ┌──────────────────────────▼─────────────────────────────────────────┐  │  │
+│  │  │       Executor Pod (hostPath volume)                                │  │  │
+│  │  │  Volume: workspace → /var/jfs/sandbox-workspace/sessions/{id}/      │  │  │
+│  │  │  Container Mount: /workspace                                        │  │  │
+│  │  │  Executor reads/writes files via standard POSIX I/O                 │  │  │
+│  │  └────────────────────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────────────────┘  │
+│                                        │                                           │
+│  ┌─────────────────────────────────────▼────────────────────────────────────┐  │
+│  │                        Storage Layer (sandbox-system namespace)          │  │
+│  │  ┌──────────────────────────────┐  ┌──────────────────────────────────┐   │  │
+│  │  │ MariaDB (juicefs_metadata)   │  │ MinIO (sandbox-workspace)       │   │  │
+│  │  │ • directory table            │  │ • File data chunks              │   │  │
+│  │  │ • chunk table                │  │ • S3-compatible API             │   │  │
+│  │  │ • inode/attribute metadata   │  │ • Access/Secret keys            │   │  │
+│  │  └──────────────────────────────┘  └──────────────────────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
 
-当前实现支持两种模式自动切换，通过 `USE_CSI_DRIVER` 环境变量控制。
+## Component Breakdown
 
-```yaml
-# JuiceFS CSI Driver StorageClass 定义
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: juicefs-sc
-provisioner: csi.juicefs.com
-parameters:
-  # Secret references for accessing JuiceFS configuration
-  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
-  csi.storage.k8s.io/provisioner-secret-namespace: sandbox-system
-  csi.storage.k8s.io/controller-publish-secret-name: juicefs-secret
-  csi.storage.k8s.io/controller-publish-secret-namespace: sandbox-system
-  csi.storage.k8s.io/node-publish-secret-name: juicefs-secret
-  csi.storage.k8s.io/node-publish-secret-namespace: sandbox-system
-volumeBindingMode: Immediate
-allowVolumeExpansion: true
-reclaimPolicy: Delete
+### 1. MinIO (S3-Compatible Object Storage)
+
+**Purpose**: Stores actual file data chunks for JuiceFS
+
+**Configuration** (`07-minio-deployment.yaml`):
+- Image: `minio/minio:latest`
+- Port: 9000 (API), 9001 (Console)
+- Default Bucket: `sandbox-workspace`
+- Access Keys: `minioadmin` / `minioadmin` (change in production)
+
+**What It Stores**:
+- JuiceFS file data chunks (64MB default chunk size)
+- Metadata: Chunk location, size, checksum
+- Workspace files: User uploaded code, dependencies, output files
+
+**Access URLs**:
+- API: `http://minio.sandbox-system.svc.cluster.local:9000`
+- Console: `http://localhost:9001` (via NodePort/PortForward)
 
 ---
-# JuiceFS Secret (contains MinIO credentials and MariaDB connection)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: juicefs-secret
-  namespace: sandbox-system
-type: Opaque
-stringData:
-  name: "sandbox-workspace"
-  metaurl: "mysql://juicefs:juicefs_password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-  storage: "minio"
-  bucket: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
-  access-key: "minioadmin"
-  secret-key: "minioadmin"
 
-# PVC 模板（由沙箱系统动态创建）
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: workspace-{session-id}
-  namespace: sandbox-runtime
-  labels:
-    app: sandbox-executor
-    sandbox-session: "{session-id}"
-spec:
-  accessModes: [ "ReadWriteMany" ]
-  storageClassName: juicefs-sc
-  resources:
-    requests:
-      storage: 1Pi  # JuiceFS 使用虚拟大小，不影响实际存储
+### 2. MariaDB (JuiceFS Metadata)
+
+**Purpose**: Stores JuiceFS file system metadata (directory structure, inodes, chunk mappings)
+
+**Database Schema** (initialized by `09-juicefs-setup.yaml`):
+
+| Table | Purpose |
+|-------|---------|
+| `directory` | File/directory hierarchy, parent-child relationships |
+| `chunk` | Chunk to S3 object mappings (64MB chunks) |
+| `inode` | File attributes (size, mode, uid, gid, mtime) |
+| `extended` | Extended attributes (xattrs) |
+
+**Key Tables**:
+```sql
+-- directory: maps parent_id + name to inode_id
+CREATE TABLE directory (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  parent_id BIGINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  inode_id BIGINT NOT NULL,
+  UNIQUE KEY (parent_id, name)
+);
+
+-- chunk: maps file offset to S3 chunk key
+CREATE TABLE chunk (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  inode_id BIGINT NOT NULL,
+  offset BIGINT NOT NULL,
+  length BIGINT NOT NULL,
+  chunk_key VARCHAR(255) NOT NULL,
+  UNIQUE KEY (inode_id, offset)
+);
 ```
 
-**注意事项**：
-- **CSI Driver 模式** (JuiceFS): 60-75% 性能提升，无需特权容器，生产推荐
-- **s3fs Sidecar 模式**: 备用方案，需要特权模式，性能较慢
-- S3 挂载性能较本地磁盘慢，适合文件读写不频繁的场景
-- 对于高频读写场景，可考虑使用本地存储 + 异步上传到 S3 的方案
-- 需要配置 IAM Role 或 Secret 提供 S3 访问凭证
+**Connection**:
+- URL: `mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata`
+- Database: `juicefs_metadata`
 
-**环境变量配置**：
+---
+
+### 3. JuiceFS FUSE Mount
+
+**Two Implementation Options**:
+
+#### Option A: hostPath (Current Implementation) ✅
+- **File**: `10-juicefs-hostpath-setup.yaml`
+- **Use Case**: Single-node clusters (Docker Desktop, Kind, Minikube)
+- **How It Works**:
+  1. DaemonSet runs privileged pod on each node
+  2. Mounts JuiceFS FUSE to `/var/jfs/sandbox-workspace` (container path)
+  3. Exposes mount via hostPath `/var/jfs` to host
+  4. Executor pods mount hostPath to `/workspace`
+
+#### Option B: CSI Driver (Production-Recommended)
+- **File**: `06-juicefs-csi-driver.yaml`
+- **Use Case**: Multi-node clusters (EKS, GKE, AKS)
+- **Advantages**:
+  - Automatic mount propagation across nodes
+  - No privileged containers required
+  - Better failure recovery
+  - Dynamic provisioning support
+
+**FUSE Mount Command**:
+```bash
+/usr/bin/juicefs mount \
+  --meta="mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata" \
+  --storage="minio" \
+  --bucket="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace" \
+  /var/jfs/sandbox-workspace
+```
+
+---
+
+### 4. Control Plane Storage Service
+
+**Priority Order** (from `src/infrastructure/dependencies.py`):
+
+1. **JuiceFS SDK** (`juicefs_storage.py`):
+   - Direct Python SDK writes to JuiceFS
+   - Ensures metadata sync to MariaDB
+   - Falls back to S3 if SDK not available
+
+2. **S3 API** (`s3_storage.py`):
+   - Standard boto3 S3 client
+   - Bypasses JuiceFS metadata layer
+   - Direct writes to MinIO
+
+3. **Mock Storage** (`mock_storage.py`):
+   - In-memory filesystem for testing
+   - No external dependencies
+
+**Environment Variables**:
+```bash
+# JuiceFS SDK (Priority 1)
+JUICEFS_ENABLED=true
+JUICEFS_METAURL=mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata
+JUICEFS_STORAGE_TYPE=minio
+JUICEFS_BUCKET=http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace
+JUICEFS_ACCESS_KEY=minioadmin
+JUICEFS_SECRET_KEY=minioadmin
+
+# S3 Fallback (Priority 2)
+S3_ENDPOINT_URL=http://minio.sandbox-system.svc.cluster.local:9000
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+S3_BUCKET=sandbox-workspace
+```
+
+---
+
+### 5. K8s Scheduler (Volume Mounting)
+
+**Code Location**: `src/infrastructure/container_scheduler/k8s_scheduler.py`
+
+**Volume Creation Logic**:
+```python
+# Line 169-183: Build hostPath for S3 workspace
+def _build_juicefs_host_path(self, s3_prefix: str) -> str:
+    settings = get_settings()
+    base_path = settings.juicefs_host_path.rstrip('/')  # /var/jfs/sandbox-workspace
+    return f"{base_path}/{s3_prefix}"  # /var/jfs/sandbox-workspace/sessions/{id}/workspace
+
+# Line 366-377: Create hostPath volume
+if use_s3_mount and s3_workspace:
+    host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
+    volumes.append(
+        V1Volume(
+            name="workspace",
+            host_path=V1HostPathVolumeSource(
+                path=host_path,
+                type="DirectoryOrCreate",
+            ),
+        )
+    )
+```
+
+**Executor Environment Variables** (Line 208-214):
+```python
+env_vars.extend([
+    V1EnvVar(name="WORKSPACE_PATH", value="/workspace"),
+    V1EnvVar(name="S3_BUCKET", value=s3_workspace["bucket"]),  # sandbox-workspace
+    V1EnvVar(name="S3_PREFIX", value=s3_workspace["prefix"]),  # sessions/{id}/workspace
+])
+```
+
+---
+
+## Data Flow: File Upload → Executor Access
+
+### Scenario: User uploads `main.py` to session workspace
+
+```
+1. Client Request
+   POST /api/v1/sessions/{session_id}/files
+   Body: multipart/form-data { file: main.py }
+
+2. Control Plane API Handler (src/interfaces/http/routes/files.py)
+   └─> UploadFileUseCase (application/use_cases/file_upload.py)
+       └─> IStorageService.upload_file()
+
+3. Storage Service (src/infrastructure/storage/juicefs_storage.py)
+   ├─> JuiceFS SDK: client.write_file("sessions/{id}/workspace/main.py", content)
+   │   └─> FUSE writes to /var/jfs/sandbox-workspace/sessions/{id}/workspace/main.py
+   │       └─> JuiceFS driver:
+   │           ├─> MariaDB: INSERT INTO directory (parent_id, name, inode_id)
+   │           ├─> MariaDB: INSERT INTO chunk (inode_id, offset, chunk_key)
+   │           └─> MinIO: PUT object to chunk_key (s3://sandbox-workspace/chunks/...)
+   └─> OR S3 Fallback: boto3.client.put_object(Bucket="sandbox-workspace", Key=...)
+
+4. K8s Scheduler Creates Pod
+   └─> k8s_scheduler.create_container()
+       └─> V1Volume with hostPath=/var/jfs/sandbox-workspace/sessions/{id}/workspace
+
+5. Executor Pod Starts
+   └─> VolumeMount: /workspace → hostPath
+       └─> FUSE mount visible at /workspace/main.py
+
+6. Executor Reads File
+   └─> Python open("/workspace/main.py", "r")
+       └─> Standard POSIX read() syscall
+           └─> FUSE driver:
+               ├─> MariaDB: SELECT chunk FROM chunk WHERE inode_id=... AND offset=...
+               └─> MinIO: GET object chunks/...
+                   └─> Reassemble file and return to application
+```
+
+---
+
+## Key Configuration Files
+
+| File | Purpose | Key Settings |
+|------|---------|--------------|
+| `deploy/k8s/07-minio-deployment.yaml` | MinIO deployment | Bucket, access keys, persistence |
+| `deploy/k8s/08-mariadb-deployment.yaml` | MariaDB deployment | Database credentials, storage |
+| `deploy/k8s/09-juicefs-setup.yaml` | JuiceFS format job | Database init, filesystem format |
+| `deploy/k8s/10-juicefs-hostpath-setup.yaml` | hostPath mount helper | FUSE mount command, privileged mode |
+| `deploy/k8s/06-juicefs-csi-driver.yaml` | CSI driver (optional) | DaemonSet for multi-node clusters |
+| `src/infrastructure/config/settings.py` | Environment config | JuiceFS URLs, S3 credentials |
+| `src/infrastructure/storage/juicefs_storage.py` | JuiceFS SDK wrapper | Write operations via Python SDK |
+| `src/infrastructure/storage/s3_storage.py` | S3 fallback wrapper | boto3 client operations |
+| `src/infrastructure/container_scheduler/k8s_scheduler.py` | Pod volume mounting | hostPath volume creation |
+
+---
+
+## Environment Variables
+
+**Complete Configuration** (`.env` or ConfigMap):
 
 ```bash
-# CSI Driver 特性开关
-USE_CSI_DRIVER=true                 # 使用 CSI Driver (默认: false)
-CSI_STORAGE_CLASS=juicefs-sc        # CSI StorageClass 名称
-JUICEFS_METAURL=mysql://juicefs:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata
+# ============== MinIO Configuration ==============
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=minioadmin
+S3_ENDPOINT_URL=http://minio.sandbox-system.svc.cluster.local:9000
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+S3_BUCKET=sandbox-workspace
+S3_REGION=us-east-1
+
+# ============== MariaDB Configuration ==============
+MARIADB_ROOT_PASSWORD=password
+JUICEFS_METAURL=mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata
+
+# ============== JuiceFS Configuration ==============
+JUICEFS_ENABLED=true                    # Enable JuiceFS SDK
+JUICEFS_HOST_PATH=/var/jfs/sandbox-workspace  # hostPath mount point
+JUICEFS_STORAGE_TYPE=minio              # Storage backend
+JUICEFS_BUCKET=http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace
+JUICEFS_ACCESS_KEY=minioadmin
+JUICEFS_SECRET_KEY=minioadmin
+
+# ============== Control Plane Configuration ==============
+DATABASE_URL=mysql+aiomysql://sandbox:password@mariadb.sandbox-system.svc.cluster.local:3306/sandbox
+KUBERNETES_NAMESPACE=sandbox-runtime
 ```
 
-**性能对比**：
+---
 
-| 指标 | s3fs Sidecar | JuiceFS CSI | 提升 |
-|------|-------------|-------------|------|
-| Pod 启动 | 8-12s | 2-3s | 60-75% |
-| 文件读取 | 100-200ms | 20-50ms | 60-75% |
-| 文件写入 | 150-300ms | 30-80ms | 60-73% |
-| CPU 使用 | 5-10% | 1-2% | 80% |
-| 内存使用 | 50-100MB | 20-40MB | 60% |
-| 特权模式 | 必需 | 不需要 | ✅ |
+## Summary
+
+**Critical Insights**:
+
+1. **JuiceFS = Metadata (MariaDB) + Data (MinIO)**: File metadata is stored in MariaDB for fast lookups, while actual file chunks are stored in MinIO. This hybrid architecture provides both metadata performance and scalable object storage.
+
+2. **FUSE Mount = POSIX Bridge**: The mount-helper DaemonSet uses FUSE to present S3 object storage as a standard POSIX filesystem. Executor pods see `/workspace` as a normal directory and use standard `open()`, `read()`, `write()` calls.
+
+3. **hostPath = Node-Level Mount Sharing**: In the hostPath approach, the FUSE mount is created once per node (by the DaemonSet) and shared with all pods on that node via hostPath. This is efficient but requires single-node or manually-coordinated multi-node setups.
+
+4. **CSI Driver = Production-Grade Alternative**: For production multi-node clusters, the CSI Driver (`06-juicefs-csi-driver.yaml`) should be used instead of hostPath. It provides automatic mount management, better failure recovery, and no privileged containers.
+
+5. **Storage Service Abstraction**: The Control Plane's storage service (`IStorageService`) abstracts the underlying storage implementation. It tries JuiceFS SDK first (for metadata-aware writes), then falls back to direct S3 API, then to in-memory mock for testing.
+
+6. **File Upload Flow**: When files are uploaded via API, they go through the Storage Service → JuiceFS SDK → FUSE mount → MariaDB (metadata) + MinIO (data). When executors read files, they use standard POSIX I/O → FUSE driver → MariaDB (chunk lookup) + MinIO (chunk data).
+
+**Performance Comparison** (vs. s3fs Sidecar):
+
+| Metric | s3fs Sidecar | JuiceFS CSI | Improvement |
+|--------|-------------|-------------|-------------|
+| Pod Startup | 8-12s | 2-3s | **60-75%** |
+| File Read | 100-200ms | 20-50ms | **60-75%** |
+| File Write | 150-300ms | 30-80ms | **60-73%** |
+| CPU Usage | 5-10% | 1-2% | **80%** |
+| Memory Usage | 50-100MB | 20-40MB | **60%** |
+| Privileged Mode | Required | Not Required (CSI) | ✅ |
 
 ### 2.3 执行器 (Executor)
 
@@ -2865,60 +3102,68 @@ flowchart TD
 
 本节详细描述 S3 workspace 挂载的实现机制，使容器内的用户代码能够像访问本地文件系统一样访问 S3 对象存储。
 
-#### 4.4.1 架构概述
+**Implementation Status**: ✅ Fully Implemented (JuiceFS hostPath)
+
+#### 4.4.1 架构概述（Kubernetes - JuiceFS hostPath）
+
+Kubernetes 环境使用 **JuiceFS hostPath 方式**实现 S3 workspace 挂载，适合单节点开发环境（Docker Desktop、Kind、Minikube）。
 
 ```mermaid
 flowchart LR
     subgraph ControlPlane["Control Plane"]
         FileAPI["文件 API<br/>/sessions/{id}/files/*"]
         SessionService["Session Service"]
-        S3Storage["S3Storage Service<br/>(boto3)"]
+        K8sScheduler["K8s Scheduler<br/>hostPath Mode"]
     end
 
-    subgraph DockerScheduler["Docker Scheduler"]
-        DetectS3["检测 S3 Workspace<br/>workspace_path starts with s3://"]
-        MountConfig["配置 S3 挂载<br/>- SYS_ADMIN capability<br/>- /dev/fuse device<br/>- s3fs entrypoint"]
+    subgraph K8sCluster["Kubernetes Cluster"]
+        subgraph MountHelper["Mount Helper DaemonSet<br/>(Privileged)"]
+            JuiceFSMount["JuiceFS Mount<br/>/jfs/sandbox-workspace"]
+            HostPath["hostPath<br/>/mnt/jfs"]
+        end
+
+        subgraph ExecutorPod["Executor Pod"]
+            HostPathVolume["hostPath Volume<br/>/mnt/jfs/.../sessions/{id}"]
+            WorkspaceMount["/workspace Mount"]
+            Executor["Executor<br/>(sandbox-executor)"]
+        end
     end
 
-    subgraph ExecutorContainer["Executor Container"]
-        Entrypoint["Entrypoint Script<br/>(s3fs mount)"]
-        S3FSMount["/mnt/s3-root<br/>(s3fs 挂载点)"]
-        WorkspaceSymlink["/workspace<br/>→ /mnt/s3-root/sessions/{id}"]
-        Executor["Executor<br/>(sandbox-executor)"]
+    subgraph StorageLayer["Storage Layer"]
+        MariaDB["MariaDB<br/>(Metadata)"]
+        MinIO["MinIO<br/>(File Data)"]
     end
 
-    subgraph S3Backend["S3 / MinIO"]
-        Bucket["sandbox-workspace<br/>/sessions/{session_id}/<br/>├── uploads/<br/>└── artifacts/"]
-    end
+    FileAPI -->|"上传/下载"| S3Storage["S3Storage Service"]
+    SessionService -->|"创建会话<br/>workspace_path=s3://..."| K8sScheduler
+    K8sScheduler -->|"创建 Pod<br/>hostPath: /mnt/jfs/..."| HostPathVolume
 
-    FileAPI -->|"上传/下载"| S3Storage
-    SessionService -->|"创建会话<br/>workspace_path=s3://..."| DetectS3
-    S3Storage <-->|"boto3 API"| Bucket
+    JuiceFSMount <-->|"FUSE Mount"| HostPath
+    HostPath -.->|"共享挂载点"| HostPathVolume
+    HostPathVolume -->|"容器内挂载"| WorkspaceMount
+    WorkspaceMount -->|"文件读写"| Executor
 
-    DetectS3 -->|"需要 S3 挂载"| MountConfig
-    MountConfig -->|"生成 entrypoint 脚本<br/>包含 S3 凭证"| Entrypoint
-    Entrypoint -->|"s3fs 命令"| S3FSMount
-    S3FSMount -->|"符号链接"| WorkspaceSymlink
-    WorkspaceSymlink -->|"文件读写"| Executor
-    S3FSMount <-->|"FUSE"| Bucket
+    JuiceFSMount <-->|"元数据"| MariaDB
+    JuiceFSMount <-->|"文件数据"| MinIO
 
     style ControlPlane fill:#bbdefb
-    style DockerScheduler fill:#c8e6c9
-    style ExecutorContainer fill:#fff9c4
-    style S3Backend fill:#f8bbd0
+    style K8sCluster fill:#c8e6c9
+    style ExecutorPod fill:#fff9c4
+    style StorageLayer fill:#f8bbd0
+    style MountHelper fill:#ffccbc
 ```
 
 **关键设计决策**：
 
 | 组件 | 方案 | 说明 |
 |------|------|------|
-| 挂载方式 | **s3fs-fuse** | 用户态文件系统，无需内核模块 |
-| 挂载点 | `/mnt/s3-root` + 符号链接 | 支持多 session 共享 bucket |
-| 运行用户 | root → gosu sandbox 1000:1000 | 挂载需要 root，执行降权 |
-| 能力要求 | SYS_ADMIN + /dev/fuse | FUSE 挂载必需 |
-| 缓存策略 | tmpfs 100M at /tmp | s3fs 缓存元数据和小文件 |
+| 挂载方式 | **JuiceFS hostPath** | 通过 DaemonSet 预挂载，hostPath 共享 |
+| 挂载助手 | DaemonSet（特权） | 在每个节点运行，挂载 JuiceFS 到 `/jfs` |
+| 容器挂载点 | `/workspace` | 映射到 hostPath `/mnt/jfs/sandbox-workspace/sessions/{id}/` |
+| 元数据存储 | MariaDB | JuiceFS 元数据（目录结构、块信息） |
+| 文件数据存储 | MinIO | 实际文件内容 |
 
-#### 4.4.2 Docker Scheduler 实现
+#### 4.4.2 Kubernetes Scheduler 实现
 
 **S3 Workspace 检测**：
 
@@ -2935,88 +3180,123 @@ def _parse_s3_workspace(self, workspace_path: str) -> Optional[dict]:
     }
 ```
 
-**容器配置增强**：
+**hostPath 卷配置**：
 
 ```python
-# 当 workspace_path 以 s3:// 开头时
+def _build_juicefs_host_path(self, s3_prefix: str) -> str:
+    """构建 JuiceFS hostPath 路径"""
+    settings = get_settings()
+    base_path = settings.juicefs_host_path.rstrip('/')  # /mnt/jfs/sandbox-workspace
+    return f"{base_path}/{s3_prefix}"
+
+# 创建 Pod 时
 if s3_workspace := self._parse_s3_workspace(config.workspace_path):
-    container_config["User"] = "root"  # 临时使用 root 执行 s3fs
-    container_config["HostConfig"]["CapAdd"] = ["SYS_ADMIN"]  # FUSE 需要
-    container_config["HostConfig"]["Devices"] = [
-        {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse", "CgroupPermissions": "rwm"}
-    ]
-    container_config["HostConfig"]["Tmpfs"] = {"/tmp": "size=100M,mode=1777"}  # s3fs 缓存
+    host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
 
-    # 生成 entrypoint 脚本
-    entrypoint_script = self._build_s3_mount_entrypoint(
-        s3_bucket=s3_workspace["bucket"],
-        s3_prefix=s3_workspace["prefix"],
-        s3_endpoint_url=settings.s3_endpoint_url or "",
-        s3_access_key=settings.s3_access_key_id,
-        s3_secret_key=settings.s3_secret_access_key,
+    volumes.append(
+        V1Volume(
+            name="workspace",
+            host_path=V1HostPathVolumeSource(
+                path=host_path,
+                type="DirectoryOrCreate",
+            ),
+        )
     )
-    container_config["Entrypoint"] = ["/bin/sh", "-c"]
-    container_config["Cmd"] = [entrypoint_script]
 ```
 
-**Entrypoint 脚本生成**：
+**Pod 模板示例**：
 
-```python
-def _build_s3_mount_entrypoint(self, s3_bucket: str, s3_prefix: str,
-                               s3_endpoint_url: str, s3_access_key: str,
-                               s3_secret_key: str) -> str:
-    """构建容器启动脚本，用于挂载 S3 bucket"""
-    # 对于 MinIO，需要使用 use_path_request_style
-    path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
-
-    return f"""#!/bin/sh
-set -e
-
-# 创建 s3fs 凭证文件
-echo "{s3_access_key}:{s3_secret_key}" > /tmp/.passwd-s3fs
-chmod 600 /tmp/.passwd-s3fs
-
-# 1. 创建 S3 挂载点（挂载整个 bucket）
-echo "Mounting S3 bucket {s3_bucket}..."
-mkdir -p /mnt/s3-root
-s3fs {s3_bucket} /mnt/s3-root \\
-    -o passwd_file=/tmp/.passwd-s3fs \\
-    -o url={s3_endpoint_url or "https://s3.amazonaws.com"} \\
-    {path_style_option} \\
-    -o allow_other \\
-    -o umask=000
-
-# 2. 创建 session workspace 目录（如果不存在）
-SESSION_PATH="/mnt/s3-root/{s3_prefix}"
-echo "Ensuring session workspace exists: $SESSION_PATH"
-mkdir -p "$SESSION_PATH"
-
-# 3. 将 /workspace 移动到临时位置
-mv /workspace /workspace-old 2>/dev/null || true
-
-# 4. 创建符号链接从 /workspace 到 session 目录
-ln -s "$SESSION_PATH" /workspace
-
-# 5. 验证符号链接
-echo "Workspace symlink: $(ls -la /workspace)"
-
-# 6. 使用 gosu 切换到 sandbox 用户运行 executor
-echo "Starting sandbox executor as sandbox user..."
-exec gosu sandbox python -m executor.interfaces.http.rest
-"""
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: executor-session-123
+  namespace: sandbox-runtime
+spec:
+  containers:
+    - name: executor
+      image: sandbox-executor:latest
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+      # 不需要特权模式或额外能力
+  volumes:
+    - name: workspace
+      hostPath:
+        path: /mnt/jfs/sandbox-workspace/sessions/session-123
+        type: DirectoryOrCreate
 ```
 
-#### 4.4.3 Executor 镜像要求
+#### 4.4.3 JuiceFS 挂载助手配置
 
-**Dockerfile 关键配置**：
+**DaemonSet 定义**：
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: juicefs-mount-helper
+  namespace: sandbox-system
+spec:
+  selector:
+    matchLabels:
+      app: juicefs-mount-helper
+  template:
+    spec:
+      hostNetwork: false
+      securityContext:
+        runAsUser: 0
+        fsGroup: 0
+      containers:
+        - name: mount-helper
+          image: juicedata/juicefs-fuse:latest
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          env:
+            - name: JFS_META_URL
+              value: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
+            - name: JFS_STORAGE_TYPE
+              value: "minio"
+            - name: JFS_BUCKET
+              value: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+            - name: JFS_ACCESS_KEY
+              value: "minioadmin"
+            - name: JFS_SECRET_KEY
+              value: "minioadmin"
+          command:
+            - sh
+            - -c
+            - |
+              /usr/bin/juicefs mount \
+                --meta="${JFS_META_URL}" \
+                --storage="${JFS_STORAGE_TYPE}" \
+                --bucket="${JFS_BUCKET}" \
+                --access-key="${JFS_ACCESS_KEY}" \
+                --secret-key="${JFS_SECRET_KEY}" \
+                /jfs/sandbox-workspace
+              tail -f /dev/null
+          volumeMounts:
+            - name: juicefs-mount
+              mountPath: /jfs
+      volumes:
+        - name: juicefs-mount
+          hostPath:
+            path: /mnt/jfs
+            type: DirectoryOrCreate
+```
+
+#### 4.4.4 Executor 镜像要求
+
+**Dockerfile 配置（简化）**：
 
 ```dockerfile
 FROM python:3.11-slim
 
-# 安装 s3fs（S3 挂载必需）
+# 安装基础依赖（无需 s3fs）
 RUN apt-get update && apt-get install -y \
-    s3fs \
-    gosu \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -3029,13 +3309,21 @@ RUN groupadd -g 1000 sandbox && \
 RUN mkdir -p /workspace && \
     chown -R sandbox:sandbox /workspace
 
-# 切换到非特权用户
 USER sandbox
 WORKDIR /workspace
 
 EXPOSE 8080
 CMD ["python", "-m", "executor.interfaces.http.rest"]
 ```
+
+**关键差异**（相比 s3fs sidecar 方式）：
+
+| 特性 | s3fs Sidecar | JuiceFS hostPath |
+|------|-------------|-----------------|
+| 镜像大小 | 较大（包含 s3fs） | 较小（无需 s3fs） |
+| 特权要求 | Executor 容器需要 | 仅挂载助手需要 |
+| 启动脚本 | 需要挂载脚本 | 无需特殊脚本 |
+| 运行用户 | root → sandbox | 直接 sandbox |
 
 #### 4.4.4 文件 API 实现
 
@@ -3171,25 +3459,122 @@ async def terminate_session(self, session_id: str) -> SessionDTO:
 
 #### 4.4.6 配置说明
 
-**环境变量**：
+**环境变量（JuiceFS hostPath 方式）**：
 
 ```bash
-# S3/MinIO 配置
+# S3/MinIO 配置（用于 JuiceFS 文件数据存储）
 S3_BUCKET=sandbox-workspace          # 存储桶名称
 S3_REGION=us-east-1                 # 区域
 S3_ACCESS_KEY_ID=minioadmin         # 访问密钥 ID
 S3_SECRET_ACCESS_KEY=minioadmin     # 访问密钥
 S3_ENDPOINT_URL=http://minio:9000   # MinIO 端点（AWS S3 留空）
+
+# JuiceFS hostPath 配置
+JUICEFS_HOST_PATH=/mnt/jfs/sandbox-workspace
+JUICEFS_METAURL=mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata
+JUICEFS_STORAGE_TYPE=minio
+JUICEFS_BUCKET=http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace
+JUICEFS_ACCESS_KEY=minioadmin
+JUICEFS_SECRET_KEY=minioadmin
 ```
 
-**docker-compose.yml 配置示例**：
+**K8s ConfigMap 配置**：
 
 ```yaml
-services:
-  control-plane:
-    environment:
-      - S3_ENDPOINT_URL=http://minio:9000
-      - S3_ACCESS_KEY_ID=minioadmin
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-config
+  namespace: sandbox-system
+data:
+  # JuiceFS hostPath 配置
+  JUICEFS_HOST_PATH: "/mnt/jfs/sandbox-workspace"
+  JUICEFS_METAURL: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
+  JUICEFS_STORAGE_TYPE: "minio"
+  JUICEFS_BUCKET: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+```
+
+**K8s Secret 配置**：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-secrets
+  namespace: sandbox-system
+type: Opaque
+stringData:
+  # S3 凭证（用于 JuiceFS）
+  S3_ACCESS_KEY_ID: minioadmin
+  S3_SECRET_ACCESS_KEY: minioadmin
+```
+
+**部署顺序**：
+
+```bash
+# 1. 基础资源
+kubectl apply -f 00-namespace.yaml
+kubectl apply -f 01-configmap.yaml
+kubectl apply -f 02-secret.yaml
+kubectl apply -f 03-serviceaccount.yaml
+kubectl apply -f 04-role.yaml
+
+# 2. 存储层
+kubectl apply -f 08-mariadb-deployment.yaml
+kubectl apply -f 07-minio-deployment.yaml
+
+# 3. JuiceFS 数据库初始化
+kubectl apply -f 09-juicefs-setup.yaml
+
+# 4. JuiceFS hostPath 挂载助手
+kubectl apply -f 10-juicefs-hostpath-setup.yaml
+
+# 5. Control Plane
+kubectl apply -f 05-control-plane-deployment.yaml
+```
+
+#### 4.4.7 部署验证
+
+**检查 JuiceFS 挂载助手**：
+
+```bash
+# 检查 DaemonSet 状态
+kubectl get ds -n sandbox-system juicefs-mount-helper
+
+# 检查 Pod 状态
+kubectl get pods -n sandbox-system -l app=juicefs-mount-helper
+
+# 验证挂载点
+MOUNT_HELPER_POD=$(kubectl get pods -n sandbox-system -l app=juicefs-mount-helper -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n sandbox-system "$MOUNT_HELPER_POD" -- ls -la /jfs/sandbox-workspace
+```
+
+**检查数据库**：
+
+```bash
+# 验证 JuiceFS 数据库
+kubectl exec -n sandbox-system deployment/mariadb -- \
+  mariadb -u root -p"password" -e "SHOW DATABASES LIKE 'juicefs%';"
+```
+
+**测试 S3 挂载**：
+
+```bash
+# 创建测试会话（S3 workspace）
+curl -X POST http://localhost:8000/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "template_id": "python-basic",
+    "workspace_path": "s3://sandbox-workspace/sessions/test-001/"
+  }'
+
+# 检查 Pod 是否创建
+kubectl get pods -n sandbox-runtime -l sandbox-session=test-001
+
+# 检查挂载点
+TEST_POD=$(kubectl get pods -n sandbox-runtime -l sandbox-session=test-001 -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n sandbox-runtime "$TEST_POD" -- ls -la /workspace
+```
       - S3_SECRET_ACCESS_KEY=minioadmin
       - S3_BUCKET=sandbox-workspace
       - S3_REGION=us-east-1

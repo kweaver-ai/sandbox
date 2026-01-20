@@ -578,13 +578,12 @@ _storage_service_singleton = None
 
 def get_storage_service():
     """
-    获取存储服务（S3 或 Mock）
+    获取存储服务（JuiceFS、S3 或 Mock）
 
-    根据环境变量配置决定使用 S3Storage 还是 MockStorageService。
-    如果设置了 S3_ACCESS_KEY_ID，则使用 S3Storage，否则使用 MockStorageService。
-
-    Note: This function returns a cached singleton to ensure consistent behavior
-    when used with FastAPI's Depends().
+    优先级：
+    1. JuiceFSStorage（如果 juicefs_enabled=True 且 SDK 可用）
+    2. S3Storage（如果配置了 S3 访问密钥）
+    3. MockStorageService（开发环境）
     """
     global _storage_service_singleton
 
@@ -593,14 +592,28 @@ def get_storage_service():
 
     settings = get_settings()
 
-    # 如果配置了 S3 访问密钥，使用 S3Storage
+    # 优先检查 JuiceFS
+    if settings.juicefs_enabled:
+        try:
+            from src.infrastructure.storage.juicefs_storage import JuiceFSStorage
+            _storage_service_singleton = JuiceFSStorage()
+            logger.info(f"Using JuiceFS storage: meta={settings.juicefs_metaurl}")
+            return _storage_service_singleton
+        except ImportError as e:
+            logger.warning(f"JuiceFS enabled but SDK not available: {e}. Falling back to S3.")
+        except Exception as e:
+            logger.error(f"Failed to initialize JuiceFS: {e}. Falling back to S3.")
+
+    # 降级到 S3
     if settings.s3_access_key_id:
         from src.infrastructure.storage.s3_storage import S3Storage
         _storage_service_singleton = S3Storage()
-    else:
-        # 否则使用 MockStorageService
-        _storage_service_singleton = MockStorageService()
+        logger.info(f"Using S3 storage: endpoint={settings.s3_endpoint_url}")
+        return _storage_service_singleton
 
+    # 最终降级到 Mock
+    logger.warning("No storage backend configured, using MockStorageService")
+    _storage_service_singleton = MockStorageService()
     return _storage_service_singleton
 
 

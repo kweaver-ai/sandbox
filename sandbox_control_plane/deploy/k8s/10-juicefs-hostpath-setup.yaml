@@ -1,0 +1,265 @@
+---
+# JuiceFS HostPath Setup for Sandbox Platform
+#
+# This manifest sets up JuiceFS using hostPath mounting method.
+# This is a simpler approach suitable for:
+# - Single-node clusters (Docker Desktop, minikube, kind)
+# - Development/testing environments
+#
+# Prerequisites:
+# - MariaDB must be deployed (08-mariadb-deployment.yaml)
+# - MinIO must be deployed (07-minio-deployment.yaml)
+# - JuiceFS database initialized (09-juicefs-setup.yaml)
+#
+# Architecture:
+# 1. A privileged "mount-helper" pod mounts JuiceFS to /jfs/sandbox-workspace
+# 2. This directory is mapped to hostPath /mnt/jfs/sandbox-workspace
+# 3. Executor pods use hostPath to mount the same directory
+#
+# Installation:
+#   kubectl apply -f deploy/k8s/10-juicefs-hostpath-setup.yaml
+#
+# Verification:
+#   kubectl get pod -n sandbox-system -l app=juicefs-mount-helper
+#   kubectl exec -n sandbox-system juicefs-mount-helper -- ls /jfs
+
+---
+# DaemonSet for JuiceFS mount helper
+# This privileged pod mounts JuiceFS and shares it via hostPath
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: juicefs-mount-helper
+  namespace: sandbox-system
+  labels:
+    app: juicefs-mount-helper
+spec:
+  selector:
+    matchLabels:
+      app: juicefs-mount-helper
+  template:
+    metadata:
+      labels:
+        app: juicefs-mount-helper
+    spec:
+      # Run on each node to ensure mount is available everywhere
+      hostNetwork: false
+
+      # Run as root to perform mount operations
+      securityContext:
+        runAsUser: 0
+        fsGroup: 0
+
+      # Init container to wait for MariaDB
+      initContainers:
+        - name: wait-for-mariadb
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mariadb.sandbox-system.svc.cluster.local 3306; do
+                echo "Waiting for MariaDB..."
+                sleep 2
+              done
+              echo "MariaDB is ready!"
+
+      containers:
+        - name: mount-helper
+          image: juicedata/juicefs-fuse:ce-nightly
+          imagePullPolicy: IfNotPresent
+
+          # Privileged mode required for FUSE mounting
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+
+          env:
+            - name: JFS_META_URL
+              value: "mysql://root:password@tcp(mariadb.sandbox-system.svc.cluster.local:3306)/juicefs_metadata"
+            - name: JFS_STORAGE_TYPE
+              value: "minio"
+            - name: JFS_BUCKET
+              value: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+            - name: JFS_ACCESS_KEY
+              value: "minioadmin"
+            - name: JFS_SECRET_KEY
+              value: "minioadmin"
+            - name: JFS_MOUNT_POINT
+              value: "/var/jfs/sandbox-workspace"
+
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              echo "=== JuiceFS Mount Helper ==="
+              echo "Mount Point: ${JFS_MOUNT_POINT}"
+              echo "Meta URL: ${JFS_META_URL}"
+              echo "Storage: ${JFS_STORAGE_TYPE}"
+              echo "Bucket: ${JFS_BUCKET}"
+
+              # Create mount point
+              mkdir -p "${JFS_MOUNT_POINT}"
+
+              # Check if already mounted
+              if mountpoint -q "${JFS_MOUNT_POINT}"; then
+                echo "JuiceFS already mounted at ${JFS_MOUNT_POINT}"
+                echo "Keeping mount alive..."
+                # Keep container running
+                tail -f /dev/null
+              else
+                echo "Mounting JuiceFS..."
+
+                # Find juicefs binary location
+                JFS_BIN=""
+                for path in /usr/local/bin/juicefs /usr/bin/juicefs juicefs; do
+                  if command -v $path &> /dev/null || [ -x "$(which $path 2>/dev/null)" ]; then
+                    JFS_BIN=$(command -v $path 2>/dev/null || echo $path)
+                    break
+                  fi
+                done
+
+                # If still not found, try common paths
+                if [ -z "$JFS_BIN" ] || [ ! -f "$JFS_BIN" ]; then
+                  for path in /usr/local/bin/juicefs /usr/bin/juicefs /bin/juicefs; do
+                    if [ -x "$path" ]; then
+                      JFS_BIN="$path"
+                      break
+                    fi
+                  done
+                fi
+
+                if [ -z "$JFS_BIN" ] || [ ! -f "$JFS_BIN" ]; then
+                  echo "Error: JuiceFS binary not found!"
+                  echo "Searching in common locations:"
+                  find / -name "juicefs" -type f 2>/dev/null || true
+                  exit 1
+                fi
+
+                echo "Found JuiceFS binary at: ${JFS_BIN}"
+
+                # Mount JuiceFS using CE version syntax
+                # CE version: juicefs mount <meta-url> <mount-point>
+                # Storage options are passed via environment variables
+                export AWS_ACCESS_KEY_ID="${JFS_ACCESS_KEY}"
+                export AWS_SECRET_ACCESS_KEY="${JFS_SECRET_KEY}"
+
+                "${JFS_BIN}" mount \
+                  "${JFS_META_URL}" \
+                  "${JFS_MOUNT_POINT}"
+
+                echo "JuiceFS mounted successfully!"
+
+                # Verify mount
+                ls -la "${JFS_MOUNT_POINT}"
+
+                # Create sessions directory
+                mkdir -p "${JFS_MOUNT_POINT}/sessions"
+
+                echo "=== Mount Helper Ready ==="
+                echo "Keeping mount alive..."
+                # Keep container running to maintain mount
+                tail -f /dev/null
+              fi
+
+          volumeMounts:
+            - name: juicefs-mount
+              mountPath: /var/jfs
+              mountPropagation: Bidirectional
+
+      volumes:
+        - name: juicefs-mount
+          hostPath:
+            path: /var/jfs
+            type: DirectoryOrCreate
+
+      # Don't restart automatically - let Kubernetes restart if needed
+      restartPolicy: Always
+
+---
+# ConfigMap for mounting script (alternative approach)
+# This can be used to manually mount JuiceFS on the host
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: juicefs-mount-script
+  namespace: sandbox-system
+data:
+  mount-juicefs.sh: |
+    #!/bin/bash
+    # JuiceFS Mount Script for Kubernetes Host
+    #
+    # This script mounts JuiceFS on the Kubernetes node host.
+    # It should be run during node initialization or via systemd service.
+    #
+    # Usage:
+    #   sudo ./mount-juicefs.sh
+
+    set -e
+
+    # Configuration
+    JFS_META_URL="mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
+    JFS_STORAGE_TYPE="minio"
+    JFS_BUCKET="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+    JFS_ACCESS_KEY="minioadmin"
+    JFS_SECRET_KEY="minioadmin"
+    JFS_MOUNT_POINT="/mnt/jfs/sandbox-workspace"
+
+    echo "=== JuiceFS Host Mount Script ==="
+    echo "Mount Point: ${JFS_MOUNT_POINT}"
+
+    # Check if JuiceFS client is installed
+    if ! command -v juicefs &> /dev/null; then
+      echo "Error: JuiceFS client not found!"
+      echo "Please install JuiceFS: https://juicefs.com/docs/community/installation"
+      exit 1
+    fi
+
+    # Create mount point directory
+    sudo mkdir -p "${JFS_MOUNT_POINT}"
+
+    # Check if already mounted
+    if mountpoint -q "${JFS_MOUNT_POINT}"; then
+      echo "JuiceFS already mounted at ${JFS_MOUNT_POINT}"
+      exit 0
+    fi
+
+    # Mount JuiceFS
+    echo "Mounting JuiceFS..."
+    sudo juicefs mount \
+      --meta="${JFS_META_URL}" \
+      --storage="${JFS_STORAGE_TYPE}" \
+      --bucket="${JFS_BUCKET}" \
+      --access-key="${JFS_ACCESS_KEY}" \
+      --secret-key="${JFS_SECRET_KEY}" \
+      "${JFS_MOUNT_POINT}"
+
+    echo "JuiceFS mounted successfully!"
+
+    # Verify mount
+    ls -la "${JFS_MOUNT_POINT}"
+
+    # Create sessions directory
+    sudo mkdir -p "${JFS_MOUNT_POINT}/sessions"
+
+    echo "=== Mount Complete ==="
+
+---
+# Service to expose mount helper status (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: juicefs-mount-helper
+  namespace: sandbox-system
+spec:
+  selector:
+    app: juicefs-mount-helper
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
