@@ -4,11 +4,19 @@ Kubernetes 容器调度器
 使用官方 Python kubernetes 客户端实现 Pod 的创建和管理。
 
 支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
-Pod 会通过 JuiceFS hostPath 方式将 S3 bucket 挂载到 /workspace 目录。
+Pod 会通过 JuiceFS CSI Driver Mount Pod 模式将 S3 bucket 挂载到 /workspace 目录。
 
-JuiceFS 挂载架构：
-- Mount Helper DaemonSet：在每个节点上运行，负责挂载 JuiceFS 到 hostPath
-- Executor Pods：通过 hostPath 卷共享 JuiceFS 挂载点
+JuiceFS 挂载架构（CSI Driver Mount Pod 模式）：
+- CSI Controller StatefulSet：管理 PV 生命周期
+- CSI Node DaemonSet：管理 Mount Pod 生命周期
+- Mount Pod：运行 JuiceFS 客户端，挂载文件系统到独立 Pod
+- Executor Pods：通过 PVC 共享 Mount Pod 的挂载点
+
+CSI Driver 优势：
+- 标准的 Kubernetes CSI 接口
+- Mount Pod 复用（多个 Pod 共享同一个 Mount Pod）
+- 完全支持 POSIX 文件操作
+- 无需将 FUSE 挂载传播到宿主机
 
 支持 Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
 """
@@ -30,6 +38,10 @@ from kubernetes.client import (
     V1Volume,
     V1VolumeMount,
     V1HostPathVolumeSource,
+    V1PersistentVolumeClaim,
+    V1PersistentVolumeClaimSpec,
+    V1PersistentVolumeClaimVolumeSource,
+    V1ObjectMeta as V1ObjectMeta_imported,
     V1SecurityContext,
     V1Capabilities,
     V1PodSecurityContext,
@@ -181,6 +193,49 @@ class K8sScheduler(IContainerScheduler):
         settings = get_settings()
         base_path = settings.juicefs_host_path.rstrip('/')
         return f"{base_path}/{s3_prefix}"
+
+    async def _ensure_pvc_exists(self, pvc_name: str, s3_prefix: str) -> None:
+        """
+        确保 PVC 存在（使用 JuiceFS CSI Driver 动态配置）
+
+        Args:
+            pvc_name: PVC 名称
+            s3_prefix: S3 路径前缀（用于 JuiceFS 子路径）
+        """
+        settings = get_settings()
+
+        # PVC 配置（动态配置）
+        pvc = V1PersistentVolumeClaim(
+            metadata=V1ObjectMeta_imported(
+                name=pvc_name,
+                namespace=self._namespace,
+                annotations={
+                    # JuiceFS 子路径（可选）
+                    "juicefs/mount-path": s3_prefix,
+                }
+            ),
+            spec=V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                storage_class_name="juicefs-sc",  # 使用 JuiceFS StorageClass
+                resources=V1ResourceRequirements(
+                    requests={"storage": "1Pi"}  # JuiceFS 不限制大小
+                )
+            )
+        )
+
+        # 创建 PVC（如果不存在）
+        try:
+            await asyncio.to_thread(
+                self._core_v1.create_namespaced_persistent_volume_claim,
+                namespace=self._namespace,
+                body=pvc
+            )
+            logger.info(f"Created PVC: {pvc_name}")
+        except ApiException as e:
+            if e.status == 409:  # Already exists
+                logger.debug(f"PVC already exists: {pvc_name}")
+            else:
+                raise
 
     def _build_executor_container(
         self,
@@ -346,6 +401,10 @@ exec python -m executor.interfaces.http.rest
         s3_workspace = self._parse_s3_workspace(config.workspace_path)
         use_s3_mount = s3_workspace is not None
 
+        # 检查是否使用 CSI Driver 模式
+        settings = get_settings()
+        use_csi_mode = settings.juicefs_csi_enabled and use_s3_mount
+
         # 检查是否有依赖
         dependencies_json = config.labels.get("dependencies", "")
         has_dependencies = bool(dependencies_json)
@@ -363,8 +422,21 @@ exec python -m executor.interfaces.http.rest
 
         # 构建卷
         volumes = []
-        if use_s3_mount and s3_workspace:
-            # S3 挂载：使用 hostPath 指向 JuiceFS 挂载点
+        if use_csi_mode and s3_workspace:
+            # CSI 模式：使用 PVC
+            pvc_name = f"{config.name}-workspace"
+            await self._ensure_pvc_exists(pvc_name, s3_workspace["prefix"])
+            volumes.append(
+                V1Volume(
+                    name="workspace",
+                    persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                        claim_name=pvc_name,
+                        read_only=False
+                    )
+                )
+            )
+        elif use_s3_mount and s3_workspace:
+            # hostPath 模式：使用 hostPath 指向 JuiceFS 挂载点
             host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
             volumes.append(
                 V1Volume(
@@ -393,7 +465,7 @@ exec python -m executor.interfaces.http.rest
             "sandbox-type": "execution",
         }
         if use_s3_mount:
-            labels["mount-method"] = "hostPath"
+            labels["mount-method"] = "csi-pvc" if use_csi_mode else "hostPath"
         labels.update(config.labels)
 
         # 构建 annotations（dependencies 放在这里，没有格式限制）

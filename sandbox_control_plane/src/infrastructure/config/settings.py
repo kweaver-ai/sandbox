@@ -52,7 +52,7 @@ class Settings(BaseSettings):
         description="JuiceFS hostPath 挂载点（宿主机路径）"
     )
     juicefs_container_mount_path: str = Field(
-        default="/mnt/jfs/sandbox-workspace",
+        default="/mnt/jfs",
         description="JuiceFS 在容器内的挂载点（容器内路径）"
     )
     juicefs_metaurl: str = Field(
@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     juicefs_enabled: bool = Field(
         default=False,
         description="是否启用 JuiceFS SDK（直接写入元数据）"
+    )
+
+    # ============== JuiceFS CSI Driver 配置 ==============
+    juicefs_csi_enabled: bool = Field(
+        default=False,
+        description="是否启用 JuiceFS CSI Driver Mount Pod 模式"
     )
 
     # ============== Docker 配置 ==============

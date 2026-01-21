@@ -1390,62 +1390,79 @@ class K8sScheduler:
 - `deploy/manifests/03-serviceaccount.yaml` - ServiceAccount
 - `deploy/manifests/04-role.yaml` - RBAC 权限
 - `deploy/manifests/05-control-plane-deployment.yaml` - Control Plane 部署
+- `deploy/manifests/06-juicefs-csi-driver.yaml` - JuiceFS CSI Driver (v0.25.2) 完整配置
 - `deploy/manifests/07-minio-deployment.yaml` - MinIO 部署
 - `deploy/manifests/08-mariadb-deployment.yaml` - MariaDB 部署
 - `deploy/manifests/09-juicefs-setup.yaml` - JuiceFS 数据库初始化
+- `deploy/manifests/09a-juicefs-storageclass.yaml` - JuiceFS StorageClass 定义
 - `deploy/manifests/10-juicefs-hostpath-setup.yaml` - JuiceFS hostPath 挂载助手
 - `deploy/manifests/deploy.sh` - 一键部署脚本
 
+**Helm Chart 模板文件位置**:
+- `deploy/helm/sandbox/templates/juicefs-csi-driver.yaml` - CSI Driver ConfigMap, RBAC, StatefulSet, DaemonSet, CSIDriver
+- `deploy/helm/sandbox/templates/juicefs-storageclass.yaml` - JuiceFS Secret 和 StorageClass
+- `deploy/helm/sandbox/values.yaml` - juicefs.csi 配置项 (image: v0.25.2, namespace: kube-system)
+
 **S3 Workspace 挂载配置说明**：
 
-**Implementation Status**: ✅ Fully Implemented (JuiceFS hostPath)
+**Implementation Status**: ✅ Fully Implemented (JuiceFS CSI Driver v0.25.2)
 
-## Architecture Overview
+##### 2.2.2.1 Architecture Overview
 
 The Sandbox Platform uses **JuiceFS** to provide high-performance, POSIX-compliant file system access to S3-compatible object storage (MinIO) for workspace files. This architecture enables executor pods to access shared workspace files across multiple executions while maintaining cloud-native portability.
 
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           Kubernetes Cluster (sandbox-system)                  │
-│                                                                                 │
-│  ┌──────────────────────────────────────────────────────────────────────────┐  │
-│  │  Control Plane Deployment (FastAPI)                                       │  │
-│  │  • Session Management • Template CRUD • Execution API                     │  │
-│  │  • Storage Service (JuiceFS SDK → S3 API fallback)                        │  │
-│  └─────────────────────────────────────┬────────────────────────────────────┘  │
-│                                        │ HTTP                                    │
-│  ┌─────────────────────────────────────▼────────────────────────────────────┐  │
-│  │                     K8s Scheduler Volume Mounting                         │  │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │  │
-│  │  │  juicefs-mount-helper DaemonSet (Privileged)                        │  │  │
-│  │  │  • Mounts JuiceFS → /var/jfs/sandbox-workspace (container)         │  │  │
-│  │  │  • Exposes via hostPath: /var/jfs (host)                           │  │  │
-│  │  │  • FUSE mount to MinIO + MariaDB                                   │  │  │
-│  │  └──────────────────────────┬─────────────────────────────────────────┘  │  │
-│  │                             │ hostPath                                   │  │
-│  │  ┌──────────────────────────▼─────────────────────────────────────────┐  │  │
-│  │  │       Executor Pod (hostPath volume)                                │  │  │
-│  │  │  Volume: workspace → /var/jfs/sandbox-workspace/sessions/{id}/      │  │  │
-│  │  │  Container Mount: /workspace                                        │  │  │
-│  │  │  Executor reads/writes files via standard POSIX I/O                 │  │  │
-│  │  └────────────────────────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────────────────────────────────────────────────────┘  │
-│                                        │                                           │
-│  ┌─────────────────────────────────────▼────────────────────────────────────┐  │
-│  │                        Storage Layer (sandbox-system namespace)          │  │
-│  │  ┌──────────────────────────────┐  ┌──────────────────────────────────┐   │  │
-│  │  │ MariaDB (juicefs_metadata)   │  │ MinIO (sandbox-workspace)       │   │  │
-│  │  │ • directory table            │  │ • File data chunks              │   │  │
-│  │  │ • chunk table                │  │ • S3-compatible API             │   │  │
-│  │  │ • inode/attribute metadata   │  │ • Access/Secret keys            │   │  │
-│  │  └──────────────────────────────┘  └──────────────────────────────────┘   │  │
-│  └──────────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                          Kubernetes Cluster                                         │
+│                                                                                    │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐  │
+│  │  Control Plane Deployment (FastAPI)                                          │  │
+│  │  • Session Management • Template CRUD • Execution API                        │  │
+│  │  • Storage Service (JuiceFS SDK → S3 API fallback)                           │  │
+│  └───────────────────────────────────────┬──────────────────────────────────────┘  │
+│                                          │ HTTP                                    │
+│  ┌───────────────────────────────────────▼──────────────────────────────────────┐  │
+│  │                   K8s Scheduler Volume Mounting                              │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  CSI Controller StatefulSet (kube-system)                              │  │  │
+│  │  │  • juicefs-plugin + csi-provisioner + liveness-probe                   │  │  │
+│  │  │  • Handles PVC → PV provisioning                                        │  │  │
+│  │  └────────────────────────────────────────────────────────────────────────┘  │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  CSI Node DaemonSet (kube-system)                                      │  │  │
+│  │  │  • juicefs-plugin + node-driver-registrar + liveness-probe            │  │  │
+│  │  │  • Creates Mount Pods per namespace                                    │  │  │
+│  │  └────────────────────────────────────────────────────────────────────────┘  │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  Mount Pod (sandbox-runtime namespace)                                 │  │  │
+│  │  │  • FUSE mount: JuiceFS → /jfs/{pvc-uid}/                              │  │  │
+│  │  │  • Mounts to MinIO + MariaDB                                           │  │  │
+│  │  └──────────────────────────┬─────────────────────────────────────────────┘  │  │
+│  │                             │ Volume Mount                                    │
+│  │  ┌──────────────────────────▼─────────────────────────────────────────────┐  │  │
+│  │  │       Executor Pod (PVC volume)                                         │  │  │
+│  │  │  Volume: workspace → PVC (juicefs-sc)                                   │  │  │
+│  │  │  Container Mount: /workspace → /jfs/{pvc-uid}/sessions/{id}/           │  │  │
+│  │  │  Executor reads/writes files via standard POSIX I/O                     │  │  │
+│  │  └────────────────────────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────────────────────┘  │
+│                                          │                                           │
+│  ┌───────────────────────────────────────▼──────────────────────────────────────┐  │
+│  │                        Storage Layer (sandbox-system namespace)              │  │
+│  │  ┌──────────────────────────────────┐  ┌──────────────────────────────────┐   │  │
+│  │  │ MariaDB (juicefs_metadata)       │  │ MinIO (sandbox-workspace)       │   │  │
+│  │  │ • directory table                │  │ • File data chunks              │   │  │
+│  │  │ • chunk table                    │  │ • S3-compatible API             │   │  │
+│  │  │ • inode/attribute metadata       │  │ • Access/Secret keys            │   │  │
+│  │  └──────────────────────────────────┘  └──────────────────────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Component Breakdown
+##### 2.2.2.2 Component Breakdown
 
-### 1. MinIO (S3-Compatible Object Storage)
+###### 2.2.2.2.1 MinIO (S3-Compatible Object Storage)
 
 **Purpose**: Stores actual file data chunks for JuiceFS
 
@@ -1466,7 +1483,7 @@ The Sandbox Platform uses **JuiceFS** to provide high-performance, POSIX-complia
 
 ---
 
-### 2. MariaDB (JuiceFS Metadata)
+###### 2.2.2.2.2 MariaDB (JuiceFS Metadata)
 
 **Purpose**: Stores JuiceFS file system metadata (directory structure, inodes, chunk mappings)
 
@@ -1507,27 +1524,143 @@ CREATE TABLE chunk (
 
 ---
 
-### 3. JuiceFS FUSE Mount
+###### 2.2.2.2.3 JuiceFS CSI Driver
 
-**Two Implementation Options**:
+**CSI Driver Implementation** (JuiceFS CSI Driver v0.25.2)
 
-#### Option A: hostPath (Current Implementation) ✅
-- **File**: `10-juicefs-hostpath-setup.yaml`
-- **Use Case**: Single-node clusters (Docker Desktop, Kind, Minikube)
-- **How It Works**:
-  1. DaemonSet runs privileged pod on each node
-  2. Mounts JuiceFS FUSE to `/var/jfs/sandbox-workspace` (container path)
-  3. Exposes mount via hostPath `/var/jfs` to host
-  4. Executor pods mount hostPath to `/workspace`
+- **Helm Template**: `juicefs-csi-driver.yaml` (ConfigMap, RBAC, StatefulSet, DaemonSet, CSIDriver)
+- **Use Case**: Production multi-node clusters (EKS, GKE, AKS, K3s)
+- **Implementation**: JuiceFS CSI Driver v0.25.2
 
-#### Option B: CSI Driver (Production-Recommended)
-- **File**: `06-juicefs-csi-driver.yaml`
-- **Use Case**: Multi-node clusters (EKS, GKE, AKS)
-- **Advantages**:
-  - Automatic mount propagation across nodes
-  - No privileged containers required
-  - Better failure recovery
-  - Dynamic provisioning support
+**Version Selection Rationale**:
+- **Selected Version**: v0.25.2
+- **Reason**: v0.31.1 (latest) has POD_NAME/POD_NAMESPACE downward API issues in K3s environment
+- **Key Difference**: Uses `--enable-manager=true` flag instead of v0.31.1's forced Mount Pod mode
+
+**Component Architecture**:
+
+The CSI Driver consists of two main deployments:
+
+####### 2.2.2.2.3.1 CSI Controller StatefulSet (kube-system namespace)
+3 containers running in a StatefulSet:
+
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| juicefs-plugin | juicedata/juicefs-csi-driver:v0.25.2 | Main CSI driver - handles volume provisioning |
+| csi-provisioner | registry.k8s.io/sig-storage/csi-provisioner:v2.2.2 | Sidecar - creates/deletes PersistentVolumes |
+| liveness-probe | registry.k8s.io/sig-storage/livenessprobe:v2.11.0 | Sidecar - health checking |
+
+**Key Configuration**:
+- **Socket Path**: `/var/lib/csi/sockets/pluginproxy/csi.sock`
+- **Mount Path**: `/var/lib/juicefs/volume`
+- **Config Path**: `/var/lib/juicefs/config`
+- **Leader Election**: Enabled for HA
+
+####### 2.2.2.2.3.2 CSI Node DaemonSet (kube-system namespace)
+3 containers running as DaemonSet on each node:
+
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| juicefs-plugin | juicedata/juicefs-csi-driver:v0.25.2 | Mounts JuiceFS volumes on the node |
+| node-driver-registrar | registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0 | Registers CSI driver with kubelet |
+| liveness-probe | registry.k8s.io/sig-storage/livenessprobe:v2.11.0 | Health checking |
+
+**Key Configuration**:
+- **Socket Path**: `/csi/csi.sock`
+- **hostNetwork**: true (v0.25.2 requirement)
+- **Mount Propagation**: Bidirectional for `/jfs` and `/root/.juicefs`
+- **Critical Flag**: `--enable-manager=true` (Mount Pod mode)
+
+**RBAC Permissions**:
+The CSI Driver requires extensive permissions:
+
+**Controller ClusterRole** (`juicefs-external-provisioner-role`):
+- `persistentvolumes`, `persistentvolumeclaims` (full CRUD)
+- `storageclasses` (get/list/watch)
+- `events` (create/update/patch)
+- `csinodes` (get/list/watch)
+- `nodes` (get/list/watch)
+- `secrets` (full CRUD for authentication)
+- `pods`, `pods/log` (for Mount Pod management)
+- `jobs` (for Mount Pod cleanup)
+- `leases` (leader election)
+- `configmaps` (state management)
+- `daemonsets` (get/list)
+
+**Node ClusterRole** (`juicefs-csi-node-role`):
+- `pods`, `pods/log`, `pods/exec` (Mount Pod lifecycle)
+- `secrets` (get/create/update/delete/patch)
+- `persistentvolumes`, `persistentvolumeclaims` (get/list)
+- `nodes`, `nodes/proxy` (full access for kubelet communication)
+- `events` (create/get)
+- `jobs` (Mount Pod management)
+
+**StorageClass Configuration** (`juicefs-storageclass.yaml`):
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: sandbox-system
+  csi.storage.k8s.io/controller-publish-secret-name: juicefs-secret
+  csi.storage.k8s.io/controller-publish-secret-namespace: sandbox-system
+  csi.storage.k8s.io/node-stage-secret-name: juicefs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: sandbox-system
+  csi.storage.k8s.io/node-publish-secret-name: juicefs-secret
+  csi.storage.k8s.io/node-publish-secret-namespace: sandbox-system
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+```
+
+**Secret Configuration**:
+The `juicefs-secret` contains authentication data:
+- `metaurl`: MySQL connection string for metadata
+- `storage`: Storage backend type (minio)
+- `bucket`: S3 endpoint URL
+- `access-key`: MinIO access key
+- `secret-key`: MinIO secret key
+
+**Advantages over hostPath**:
+- Automatic mount propagation across all nodes
+- No privileged DaemonSet containers on application nodes
+- Better failure recovery with Mount Pod per-namespace isolation
+- Dynamic provisioning support (PVC → PV creation)
+- Production-ready for multi-node clusters
+
+**Deployment Verification**:
+```bash
+# Check CSI Driver pods
+kubectl get pods -n kube-system -l app=juicefs-csi-controller
+kubectl get pods -n kube-system -l app=juicefs-csi-node
+
+# Verify CSIDriver registration
+kubectl get csidriver csi.juicefs.com
+
+# Check StorageClass
+kubectl get storageclass juicefs-sc
+
+# Test PVC creation
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-juicefs-pvc
+  namespace: sandbox-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: juicefs-sc
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+# Verify PVC bound
+kubectl get pvc test-juicefs-pvc -n sandbox-system
+```
 
 **FUSE Mount Command**:
 ```bash
@@ -1540,7 +1673,7 @@ CREATE TABLE chunk (
 
 ---
 
-### 4. Control Plane Storage Service
+###### 2.2.2.2.4 Control Plane Storage Service
 
 **Priority Order** (from `src/infrastructure/dependencies.py`):
 
@@ -1577,27 +1710,36 @@ S3_BUCKET=sandbox-workspace
 
 ---
 
-### 5. K8s Scheduler (Volume Mounting)
+###### 2.2.2.2.5 K8s Scheduler (Volume Mounting)
 
 **Code Location**: `src/infrastructure/container_scheduler/k8s_scheduler.py`
 
 **Volume Creation Logic**:
 ```python
-# Line 169-183: Build hostPath for S3 workspace
-def _build_juicefs_host_path(self, s3_prefix: str) -> str:
-    settings = get_settings()
-    base_path = settings.juicefs_host_path.rstrip('/')  # /var/jfs/sandbox-workspace
-    return f"{base_path}/{s3_prefix}"  # /var/jfs/sandbox-workspace/sessions/{id}/workspace
+# Line 169-183: Create PVC for S3 workspace
+def _ensure_pvc_exists(self, pvc_name: str, s3_path: str) -> None:
+    """Ensure PVC exists for JuiceFS CSI mount"""
+    pvc = self.core_v1.read_namespaced_persistent_volume_claim(pvc_name, self.namespace)
+    if not pvc:
+        pvc = V1PersistentVolumeClaim(
+            metadata=V1ObjectMeta(name=pvc_name),
+            spec=V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteMany"],
+                storage_class_name="juicefs-sc",
+                resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
+            ),
+        )
+        self.core_v1.create_namespaced_persistent_volume_claim(self.namespace, pvc)
 
-# Line 366-377: Create hostPath volume
+# Line 366-377: Create PVC volume
 if use_s3_mount and s3_workspace:
-    host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
+    pvc_name = f"{config.name}-workspace"
+    self._ensure_pvc_exists(pvc_name, s3_workspace["prefix"])
     volumes.append(
         V1Volume(
             name="workspace",
-            host_path=V1HostPathVolumeSource(
-                path=host_path,
-                type="DirectoryOrCreate",
+            persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                claim_name=pvc_name
             ),
         )
     )
@@ -1614,9 +1756,9 @@ env_vars.extend([
 
 ---
 
-## Data Flow: File Upload → Executor Access
+##### 2.2.2.3 Data Flow: File Upload → Executor Access
 
-### Scenario: User uploads `main.py` to session workspace
+**Scenario**: User uploads `main.py` to session workspace
 
 ```
 1. Client Request
@@ -1638,13 +1780,20 @@ env_vars.extend([
 
 4. K8s Scheduler Creates Pod
    └─> k8s_scheduler.create_container()
-       └─> V1Volume with hostPath=/var/jfs/sandbox-workspace/sessions/{id}/workspace
+       ├─> Creates PVC: {session-id}-workspace (uses juicefs-sc StorageClass)
+       ├─> CSI Controller provisions PV from PVC
+       └─> V1Volume with PVC reference
 
-5. Executor Pod Starts
-   └─> VolumeMount: /workspace → hostPath
+5. CSI Driver Mounts Volume
+   ├─> CSI Node DaemonSet creates Mount Pod in sandbox-runtime namespace
+   ├─> Mount Pod FUSE mounts JuiceFS → /jfs/{pvc-uid}/
+   └─> Executor Pod PVC binds to Mount Pod volume
+
+6. Executor Pod Starts
+   └─> VolumeMount: /workspace → PVC (via CSI mount point /jfs/{pvc-uid}/)
        └─> FUSE mount visible at /workspace/main.py
 
-6. Executor Reads File
+7. Executor Reads File
    └─> Python open("/workspace/main.py", "r")
        └─> Standard POSIX read() syscall
            └─> FUSE driver:
@@ -1655,23 +1804,26 @@ env_vars.extend([
 
 ---
 
-## Key Configuration Files
+##### 2.2.2.4 Key Configuration Files
 
 | File | Purpose | Key Settings |
 |------|---------|--------------|
+| `deploy/manifests/06-juicefs-csi-driver.yaml` | JuiceFS CSI Driver | CSI Controller StatefulSet, CSI Node DaemonSet, RBAC |
+| `deploy/manifests/09-juicefs-storageclass.yaml` | JuiceFS StorageClass | StorageClass definition, Secret reference |
 | `deploy/manifests/07-minio-deployment.yaml` | MinIO deployment | Bucket, access keys, persistence |
 | `deploy/manifests/08-mariadb-deployment.yaml` | MariaDB deployment | Database credentials, storage |
 | `deploy/manifests/09-juicefs-setup.yaml` | JuiceFS format job | Database init, filesystem format |
-| `deploy/manifests/10-juicefs-hostpath-setup.yaml` | hostPath mount helper | FUSE mount command, privileged mode |
-| `deploy/manifests/06-juicefs-csi-driver.yaml` | CSI driver (optional) | DaemonSet for multi-node clusters |
+| `deploy/helm/sandbox/templates/juicefs-csi-driver.yaml` | CSI Driver Helm template | ConfigMap, RBAC, StatefulSet, DaemonSet, CSIDriver |
+| `deploy/helm/sandbox/templates/juicefs-storageclass.yaml` | StorageClass Helm template | Secret and StorageClass definitions |
+| `deploy/helm/sandbox/values.yaml` | Helm chart values | juicefs.csi configuration (image: v0.25.2) |
 | `src/infrastructure/config/settings.py` | Environment config | JuiceFS URLs, S3 credentials |
 | `src/infrastructure/storage/juicefs_storage.py` | JuiceFS SDK wrapper | Write operations via Python SDK |
 | `src/infrastructure/storage/s3_storage.py` | S3 fallback wrapper | boto3 client operations |
-| `src/infrastructure/container_scheduler/k8s_scheduler.py` | Pod volume mounting | hostPath volume creation |
+| `src/infrastructure/container_scheduler/k8s_scheduler.py` | Pod volume mounting | PVC volume creation and management |
 
 ---
 
-## Environment Variables
+##### 2.2.2.5 Environment Variables
 
 **Complete Configuration** (`.env` or ConfigMap):
 
@@ -1691,11 +1843,12 @@ JUICEFS_METAURL=mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3
 
 # ============== JuiceFS Configuration ==============
 JUICEFS_ENABLED=true                    # Enable JuiceFS SDK
-JUICEFS_HOST_PATH=/var/jfs/sandbox-workspace  # hostPath mount point
+JUICEFS_CSI_ENABLED=true                # Enable CSI Driver mode
 JUICEFS_STORAGE_TYPE=minio              # Storage backend
 JUICEFS_BUCKET=http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace
 JUICEFS_ACCESS_KEY=minioadmin
 JUICEFS_SECRET_KEY=minioadmin
+JUICEFS_METAURL=mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata
 
 # ============== Control Plane Configuration ==============
 DATABASE_URL=mysql+aiomysql://sandbox:password@mariadb.sandbox-system.svc.cluster.local:3306/sandbox
@@ -1704,23 +1857,31 @@ KUBERNETES_NAMESPACE=sandbox-runtime
 
 ---
 
-## Summary
+##### 2.2.2.6 Summary
 
 **Critical Insights**:
 
 1. **JuiceFS = Metadata (MariaDB) + Data (MinIO)**: File metadata is stored in MariaDB for fast lookups, while actual file chunks are stored in MinIO. This hybrid architecture provides both metadata performance and scalable object storage.
 
-2. **FUSE Mount = POSIX Bridge**: The mount-helper DaemonSet uses FUSE to present S3 object storage as a standard POSIX filesystem. Executor pods see `/workspace` as a normal directory and use standard `open()`, `read()`, `write()` calls.
+2. **CSI Driver + FUSE = POSIX Bridge**: The JuiceFS CSI Driver creates Mount Pods that use FUSE to present S3 object storage as a standard POSIX filesystem. Executor pods see `/workspace` as a normal directory and use standard `open()`, `read()`, `write()` calls.
 
-3. **hostPath = Node-Level Mount Sharing**: In the hostPath approach, the FUSE mount is created once per node (by the DaemonSet) and shared with all pods on that node via hostPath. This is efficient but requires single-node or manually-coordinated multi-node setups.
+3. **CSI Driver Architecture**: The CSI Driver (v0.25.2) provides production-grade volume management with automatic mount propagation, dynamic PV provisioning, and per-namespace Mount Pod isolation. It consists of:
+   - CSI Controller StatefulSet (kube-system) - handles PVC → PV provisioning
+   - CSI Node DaemonSet (kube-system) - creates Mount Pods on each node
+   - Mount Pods (per-namespace) - FUSE mount JuiceFS to `/jfs/{pvc-uid}/`
 
-4. **CSI Driver = Production-Grade Alternative**: For production multi-node clusters, the CSI Driver (`06-juicefs-csi-driver.yaml`) should be used instead of hostPath. It provides automatic mount management, better failure recovery, and no privileged containers.
+4. **Storage Service Abstraction**: The Control Plane's storage service (`IStorageService`) abstracts the underlying storage implementation. It tries JuiceFS SDK first (for metadata-aware writes), then falls back to direct S3 API, then to in-memory mock for testing.
 
-5. **Storage Service Abstraction**: The Control Plane's storage service (`IStorageService`) abstracts the underlying storage implementation. It tries JuiceFS SDK first (for metadata-aware writes), then falls back to direct S3 API, then to in-memory mock for testing.
+5. **File Upload Flow**: When files are uploaded via API, they go through the Storage Service → JuiceFS SDK → FUSE mount → MariaDB (metadata) + MinIO (data). When executors read files, they use standard POSIX I/O → FUSE driver → MariaDB (chunk lookup) + MinIO (chunk data).
 
-6. **File Upload Flow**: When files are uploaded via API, they go through the Storage Service → JuiceFS SDK → FUSE mount → MariaDB (metadata) + MinIO (data). When executors read files, they use standard POSIX I/O → FUSE driver → MariaDB (chunk lookup) + MinIO (chunk data).
+6. **CSI Driver Advantages**: 
+   - **No privileged containers** required on application nodes
+   - **Automatic mount management** across multi-node clusters
+   - **Dynamic provisioning** - PVCs automatically provision PVs
+   - **Better failure recovery** with per-namespace Mount Pod isolation
+   - **Cloud-native** - follows Kubernetes CSI specification
 
-**Performance Comparison** (vs. s3fs Sidecar):
+**Performance Comparison** (JuiceFS CSI vs. s3fs Sidecar):
 
 | Metric | s3fs Sidecar | JuiceFS CSI | Improvement |
 |--------|-------------|-------------|-------------|
@@ -1729,7 +1890,7 @@ KUBERNETES_NAMESPACE=sandbox-runtime
 | File Write | 150-300ms | 30-80ms | **60-73%** |
 | CPU Usage | 5-10% | 1-2% | **80%** |
 | Memory Usage | 50-100MB | 20-40MB | **60%** |
-| Privileged Mode | Required | Not Required (CSI) | ✅ |
+| Privileged Mode | Required | Not Required | ✅ |
 
 ### 2.3 执行器 (Executor)
 
