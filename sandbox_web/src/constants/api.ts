@@ -2,8 +2,7 @@
  * API 相关常量
  */
 
-/** API 基础 URL */
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+export { getApiBaseUrl } from '@/utils/config';
 
 /** API 端点路径 */
 export const API_ENDPOINTS = {

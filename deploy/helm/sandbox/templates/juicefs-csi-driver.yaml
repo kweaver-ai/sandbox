@@ -1,27 +1,15 @@
+{{- if .Values.juicefs.enabled }}
+{{- if .Values.juicefs.csi.enabled }}
 ---
-# JuiceFS CSI Driver for Kubernetes
-#
-# This manifest installs the JuiceFS CSI Driver in the cluster.
-# The CSI driver enables dynamic provisioning of S3-backed volumes
-# that can be mounted directly into pods without sidecar containers.
-#
-# Documentation: https://juicefs.com/docs/csi/introduction
-#
-# Installation:
-#   kubectl apply -f deploy/k8s/06-juicefs-csi-driver.yaml
-#
-# Verification:
-#   kubectl get pods -n kube-system -l app=juicefs-csi-driver
-#
-
 # JuiceFS CSI Driver DaemonSet (runs on each node)
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: juicefs-csi-node
-  namespace: kube-system
+  namespace: {{ .Values.juicefs.csi.namespace | default "kube-system" }}
   labels:
     app: juicefs-csi-driver
+    {{- include "sandbox.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -37,7 +25,7 @@ spec:
         - name: juicefs-plugin
           securityContext:
             privileged: true
-          image: juicedata/juicefs-csi-driver:v0.24.3
+          image: {{ .Values.juicefs.csi.image }}:{{ .Values.juicefs.csi.tag }}
           args:
             - --endpoint=$(CSI_ENDPOINT)
             - --nodeid=$(NODE_NAME)
@@ -85,7 +73,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: juicefs-csi-driver-sa
-  namespace: kube-system
+  namespace: {{ .Values.juicefs.csi.namespace | default "kube-system" }}
 
 ---
 # JuiceFS CSI Driver ClusterRole (for node-level operations)
@@ -122,7 +110,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: juicefs-csi-driver-sa
-    namespace: kube-system
+    namespace: {{ .Values.juicefs.csi.namespace | default "kube-system" }}
 roleRef:
   kind: ClusterRole
   name: juicefs-csi-driver-role
@@ -148,7 +136,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: juicefs-csi-driver
-  namespace: kube-system
+  namespace: {{ .Values.juicefs.csi.namespace | default "kube-system" }}
   labels:
     app: juicefs-csi-driver
 spec:
@@ -157,3 +145,5 @@ spec:
   ports:
     - name: dummy
       port: 12345
+{{- end }}
+{{- end }}

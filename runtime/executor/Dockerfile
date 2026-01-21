@@ -58,10 +58,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
     fi && \
     pip install --no-cache-dir -r /app/executor/requirements.txt
 
-# Create workspace directory
-# This will be mounted as a volume for S3/ephemeral storage
-RUN mkdir -p /workspace && \
-    chown -R sandbox:sandbox /app /workspace
+# Create workspace and venv directories
+# /workspace will be mounted as a volume for S3/ephemeral storage
+# /opt/sandbox-venv is for runtime dependency installation
+RUN mkdir -p /workspace /opt/sandbox-venv && \
+    chown -R sandbox:sandbox /app /workspace /opt/sandbox-venv
 
 # Switch to non-privileged user
 USER sandbox

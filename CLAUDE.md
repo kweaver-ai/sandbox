@@ -124,6 +124,16 @@ Multi-layer isolation strategy:
 
 ```
 sandbox/
+├── deploy/                   # Deployment configurations
+│   ├── k8s/                  # Kubernetes resource manifests
+│   │   ├── 00-namespace.yaml
+│   │   ├── 01-configmap.yaml
+│   │   ├── 05-control-plane-deployment.yaml
+│   │   ├── 11-sandbox-web-deployment.yaml
+│   │   └── ...
+│   └── docker-compose/       # Docker Compose deployment
+│       └── docker-compose.yml
+│
 ├── sandbox_control_plane/    # FastAPI control plane service
 │   ├── src/
 │   │   ├── application/      # Application services (business logic)
@@ -131,9 +141,7 @@ sandbox/
 │   │   ├── infrastructure/   # External dependencies (DB, Docker, S3)
 │   │   ├── interfaces/       # REST API endpoints
 │   │   └── shared/           # Shared utilities
-│   ├── tests/                # Unit, integration, and contract tests
-│   ├── deploy/               # K8s manifests and deployment configs
-│   └── docker-compose.yml    # Local development setup
+│   └── tests/                # Unit, integration, and contract tests
 │
 ├── sandbox_web/              # React web management console
 │   ├── src/                  # React components and pages

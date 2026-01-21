@@ -1,12 +1,13 @@
 #!/bin/bash
 
 ################################################################################
-# K8s Port-Forwarding Script for Control Plane and MinIO
+# K8s Port-Forwarding Script for Control Plane, Web Console and MinIO
 ################################################################################
 # This script manages port-forwarding for sandbox services in Kubernetes
 #
 # Services:
 #   - control-plane: FastAPI REST API (8000)
+#   - sandbox-web: Web Console (1101)
 #   - minio-api: MinIO S3 API (9000)
 #   - minio-console: MinIO Web Console (9001)
 ################################################################################
@@ -21,10 +22,11 @@ LOG_DIR="${PID_DIR}/logs"
 # Service definitions (using arrays instead of associative arrays for bash 3.x compatibility)
 # Format: "service_name:local_port:remote_port:resource_type:resource_name:display_name"
 CONTROL_PLANE_DEF="control-plane:8000:8000:service/sandbox-control-plane:Control Plane API"
+SANDBOX_WEB_DEF="sandbox-web:1101:80:service/sandbox-web:Web Console"
 MINIO_API_DEF="minio-api:9000:9000:service/minio:MinIO S3 API"
 MINIO_CONSOLE_DEF="minio-console:9001:9001:service/minio:MinIO Web Console"
 
-ALL_SERVICES=("$CONTROL_PLANE_DEF" "$MINIO_API_DEF" "$MINIO_CONSOLE_DEF")
+ALL_SERVICES=("$CONTROL_PLANE_DEF" "$SANDBOX_WEB_DEF" "$MINIO_API_DEF" "$MINIO_CONSOLE_DEF")
 
 # Colors for output
 RED='\033[0;31m'
@@ -380,6 +382,7 @@ Commands:
 
 Services:
     --control-plane      Control Plane API (port 8000)
+    --sandbox-web        Web Console (port 1101)
     --minio-api         MinIO S3 API (port 9000)
     --minio-console     MinIO Web Console (port 9001)
     --all               All services (default)
@@ -395,11 +398,11 @@ Examples:
     # Start all services in background
     $0 start --all --background
 
-    # Start only Control Plane and MinIO Console
-    $0 start --control-plane --minio-console -b
+    # Start only Control Plane and Web Console
+    $0 start --control-plane --sandbox-web -b
 
     # Start with custom local port
-    $0 start --minio-console --port 19001 -b
+    $0 start --sandbox-web --port 11101 -b
 
     # Check status
     $0 status
@@ -408,7 +411,7 @@ Examples:
     $0 stop --all
 
     # View logs for a service
-    $0 logs control-plane
+    $0 logs sandbox-web
 
     # Clean up orphaned processes
     $0 cleanup -y
@@ -437,12 +440,12 @@ while [[ $# -gt 0 ]]; do
             COMMAND="$1"
             shift
             ;;
-        --control-plane|--minio-api|--minio-console)
+        --control-plane|--sandbox-web|--minio-api|--minio-console)
             SERVICES+=("${1#--}")
             shift
             ;;
         --all)
-            SERVICES=("control-plane" "minio-api" "minio-console")
+            SERVICES=("control-plane" "sandbox-web" "minio-api" "minio-console")
             shift
             ;;
         -b|--background)
@@ -475,7 +478,7 @@ done
 
 # Default to all services if none specified
 if [[ ${#SERVICES[@]} -eq 0 && "$COMMAND" != "status" && "$COMMAND" != "cleanup" ]]; then
-    SERVICES=("control-plane" "minio-api" "minio-console")
+    SERVICES=("control-plane" "sandbox-web" "minio-api" "minio-console")
 fi
 
 # Execute command

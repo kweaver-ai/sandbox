@@ -1,8 +1,100 @@
 # Kubernetes 部署指南
 
-本目录包含 Sandbox Control Plane 的 Kubernetes 部署配置文件。
+本目录包含 Sandbox Platform 的 Kubernetes 原生部署 YAML 文件。
 
-## 前置要求
+Sandbox Platform 提供三种部署方式：
+1. **Docker Compose** - 适合本地开发环境
+2. **Helm Chart** (推荐生产环境) - 使用 Helm 包管理器进行部署，支持参数化配置
+3. **K8s 原生 YAML** (本目录) - 直接使用 kubectl 应用 YAML 文件
+
+## 部署方式对比
+
+| 特性 | Helm Chart | 静态 YAML |
+|------|-----------|----------|
+| 配置灵活性 | 参数化配置，支持 values 覆盖 | 需要手动编辑 YAML |
+| 版本管理 | 支持版本回滚、升级 | 手动管理 |
+| 依赖管理 | 自动处理依赖关系 | 手动按顺序部署 |
+| 生产环境 | 推荐使用 | 适合简单场景 |
+
+## 方式一：Helm Chart 部署 (推荐)
+
+### 前置要求
+
+- Kubernetes 1.24+ (或 Minikube / K3s / Kind 等本地 K8s 环境)
+- Helm 3.0+
+- kubectl CLI
+- Docker 镜像已构建并推送到镜像仓库
+
+### 快速开始
+
+```bash
+# 进入 helm chart 目录
+cd deploy/helm
+
+# 安装 Helm Chart
+make install
+# 或使用 helm 命令
+helm install sandbox ./sandbox --namespace sandbox-system --create-namespace
+
+# 使用自定义配置
+helm install sandbox ./sandbox \
+  --namespace sandbox-system \
+  --create-namespace \
+  --set controlPlane.replicaCount=3 \
+  --set web.replicaCount=2
+
+# 查看部署状态
+helm status sandbox --namespace sandbox-system
+
+# 卸载
+make uninstall
+# 或
+helm uninstall sandbox --namespace sandbox-system
+```
+
+### 配置说明
+
+主要配置参数：
+
+| 参数 | 描述 | 默认值 |
+|------|------|--------|
+| `controlPlane.replicaCount` | Control Plane 副本数 | `1` |
+| `controlPlane.image.repository` | Control Plane 镜像仓库 | `sandbox-control-plane` |
+| `controlPlane.image.tag` | Control Plane 镜像标签 | `latest` |
+| `web.replicaCount` | Web Console 副本数 | `1` |
+| `web.image.repository` | Web Console 镜像仓库 | `sandbox-web` |
+| `mariadb.enabled` | 是否部署内置 MariaDB | `true` |
+| `minio.enabled` | 是否部署内置 MinIO | `true` |
+
+完整配置请参考 [deploy/helm/sandbox/README.md](../helm/sandbox/README.md)
+
+### 常用命令
+
+```bash
+# 模板生成（调试用）
+make template
+# 或
+helm template sandbox ./sandbox > helm-template-gen.yaml
+
+# Lint 检查
+make lint
+# 或
+helm lint ./sandbox
+
+# 升级部署
+make upgrade
+# 或
+helm upgrade sandbox ./sandbox --namespace sandbox-system
+
+# 回滚
+helm rollback sandbox <revision> --namespace sandbox-system
+```
+
+---
+
+## 方式二：静态 YAML 文件部署
+
+### 前置要求
 
 - Kubernetes 1.24+ (或 Minikube / K3s / Kind 等本地 K8s 环境)
 - kubectl CLI
@@ -34,19 +126,20 @@ kind load docker-image sandbox-control-plane:latest
 
 ```bash
 # 按顺序部署所有资源
-kubectl apply -f deploy/k8s/00-namespace.yaml
-kubectl apply -f deploy/k8s/01-configmap.yaml
-kubectl apply -f deploy/k8s/02-secret.yaml
-kubectl apply -f deploy/k8s/03-serviceaccount.yaml
-kubectl apply -f deploy/k8s/04-role.yaml
-kubectl apply -f deploy/k8s/09-runtime-namespace.yaml
-kubectl apply -f deploy/k8s/08-mariadb-deployment.yaml
-kubectl apply -f deploy/k8s/07-minio-deployment.yaml
-kubectl apply -f deploy/k8s/05-control-plane-deployment.yaml
-kubectl apply -f deploy/k8s/06-hpa.yaml
+kubectl apply -f deploy/manifests/00-namespace.yaml
+kubectl apply -f deploy/manifests/01-configmap.yaml
+kubectl apply -f deploy/manifests/02-secret.yaml
+kubectl apply -f deploy/manifests/03-serviceaccount.yaml
+kubectl apply -f deploy/manifests/04-role.yaml
+kubectl apply -f deploy/manifests/09-runtime-namespace.yaml
+kubectl apply -f deploy/manifests/08-mariadb-deployment.yaml
+kubectl apply -f deploy/manifests/07-minio-deployment.yaml
+kubectl apply -f deploy/manifests/05-control-plane-deployment.yaml
+kubectl apply -f deploy/manifests/11-sandbox-web-deployment.yaml
+kubectl apply -f deploy/manifests/06-hpa.yaml
 
 # 或一次性部署所有
-kubectl apply -f deploy/k8s/
+kubectl apply -f deploy/manifests/
 ```
 
 ### 4. 验证部署
@@ -61,8 +154,17 @@ kubectl get svc -n sandbox-system
 # 检查 Control Plane 日志
 kubectl logs -f deployment/sandbox-control-plane -n sandbox-system
 
-# 端口转发到本地（可选）
+# 检查 Web Console 日志
+kubectl logs -f deployment/sandbox-web -n sandbox-system
+
+# 端口转发到本地（使用 port-forward.sh 脚本）
+cd ../../scripts
+./port-forward.sh start --all --background
+
+# 或单独端口转发
 kubectl port-forward svc/sandbox-control-plane 8000:8000 -n sandbox-system
+kubectl port-forward svc/sandbox-web 1101:80 -n sandbox-system
+kubectl port-forward svc/minio 9001:9001 -n sandbox-system
 ```
 
 ## 配置说明
@@ -151,11 +253,24 @@ kubectl port-forward svc/minio 9001:9001 -n sandbox-system
 # 用户名/密码: minioadmin/minioadmin
 ```
 
+### Web Console 访问问题
+
+```bash
+# 检查 Web Console Pod
+kubectl get pods -n sandbox-system -l app=sandbox-web
+
+# 检查 Web Console 日志
+kubectl logs -f deployment/sandbox-web -n sandbox-system
+
+# 确保能访问 Control Plane
+kubectl exec -it deployment/sandbox-web -n sandbox-system -- wget -O- http://sandbox-control-plane:8000/api/v1/health
+```
+
 ## 卸载
 
 ```bash
 # 删除所有资源
-kubectl delete -f deploy/k8s/
+kubectl delete -f deploy/manifests/
 
 # 或单独删除命名空间
 kubectl delete namespace sandbox-system
@@ -174,7 +289,7 @@ minikube start --cpus=4 --memory=8192 --disk-size=50g
 minikube addons enable ingress
 
 # 部署应用
-kubectl apply -f deploy/k8s/
+kubectl apply -f deploy/manifests/
 
 # 访问应用
 minikube tunnel  # 在另一个终端运行
@@ -190,7 +305,7 @@ curl -sfL https://get.k3s.io | sh -
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
 # 部署应用
-kubectl apply -f deploy/k8s/
+kubectl apply -f deploy/manifests/
 ```
 
 ### Kind
@@ -203,7 +318,7 @@ kind create cluster --name sandbox
 kind load docker-image sandbox-control-plane:latest --name sandbox
 
 # 部署应用
-kubectl apply -f deploy/k8s/
+kubectl apply -f deploy/manifests/
 
 # 端口转发
 kubectl port-forward svc/sandbox-control-plane 8000:8000 -n sandbox-system
@@ -230,6 +345,14 @@ kubectl port-forward svc/sandbox-control-plane 8000:8000 -n sandbox-system
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │ │
 │  │  │  API Gateway │  │   Scheduler  │  │Session Mgr   │  │ │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │          Web Console Deployment (1+ replica)            │ │
+│  │                                                         │ │
+│  │  ┌──────────────────────────────────────────────────┐  │ │
+│  │  │      Nginx + React SPA (port 80)                 │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                                                               │
 │  ┌──────────────┐  ┌──────────────┐                         │

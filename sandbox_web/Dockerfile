@@ -32,19 +32,16 @@ COPY . .
 RUN npm run build
 
 # Production stage
-# Re-declare ARG for this stage (ARGs don't persist across stages)
-
 FROM ${PRO_IMAGE} AS production
 
 WORKDIR /app
 
-
+# Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port
 EXPOSE 80
 
-
-# Start the application using serve to host static files
+# Start nginx
 CMD ["nginx", "-g", "daemon off;"]

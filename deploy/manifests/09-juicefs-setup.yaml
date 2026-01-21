@@ -9,7 +9,7 @@
 # - MinIO must be deployed (07-minio-deployment.yaml)
 #
 # Installation:
-#   kubectl apply -f deploy/k8s/09-juicefs-setup.yaml
+#   kubectl apply -f deploy/manifests/09-juicefs-setup.yaml
 #
 # Verification:
 #   kubectl get job -n sandbox-system juicefs-db-init
@@ -116,7 +116,7 @@ spec:
               JFS_BIN=$(command -v juicefs || echo "/usr/local/bin/juicefs")
 
               # Format the JuiceFS filesystem
-              # This creates the necessary tables and structure in the database
+              # For MinIO, use the full URL in --bucket parameter
               "${JFS_BIN}" format \
                   --storage="minio" \
                   --bucket="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace" \

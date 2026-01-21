@@ -204,17 +204,33 @@ Available mirror sources:
 ### Start Services
 
 ```bash
-cd sandbox_control_plane
-
 # Start all services (Control Plane, Web Console, MariaDB, MinIO)
-docker-compose up -d
+docker-compose -f deploy/docker-compose/docker-compose.yml up -d
 
 # View logs
-docker-compose logs -f control-plane
+docker-compose -f deploy/docker-compose/docker-compose.yml logs -f control-plane
 
 # Check service status
-docker-compose ps
+docker-compose -f deploy/docker-compose/docker-compose.yml ps
 ```
+
+### Kubernetes Deployment (Production)
+
+For production deployment, use Kubernetes with Helm Chart:
+
+```bash
+# Deploy using Helm Chart (recommended)
+cd deploy/helm
+make install
+# Or
+helm install sandbox ./sandbox --namespace sandbox-system --create-namespace
+
+# Use port-forwarding to access services
+cd ../../scripts
+./port-forward.sh start --all --background
+```
+
+See [deploy/manifests/README.md](deploy/manifests/README.md) for detailed Kubernetes deployment instructions.
 
 ### Access Services
 
@@ -291,6 +307,20 @@ mypy sandbox_control_plane/
 
 ```
 sandbox/
+├── deploy/                   # Deployment configurations
+│   ├── manifests/            # K8s native YAML deployment
+│   │   ├── 00-namespace.yaml
+│   │   ├── 01-configmap.yaml
+│   │   ├── 05-control-plane-deployment.yaml
+│   │   ├── 11-sandbox-web-deployment.yaml
+│   │   └── ...
+│   ├── helm/                 # Helm Chart (recommended for production)
+│   │   └── sandbox/          # Helm chart for Sandbox Platform
+│   └── docker-compose/       # Docker Compose deployment
+│       └── docker-compose.yml
+│   └── docker-compose/       # Docker Compose deployment
+│       └── docker-compose.yml
+│
 ├── sandbox_control_plane/    # FastAPI control plane service
 │   ├── src/
 │   │   ├── application/      # Application services (business logic)
@@ -298,8 +328,7 @@ sandbox/
 │   │   ├── infrastructure/   # External dependencies (DB, Docker, S3)
 │   │   ├── interfaces/       # REST API endpoints
 │   │   └── shared/           # Shared utilities
-│   ├── tests/                # Unit, integration, and contract tests
-│   └── docker-compose.yml    # Local development setup
+│   └── tests/                # Unit, integration, and contract tests
 │
 ├── sandbox_web/              # React web management console
 │   ├── src/                  # React components and pages

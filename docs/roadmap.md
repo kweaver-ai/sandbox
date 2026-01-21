@@ -46,8 +46,8 @@ This roadmap outlines the remaining features to implement for the Sandbox Platfo
 | **Hexagonal Architecture** | ✅ Complete | Both components | Clean architecture, DI container |
 | **Testing Framework** | ✅ Complete | `*/tests/` | Unit, integration, contract tests |
 | **Unit Tests** | ✅ Complete | `*/tests/unit/` | 181+ passing tests |
-| **K8s Deployment** | ✅ Complete | `sandbox_control_plane/deploy/k8s/` | Namespace, RBAC, Deployment manifests |
-| **docker-compose** | ✅ Complete | `sandbox_control_plane/docker-compose.yml` | Local development with MinIO, MariaDB |
+| **K8s Deployment** | ✅ Complete | `deploy/manifests/` | Namespace, RBAC, Deployment manifests |
+| **docker-compose** | ✅ Complete | `docker-compose.yml` | Local development with MinIO, MariaDB |
 
 ### ⚠️ Partially Implemented
 
@@ -306,10 +306,9 @@ sandbox_control_plane/src/infrastructure/storage/s3_client.py
 
 # Sprint 1.2: Kubernetes Scheduler
 sandbox_control_plane/src/infrastructure/container_scheduler/k8s_scheduler.py
-deploy/k8s/control-plane-deployment.yaml
-deploy/k8s/executor-pod.yaml
-deploy/k8s/rbac.yaml
-deploy/k8s/minio-pvc.yaml
+deploy/manifests/05-control-plane-deployment.yaml
+deploy/manifests/04-role.yaml
+deploy/manifests/08-mariadb-deployment.yaml
 
 # Sprint 1.3: Runtime Abstraction
 sandbox_control_plane/src/application/scheduler_service.py

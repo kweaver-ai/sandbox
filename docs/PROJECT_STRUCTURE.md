@@ -179,11 +179,17 @@ sandbox/
 ├── pyproject.toml                # 项目配置
 ├── alembic.ini                   # Alembic 配置
 ├── Dockerfile                    # Control Plane Docker 镜像
-├── docker-compose.yml            # 开发环境
 ├── .env.example                  # 环境变量示例
 ├── .gitignore
 └── README.md
 │
+├── deploy/                       # 部署配置
+│   └── k8s/                      # Kubernetes manifests
+│       ├── 00-namespace.yaml
+│       ├── 01-configmap.yaml
+│       └── ...
+│
+├── docker-compose.yml            # 开发环境
 ├── runtime/                      # 运行时模块
 │   ├── executor/                 # 执行器（容器内守护进程）
 │   │   │

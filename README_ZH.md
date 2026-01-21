@@ -205,17 +205,33 @@ docker build --build-arg USE_MIRROR=true -t sandbox-web .
 ### 启动服务
 
 ```bash
-cd sandbox_control_plane
-
 # 启动所有服务（控制平面、Web 控制台、MariaDB、MinIO）
-docker-compose up -d
+docker-compose -f deploy/docker-compose/docker-compose.yml up -d
 
 # 查看日志
-docker-compose logs -f control-plane
+docker-compose -f deploy/docker-compose/docker-compose.yml logs -f control-plane
 
 # 检查服务状态
-docker-compose ps
+docker-compose -f deploy/docker-compose/docker-compose.yml ps
 ```
+
+### Kubernetes 部署（生产环境）
+
+生产环境推荐使用 Kubernetes 和 Helm Chart：
+
+```bash
+# 使用 Helm Chart 部署（推荐）
+cd deploy/helm
+make install
+# 或
+helm install sandbox ./sandbox --namespace sandbox-system --create-namespace
+
+# 使用端口转发访问服务
+cd ../../scripts
+./port-forward.sh start --all --background
+```
+
+详细的 Kubernetes 部署说明请参考 [deploy/manifests/README.md](deploy/manifests/README.md)
 
 ### 访问服务
 
@@ -292,6 +308,18 @@ mypy sandbox_control_plane/
 
 ```
 sandbox/
+├── deploy/                   # 部署配置
+│   ├── manifests/            # K8s 原生 YAML 部署
+│   │   ├── 00-namespace.yaml
+│   │   ├── 01-configmap.yaml
+│   │   ├── 05-control-plane-deployment.yaml
+│   │   ├── 11-sandbox-web-deployment.yaml
+│   │   └── ...
+│   ├── helm/                 # Helm Chart（推荐生产环境）
+│   │   └── sandbox/          # Sandbox Platform Helm Chart
+│   └── docker-compose/       # Docker Compose 部署
+│       └── docker-compose.yml
+│
 ├── sandbox_control_plane/    # FastAPI 控制平面服务
 │   ├── src/
 │   │   ├── application/      # 应用服务（业务逻辑）
@@ -299,8 +327,7 @@ sandbox/
 │   │   ├── infrastructure/   # 外部依赖（DB、Docker、S3）
 │   │   ├── interfaces/       # REST API 端点
 │   │   └── shared/           # 共享工具
-│   ├── tests/                # 单元测试、集成测试和契约测试
-│   └── docker-compose.yml    # 本地开发环境配置
+│   └── tests/                # 单元测试、集成测试和契约测试
 │
 ├── sandbox_web/              # React Web 管理控制台
 │   ├── src/                  # React 组件和页面

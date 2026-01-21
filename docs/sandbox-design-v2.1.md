@@ -1384,17 +1384,17 @@ class K8sScheduler:
    - 依赖安装状态持久化
 
 **K8s 部署文件位置**:
-- `sandbox_control_plane/deploy/k8s/00-namespace.yaml` - 命名空间定义
-- `sandbox_control_plane/deploy/k8s/01-configmap.yaml` - 配置管理
-- `sandbox_control_plane/deploy/k8s/02-secret.yaml` - 密钥管理
-- `sandbox_control_plane/deploy/k8s/03-serviceaccount.yaml` - ServiceAccount
-- `sandbox_control_plane/deploy/k8s/04-role.yaml` - RBAC 权限
-- `sandbox_control_plane/deploy/k8s/05-control-plane-deployment.yaml` - Control Plane 部署
-- `sandbox_control_plane/deploy/k8s/07-minio-deployment.yaml` - MinIO 部署
-- `sandbox_control_plane/deploy/k8s/08-mariadb-deployment.yaml` - MariaDB 部署
-- `sandbox_control_plane/deploy/k8s/09-juicefs-setup.yaml` - JuiceFS 数据库初始化
-- `sandbox_control_plane/deploy/k8s/10-juicefs-hostpath-setup.yaml` - JuiceFS hostPath 挂载助手
-- `sandbox_control_plane/deploy/k8s/deploy.sh` - 一键部署脚本
+- `deploy/manifests/00-namespace.yaml` - 命名空间定义
+- `deploy/manifests/01-configmap.yaml` - 配置管理
+- `deploy/manifests/02-secret.yaml` - 密钥管理
+- `deploy/manifests/03-serviceaccount.yaml` - ServiceAccount
+- `deploy/manifests/04-role.yaml` - RBAC 权限
+- `deploy/manifests/05-control-plane-deployment.yaml` - Control Plane 部署
+- `deploy/manifests/07-minio-deployment.yaml` - MinIO 部署
+- `deploy/manifests/08-mariadb-deployment.yaml` - MariaDB 部署
+- `deploy/manifests/09-juicefs-setup.yaml` - JuiceFS 数据库初始化
+- `deploy/manifests/10-juicefs-hostpath-setup.yaml` - JuiceFS hostPath 挂载助手
+- `deploy/manifests/deploy.sh` - 一键部署脚本
 
 **S3 Workspace 挂载配置说明**：
 
@@ -1659,11 +1659,11 @@ env_vars.extend([
 
 | File | Purpose | Key Settings |
 |------|---------|--------------|
-| `deploy/k8s/07-minio-deployment.yaml` | MinIO deployment | Bucket, access keys, persistence |
-| `deploy/k8s/08-mariadb-deployment.yaml` | MariaDB deployment | Database credentials, storage |
-| `deploy/k8s/09-juicefs-setup.yaml` | JuiceFS format job | Database init, filesystem format |
-| `deploy/k8s/10-juicefs-hostpath-setup.yaml` | hostPath mount helper | FUSE mount command, privileged mode |
-| `deploy/k8s/06-juicefs-csi-driver.yaml` | CSI driver (optional) | DaemonSet for multi-node clusters |
+| `deploy/manifests/07-minio-deployment.yaml` | MinIO deployment | Bucket, access keys, persistence |
+| `deploy/manifests/08-mariadb-deployment.yaml` | MariaDB deployment | Database credentials, storage |
+| `deploy/manifests/09-juicefs-setup.yaml` | JuiceFS format job | Database init, filesystem format |
+| `deploy/manifests/10-juicefs-hostpath-setup.yaml` | hostPath mount helper | FUSE mount command, privileged mode |
+| `deploy/manifests/06-juicefs-csi-driver.yaml` | CSI driver (optional) | DaemonSet for multi-node clusters |
 | `src/infrastructure/config/settings.py` | Environment config | JuiceFS URLs, S3 credentials |
 | `src/infrastructure/storage/juicefs_storage.py` | JuiceFS SDK wrapper | Write operations via Python SDK |
 | `src/infrastructure/storage/s3_storage.py` | S3 fallback wrapper | boto3 client operations |

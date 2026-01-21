@@ -2,11 +2,11 @@
  * Axios 实例配置
  */
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
-import { API_BASE_URL, HTTP_TIMEOUT } from '@/constants/api';
+import { getApiBaseUrl, HTTP_TIMEOUT } from '@/constants/api';
 
 /** 创建 API 客户端实例 */
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: getApiBaseUrl(),
   timeout: HTTP_TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
@@ -16,6 +16,9 @@ export const apiClient: AxiosInstance = axios.create({
 /** 请求拦截器 */
 apiClient.interceptors.request.use(
   (config) => {
+    // Dynamically set baseURL from runtime config
+    config.baseURL = getApiBaseUrl();
+
     // 可以在这里添加认证 token
     // const token = localStorage.getItem('token');
     // if (token) {

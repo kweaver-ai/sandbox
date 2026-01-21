@@ -4,7 +4,7 @@
 定义文件上传下载相关的 HTTP 端点。
 """
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from typing import Optional
 
 from src.application.services.file_service import FileService
@@ -12,6 +12,38 @@ from src.interfaces.rest.schemas.response import ErrorResponse
 from src.infrastructure.dependencies import get_file_service_db
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
+
+
+@router.get("")
+async def list_files(
+    session_id: str,
+    limit: int = Query(1000, ge=1, le=10000, description="最大返回文件数"),
+    service: FileService = Depends(get_file_service_db)
+):
+    """
+    列出 session 下的所有文件
+
+    返回该 session workspace 中的所有文件列表
+
+    - **limit**: 最大返回文件数 (1-10000)
+    """
+    try:
+        files = await service.list_files(
+            session_id=session_id,
+            limit=limit
+        )
+
+        return {
+            "session_id": session_id,
+            "files": files,
+            "count": len(files)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
 
 @router.post("/upload")

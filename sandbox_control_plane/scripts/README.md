@@ -87,7 +87,7 @@ docker push sandbox-executor:latest
 
 If s3fs is installed on the host, mount it into the container:
 
-In docker-compose.yml:
+In docker-compose.yml (in project root):
 ```yaml
 services:
   control-plane:

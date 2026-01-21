@@ -3,7 +3,7 @@
 
 编排文件上传下载相关的用例。
 """
-from typing import Dict
+from typing import Dict, List, Any
 
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.services.storage import IStorageService
@@ -100,3 +100,53 @@ class FileService:
                 "presigned_url": presigned_url,
                 "size": file_info["size"],
             }
+
+    async def list_files(
+        self,
+        session_id: str,
+        limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """
+        列出 session 下的所有文件
+
+        Args:
+            session_id: Session ID
+            limit: 最大返回文件数
+
+        Returns:
+            文件列表，每个文件包含 name, size, modified_time 等
+        """
+        # 1. 验证 session 存在
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {session_id}")
+
+        # 2. 构建 session 的 S3 路径前缀
+        # workspace_path 格式: s3://bucket/sessions/sess_xxx/
+        # 或: sessions/sess_xxx/
+        prefix = session.workspace_path.rstrip("/")
+
+        # 3. 调用 storage.list_files()
+        files = await self._storage_service.list_files(prefix, limit)
+
+        # 4. 处理返回结果，去除前缀
+        result = []
+        prefix_len = len(prefix) + 1  # +1 for the leading slash
+        for file in files:
+            # key 格式: "sessions/sess_xxx/file.csv" 或 "sessions/sess_xxx/subdir/file.csv"
+            # 提取相对文件名
+            key = file["key"]
+            if key.startswith(prefix):
+                relative_name = key[prefix_len:].lstrip("/")
+            else:
+                # 如果 key 不以 prefix 开头，直接使用
+                relative_name = key
+
+            result.append({
+                "name": relative_name,
+                "size": file["size"],
+                "modified_time": file.get("last_modified"),
+                "etag": file.get("etag")
+            })
+
+        return result

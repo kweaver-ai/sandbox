@@ -1,28 +1,5 @@
----
-# JuiceFS HostPath Setup for Sandbox Platform
-#
-# This manifest sets up JuiceFS using hostPath mounting method.
-# This is a simpler approach suitable for:
-# - Single-node clusters (Docker Desktop, minikube, kind)
-# - Development/testing environments
-#
-# Prerequisites:
-# - MariaDB must be deployed (08-mariadb-deployment.yaml)
-# - MinIO must be deployed (07-minio-deployment.yaml)
-# - JuiceFS database initialized (09-juicefs-setup.yaml)
-#
-# Architecture:
-# 1. A privileged "mount-helper" pod mounts JuiceFS to /jfs/sandbox-workspace
-# 2. This directory is mapped to hostPath /mnt/jfs/sandbox-workspace
-# 3. Executor pods use hostPath to mount the same directory
-#
-# Installation:
-#   kubectl apply -f deploy/k8s/10-juicefs-hostpath-setup.yaml
-#
-# Verification:
-#   kubectl get pod -n sandbox-system -l app=juicefs-mount-helper
-#   kubectl exec -n sandbox-system juicefs-mount-helper -- ls /jfs
-
+{{- if .Values.juicefs.enabled }}
+{{- if .Values.juicefs.hostPath.enabled }}
 ---
 # DaemonSet for JuiceFS mount helper
 # This privileged pod mounts JuiceFS and shares it via hostPath
@@ -30,9 +7,10 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: juicefs-mount-helper
-  namespace: sandbox-system
+  namespace: {{ .Values.global.namespace }}
   labels:
     app: juicefs-mount-helper
+    {{- include "sandbox.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -58,7 +36,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -z mariadb.sandbox-system.svc.cluster.local 3306; do
+              until nc -z mariadb.{{ .Values.global.namespace }}.svc.cluster.local 3306; do
                 echo "Waiting for MariaDB..."
                 sleep 2
               done
@@ -66,7 +44,7 @@ spec:
 
       containers:
         - name: mount-helper
-          image: juicedata/juicefs-fuse:ce-nightly
+          image: {{ .Values.juicefs.setup.image }}:{{ .Values.juicefs.setup.tag }}
           imagePullPolicy: IfNotPresent
 
           # Privileged mode required for FUSE mounting
@@ -78,17 +56,17 @@ spec:
 
           env:
             - name: JFS_META_URL
-              value: "mysql://root:password@tcp(mariadb.sandbox-system.svc.cluster.local:3306)/juicefs_metadata"
+              value: {{ .Values.juicefs.setup.metaUrl | quote }}
             - name: JFS_STORAGE_TYPE
-              value: "minio"
+              value: {{ .Values.juicefs.setup.storageType | quote }}
             - name: JFS_BUCKET
-              value: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
+              value: {{ .Values.juicefs.setup.bucket | quote }}
             - name: JFS_ACCESS_KEY
-              value: "minioadmin"
+              value: {{ .Values.juicefs.setup.accessKey | quote }}
             - name: JFS_SECRET_KEY
-              value: "minioadmin"
+              value: {{ .Values.juicefs.setup.secretKey | quote }}
             - name: JFS_MOUNT_POINT
-              value: "/var/jfs/sandbox-workspace"
+              value: {{ .Values.juicefs.hostPath.mountPath | quote }}
 
           command:
             - sh
@@ -102,16 +80,15 @@ spec:
               echo "Storage: ${JFS_STORAGE_TYPE}"
               echo "Bucket: ${JFS_BUCKET}"
 
-              # Create mount point
-              mkdir -p "${JFS_MOUNT_POINT}"
-
-              # Check if already mounted
+              # Check if already mounted (before mkdir)
               if mountpoint -q "${JFS_MOUNT_POINT}"; then
                 echo "JuiceFS already mounted at ${JFS_MOUNT_POINT}"
                 echo "Keeping mount alive..."
                 # Keep container running
                 tail -f /dev/null
               else
+                # Create mount point (only if not already mounted)
+                mkdir -p "${JFS_MOUNT_POINT}" 2>/dev/null || true
                 echo "Mounting JuiceFS..."
 
                 # Find juicefs binary location
@@ -150,7 +127,9 @@ spec:
 
                 "${JFS_BIN}" mount \
                   "${JFS_META_URL}" \
-                  "${JFS_MOUNT_POINT}"
+                  "${JFS_MOUNT_POINT}" \
+                  --writeback=0 \
+                  --cache-size=0
 
                 echo "JuiceFS mounted successfully!"
 
@@ -168,13 +147,13 @@ spec:
 
           volumeMounts:
             - name: juicefs-mount
-              mountPath: /var/jfs
+              mountPath: {{ .Values.juicefs.hostPath.hostPath | quote }}
               mountPropagation: Bidirectional
 
       volumes:
         - name: juicefs-mount
           hostPath:
-            path: /var/jfs
+            path: {{ .Values.juicefs.hostPath.hostPath | quote }}
             type: DirectoryOrCreate
 
       # Don't restart automatically - let Kubernetes restart if needed
@@ -187,7 +166,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: juicefs-mount-script
-  namespace: sandbox-system
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "sandbox.labels" . | nindent 4 }}
 data:
   mount-juicefs.sh: |
     #!/bin/bash
@@ -202,12 +183,12 @@ data:
     set -e
 
     # Configuration
-    JFS_META_URL="mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-    JFS_STORAGE_TYPE="minio"
-    JFS_BUCKET="http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
-    JFS_ACCESS_KEY="minioadmin"
-    JFS_SECRET_KEY="minioadmin"
-    JFS_MOUNT_POINT="/mnt/jfs/sandbox-workspace"
+    JFS_META_URL="{{ .Values.juicefs.setup.metaUrl }}"
+    JFS_STORAGE_TYPE="{{ .Values.juicefs.setup.storageType }}"
+    JFS_BUCKET="{{ .Values.juicefs.setup.bucket }}"
+    JFS_ACCESS_KEY="{{ .Values.juicefs.setup.accessKey }}"
+    JFS_SECRET_KEY="{{ .Values.juicefs.setup.secretKey }}"
+    JFS_MOUNT_POINT="{{ .Values.juicefs.hostPath.hostPath }}/sandbox-workspace"
 
     echo "=== JuiceFS Host Mount Script ==="
     echo "Mount Point: ${JFS_MOUNT_POINT}"
@@ -254,7 +235,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: juicefs-mount-helper
-  namespace: sandbox-system
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: juicefs-mount-helper
+    {{- include "sandbox.labels" . | nindent 4 }}
 spec:
   selector:
     app: juicefs-mount-helper
@@ -263,3 +247,5 @@ spec:
       port: 8080
       targetPort: 8080
   type: ClusterIP
+{{- end }}
+{{- end }}

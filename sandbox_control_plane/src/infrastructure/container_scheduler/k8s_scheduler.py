@@ -384,7 +384,9 @@ exec python -m executor.interfaces.http.rest
                 )
             )
 
-        # 构建标签
+        # 构建标签（排除 dependencies，因为 K8s labels 有严格格式限制）
+        # dependencies 不能作为 label，因为包含方括号、引号等非法字符
+        dependencies_value = config.labels.pop("dependencies", None)
         labels = {
             "app": "sandbox-executor",  # 匹配 sandbox-executor service selector
             "sandbox-session": config.name,
@@ -394,14 +396,22 @@ exec python -m executor.interfaces.http.rest
             labels["mount-method"] = "hostPath"
         labels.update(config.labels)
 
+        # 构建 annotations（dependencies 放在这里，没有格式限制）
+        annotations = {
+            "sandbox-session-id": config.name,
+        }
+        if dependencies_value:
+            annotations["dependencies"] = dependencies_value
+        # 恢复 dependencies 到 config.labels，避免影响后续调用
+        if dependencies_value is not None:
+            config.labels["dependencies"] = dependencies_value
+
         # 构建 Pod Spec
         pod = V1Pod(
             metadata=V1ObjectMeta(
                 name=pod_name,
                 labels=labels,
-                annotations={
-                    "sandbox-session-id": config.name,
-                },
+                annotations=annotations,
             ),
             spec=V1PodSpec(
                 containers=containers,

@@ -1,0 +1,133 @@
+{{- if .Values.juicefs.enabled }}
+{{- if .Values.juicefs.setup.enabled }}
+---
+# ConfigMap for JuiceFS database initialization script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: juicefs-init-script
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "sandbox.labels" . | nindent 4 }}
+data:
+  init-juicefs-db.sql: |
+    -- JuiceFS Metadata Database Initialization
+    --
+    -- This script creates the database and user for JuiceFS metadata storage.
+    -- JuiceFS stores file metadata (directory structure, attributes, chunks)
+    -- in MariaDB, while actual file data is stored in MinIO.
+    --
+    -- IMPORTANT: This script should be run during initial setup.
+    --
+    -- Usage:
+    --   kubectl exec -n {{ .Values.global.namespace }} deployment/mariadb -- mysql -u root -p"password" < /init/init-juicefs-db.sql
+
+    -- Create JuiceFS metadata database
+    CREATE DATABASE IF NOT EXISTS juicefs_metadata
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+    -- Create dedicated user for JuiceFS (optional, can reuse root)
+    -- CHANGE THE PASSWORD IN PRODUCTION!
+    CREATE USER IF NOT EXISTS '{{ .Values.juicefs.setup.dbUser }}'@'%' IDENTIFIED BY '{{ .Values.juicefs.setup.dbPassword }}';
+
+    -- Grant all privileges on JuiceFS database
+    GRANT ALL PRIVILEGES ON juicefs_metadata.* TO '{{ .Values.juicefs.setup.dbUser }}'@'%';
+
+    -- Flush privileges to ensure changes take effect
+    FLUSH PRIVILEGES;
+
+    -- Verification query (run this to confirm database is ready)
+    USE juicefs_metadata;
+
+    SELECT 'JuiceFS database initialized successfully' AS status;
+
+---
+# Job to initialize JuiceFS database (run once during installation)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: juicefs-db-init
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: juicefs-setup
+    {{- include "sandbox.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        app: juicefs-setup
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-mariadb
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mariadb.{{ .Values.global.namespace }}.svc.cluster.local 3306; do
+                echo "Waiting for MariaDB..."
+                sleep 2
+              done
+              echo "MariaDB is ready!"
+        - name: create-db
+          image: {{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Creating JuiceFS database..."
+              mariadb -h mariadb.{{ .Values.global.namespace }}.svc.cluster.local \
+                    -u root \
+                    -p"{{ .Values.mariadb.auth.rootPassword }}" \
+                    < /init/init-juicefs-db.sql
+              echo "JuiceFS database created!"
+              echo "DB" > /shared/status
+          volumeMounts:
+            - name: init-script
+              mountPath: /init
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: format-juicefs
+          image: {{ .Values.juicefs.setup.image }}:{{ .Values.juicefs.setup.tag }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Checking database status..."
+              ls -la /shared/
+
+              echo "Formatting JuiceFS filesystem..."
+
+              # Set up environment variables for S3/MinIO
+              export AWS_ACCESS_KEY_ID="{{ .Values.juicefs.setup.accessKey }}"
+              export AWS_SECRET_ACCESS_KEY="{{ .Values.juicefs.setup.secretKey }}"
+
+              # Find juicefs binary
+              JFS_BIN=$(command -v juicefs || echo "/usr/local/bin/juicefs")
+
+              # Format the JuiceFS filesystem
+              # For MinIO, use the full URL in --bucket parameter
+              "${JFS_BIN}" format \
+                  --storage="{{ .Values.juicefs.setup.storageType }}" \
+                  --bucket="{{ .Values.juicefs.setup.bucket }}" \
+                  --access-key="{{ .Values.juicefs.setup.accessKey }}" \
+                  --secret-key="{{ .Values.juicefs.setup.secretKey }}" \
+                  "{{ .Values.juicefs.setup.metaUrl }}" \
+                  "sandbox-workspace"
+
+              echo "JuiceFS filesystem formatted successfully!"
+              echo "JuiceFS database initialization completed!"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+      volumes:
+        - name: init-script
+          configMap:
+            name: juicefs-init-script
+        - name: shared
+          emptyDir: {}
+{{- end }}
+{{- end }}

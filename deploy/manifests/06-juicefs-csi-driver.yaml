@@ -1,0 +1,159 @@
+---
+# JuiceFS CSI Driver for Kubernetes
+#
+# This manifest installs the JuiceFS CSI Driver in the cluster.
+# The CSI driver enables dynamic provisioning of S3-backed volumes
+# that can be mounted directly into pods without sidecar containers.
+#
+# Documentation: https://juicefs.com/docs/csi/introduction
+#
+# Installation:
+#   kubectl apply -f deploy/manifests/06-juicefs-csi-driver.yaml
+#
+# Verification:
+#   kubectl get pods -n kube-system -l app=juicefs-csi-driver
+#
+
+# JuiceFS CSI Driver DaemonSet (runs on each node)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: juicefs-csi-node
+  namespace: kube-system
+  labels:
+    app: juicefs-csi-driver
+spec:
+  selector:
+    matchLabels:
+      app: juicefs-csi-driver
+  template:
+    metadata:
+      labels:
+        app: juicefs-csi-driver
+    spec:
+      serviceAccountName: juicefs-csi-driver-sa
+      hostNetwork: true
+      containers:
+        - name: juicefs-plugin
+          securityContext:
+            privileged: true
+          image: juicedata/juicefs-csi-driver:v0.24.3
+          args:
+            - --endpoint=$(CSI_ENDPOINT)
+            - --nodeid=$(NODE_NAME)
+            - --v=5
+          env:
+            - name: CSI_ENDPOINT
+              value: /csi/csi.sock
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: plugin-dir
+              mountPath: /csi
+            - name: device-dir
+              mountPath: /dev
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.juicefs.com
+            type: DirectoryOrCreate
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+
+---
+# JuiceFS CSI Driver ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: juicefs-csi-driver-sa
+  namespace: kube-system
+
+---
+# JuiceFS CSI Driver ClusterRole (for node-level operations)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: juicefs-csi-driver-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+
+---
+# JuiceFS CSI Driver ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: juicefs-csi-driver-binding
+subjects:
+  - kind: ServiceAccount
+    name: juicefs-csi-driver-sa
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: juicefs-csi-driver-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# JuiceFS CSI Driver CSIDriver (registers the CSI driver with Kubernetes)
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.juicefs.com
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  volumeLifecycleModes:
+    - Persistent
+  storageCapacity: false
+  fsGroupPolicy: File
+
+---
+# Service for JuiceFS CSI Driver (for CSI driver communication)
+apiVersion: v1
+kind: Service
+metadata:
+  name: juicefs-csi-driver
+  namespace: kube-system
+  labels:
+    app: juicefs-csi-driver
+spec:
+  selector:
+    app: juicefs-csi-driver
+  ports:
+    - name: dummy
+      port: 12345

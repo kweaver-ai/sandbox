@@ -112,6 +112,8 @@ class JuiceFSStorage(IStorageService):
 
     async def upload_file(self, s3_path: str, content: bytes, content_type: str = "application/octet-stream") -> None:
         """上传文件到 JuiceFS（通过 FUSE 挂载点）"""
+        import os
+
         key = self._normalize_key(s3_path)
         file_path = self._mount_path / key
 
@@ -121,10 +123,37 @@ class JuiceFSStorage(IStorageService):
             # 确保父目录存在
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 写入文件
-            file_path.write_bytes(content)
+            # 使用原子写入模式：先写临时文件，然后重命名
+            # 这确保写入完整性并避免部分写入
+            temp_path = file_path.with_suffix(file_path.suffix + '.tmp')
 
-            logger.info(f"[JuiceFS] File written: {file_path}")
+            try:
+                # 写入临时文件
+                with open(temp_path, 'wb') as f:
+                    f.write(content)
+                    # 强制刷新到磁盘（FUSE 将其传递给 JuiceFS 客户端）
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                # 原子重命名
+                temp_path.replace(file_path)
+
+                # 再次 fsync 父目录以确保元数据已写入
+                # 这对于 FUSE 文件系统特别重要
+                try:
+                    parent_dir = open(file_path.parent, 'r')
+                    os.fsync(parent_dir.fileno())
+                    parent_dir.close()
+                except Exception as e:
+                    logger.warning(f"[JuiceFS] Parent directory sync failed: {e}")
+
+                logger.info(f"[JuiceFS] File written and synced: {file_path}")
+
+            except Exception as e:
+                # 清理临时文件
+                if temp_path.exists():
+                    temp_path.unlink()
+                raise
 
         await asyncio.to_thread(_write)
         logger.info(f"[JuiceFS] Upload complete: {file_path}, size={len(content)}")
