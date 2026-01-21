@@ -197,6 +197,49 @@ class TestTemplatesAPI:
         # Cleanup
         await http_client.delete(f"/templates/{duplicate_template_id}")
 
+    async def test_update_template_timeout_success(self, http_client: AsyncClient, test_template_id: str):
+        """Test updating template timeout successfully."""
+        # Get original timeout
+        get_response = await http_client.get(f"/templates/{test_template_id}")
+        assert get_response.status_code == 200
+        original_timeout = get_response.json().get("default_timeout_sec", 300)
+
+        # Update template timeout
+        new_timeout = 600
+        update_data = {"default_timeout": new_timeout}
+        response = await http_client.put(
+            f"/templates/{test_template_id}",
+            json=update_data
+        )
+
+        assert response.status_code in (200, 202)
+
+        # Verify timeout was updated
+        get_response = await http_client.get(f"/templates/{test_template_id}")
+        assert get_response.status_code == 200
+        data = get_response.json()
+        assert data["default_timeout_sec"] == new_timeout
+
+        # Restore original timeout
+        await http_client.put(
+            f"/templates/{test_template_id}",
+            json={"default_timeout": original_timeout}
+        )
+
+    async def test_update_template_image_url_not_exists(self, http_client: AsyncClient, test_template_id: str):
+        """Test updating template with non-existent image_url should fail."""
+        # Try to update with a non-existent image URL
+        non_existent_image = "non-existent-image:latest"
+        update_data = {"image_url": non_existent_image}
+
+        response = await http_client.put(
+            f"/templates/{test_template_id}",
+            json=update_data
+        )
+
+        # Should fail with validation error or bad request
+        assert response.status_code in (400, 422)
+
     async def test_delete_template(self, http_client: AsyncClient):
         """Test deleting a template."""
         # Create a template to delete
