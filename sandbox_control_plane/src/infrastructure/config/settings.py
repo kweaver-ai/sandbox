@@ -4,7 +4,6 @@
 使用 Pydantic Settings 管理应用配置。
 """
 from functools import lru_cache
-from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,14 +43,7 @@ class Settings(BaseSettings):
     s3_region: str = Field(default="us-east-1")
     s3_access_key_id: str = Field(default="")
     s3_secret_access_key: str = Field(default="")
-    s3_endpoint_url: str = Field(default="")  # MinIO 支持
-
-    # ============== S3 配置 ==============
-    s3_bucket: str = Field(default="sandbox-workspace")
-    s3_region: str = Field(default="us-east-1")
-    s3_access_key_id: str = Field(default="")
-    s3_secret_access_key: str = Field(default="")
-    s3_endpoint_url: str = Field(default="")  # MinIO 支持
+    s3_endpoint_url: str = Field(default="")
 
     # ============== Docker 配置 ==============
     docker_host: str = Field(default="unix:///var/run/docker.sock")
@@ -118,8 +110,8 @@ class Settings(BaseSettings):
 
     # ============== 安全配置 ==============
     secret_key: str = Field(default="change-this-in-production")
-    allowed_hosts: List[str] = Field(default=["*"])
-    cors_origins: List[str] = Field(default=["http://localhost:3000"])
+    allowed_hosts: list[str] = Field(default=["*"])
+    cors_origins: list[str] = Field(default=["http://localhost:3000"])
 
     # ============== 限流配置 ==============
     rate_limit_enabled: bool = Field(default=True)

@@ -151,13 +151,11 @@ class TestK8sScheduler:
 
         assert pod_name == "sandbox-test-session"
 
-        # 验证 Pod 配置包含两个容器（executor + s3-mount sidecar）
+        # 验证 Pod 配置包含单个 executor 容器（s3fs 在容器内挂载）
         call_args = mock_core_v1.create_namespaced_pod.call_args
         pod_spec = call_args[1]["body"]
-        assert len(pod_spec.spec.containers) == 2
-        container_names = [c.name for c in pod_spec.spec.containers]
-        assert "executor" in container_names
-        assert "s3-mount" in container_names
+        assert len(pod_spec.spec.containers) == 1
+        assert pod_spec.spec.containers[0].name == "executor"
 
     @pytest.mark.asyncio
     async def test_create_pod_with_dependencies(self, scheduler, mock_core_v1):
@@ -357,35 +355,6 @@ class TestK8sScheduler:
         await scheduler.close()
         assert scheduler._initialized is False
 
-    def test_build_s3_sidecar_container(self, scheduler):
-        """测试构建 S3 sidecar 容器"""
-        container = scheduler._build_s3_sidecar_container(
-            s3_bucket="test-bucket",
-            s3_prefix="sessions/sess_123",
-            s3_endpoint_url="http://localhost:9000",
-            s3_access_key="minioadmin",
-            s3_secret_key="minioadmin",
-            dependencies=None,
-        )
-
-        assert container.name == "s3-mount"
-        assert "s3fs" in container.command[2]
-
-    def test_build_s3_sidecar_with_dependencies(self, scheduler):
-        """测试构建带依赖的 S3 sidecar 容器"""
-        dependencies = [{"name": "requests", "version": "==2.31.0"}]
-        container = scheduler._build_s3_sidecar_container(
-            s3_bucket="test-bucket",
-            s3_prefix="sessions/sess_123",
-            s3_endpoint_url="http://localhost:9000",
-            s3_access_key="minioadmin",
-            s3_secret_key="minioadmin",
-            dependencies=dependencies,
-        )
-
-        assert "pip3 install" in container.command[2]
-        assert "requests==2.31.0" in container.command[2]
-
     def test_build_executor_container(self, scheduler, basic_config):
         """测试构建 executor 容器"""
         container = scheduler._build_executor_container(
@@ -422,41 +391,6 @@ class TestK8sScheduler:
         assert "WORKSPACE_PATH" in env_names
         assert "S3_BUCKET" in env_names
         assert "S3_PREFIX" in env_names
-
-
-class TestK8sSchedulerCSI:
-    """K8s 容器调度器 CSI Driver 测试"""
-
-    @pytest.fixture
-    def mock_core_v1(self):
-        """模拟 Kubernetes CoreV1Api"""
-        api = Mock()
-        return api
-
-    @pytest.fixture
-    def scheduler(self, mock_core_v1):
-        """创建 K8s 调度器"""
-        sched = K8sScheduler(namespace="test-namespace")
-        sched._core_v1 = mock_core_v1
-        sched._initialized = True
-        return sched
-
-    @pytest.fixture
-    def s3_config(self):
-        """S3 workspace 容器配置"""
-        return ContainerConfig(
-            image="python:3.11",
-            name="test-session-abc123",
-            cpu_limit="1",
-            memory_limit="512Mi",
-            disk_limit="1Gi",
-            env_vars={"SESSION_ID": "test-session-abc123"},
-            labels={},
-            network_name="sandbox_network",
-            workspace_path="s3://sandbox-workspace/sessions/test-session-abc123/"
-        )
-
-    @pytest.mark.asyncio
 
 
 class TestS3PrefixHelper:

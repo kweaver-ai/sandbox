@@ -1,6 +1,19 @@
 # 沙箱平台 - 六边形架构项目结构
 
+> **最新更新**: 2025-01-22
+>
+> **重大变更**: 存储架构从 JuiceFS 迁移到 MinIO + s3fs 架构，简化部署并提升可移植性。详见迁移记录章节。
+
 ## 架构概述
+
+### 快速导航
+
+- **[项目目录结构](#项目目录结构)** - 完整的文件组织结构
+- **[各层职责说明](#各层职责说明)** - 六边形架构各层职责
+- **[存储架构](#存储架构storage-architecture)** - MinIO + s3fs 存储方案
+- **[部署架构](#部署架构)** - Helm Chart 和 K8s manifests 部署
+- **[执行器架构](#执行器架构详解)** - 容器内执行器设计
+- **[迁移记录](#迁移记录)** - 架构演进历史
 
 本项目采用**六边形架构**（Hexagonal Architecture / Ports and Adapters），也称为洋葱架构。
 
@@ -81,25 +94,31 @@ sandbox/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── sql_session_repository.py
 │   │   │   │   └── sql_execution_repository.py
-│   │   │   └── database.py       # 数据库连接管理
+│   │   │   ├── database.py       # 数据库连接管理
+│   │   │   └── seed/             # 数据库种子数据
+│   │   │       ├── __init__.py
+│   │   │       ├── seeder.py
+│   │   │       └── default_data.py
 │   │   ├── messaging/            # 消息适配器
 │   │   │   ├── __init__.py
 │   │   │   ├── kafka_publisher.py
 │   │   │   └── redis_publisher.py
-│   │   ├── external/             # 外部服务适配器
+│   │   ├── container_scheduler/  # 容器调度器
 │   │   │   ├── __init__.py
-│   │   │   ├── runtime/          # 运行时适配器
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── docker_runtime.py
-│   │   │   │   ├── k8s_runtime.py
-│   │   │   │   └── runtime_client.py
-│   │   │   ├── storage/          # 存储适配器
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── s3_storage.py
-│   │   │   │   └── local_storage.py
-│   │   │   └── http/             # HTTP 客户端
-│   │   │       ├── __init__.py
-│   │   │       └── http_client.py
+│   │   │   ├── base.py           # 调度器抽象接口
+│   │   │   ├── docker_scheduler.py  # Docker 调度器实现
+│   │   │   └── k8s_scheduler.py     # Kubernetes 调度器实现（支持 s3fs 挂载）
+│   │   ├── storage/              # 存储适配器
+│   │   │   ├── __init__.py
+│   │   │   └── s3_storage.py     # S3 兼容存储（MinIO/AWS S3）
+│   │   ├── executors/            # 执行器客户端
+│   │   │   ├── __init__.py
+│   │   │   ├── client.py         # HTTP 客户端
+│   │   │   ├── dto.py            # 数据传输对象
+│   │   │   └── errors.py         # 错误定义
+│   │   ├── background_tasks/     # 后台任务管理
+│   │   │   ├── __init__.py
+│   │   │   └── task_manager.py   # 任务调度器
 │   │   ├── logging/              # 日志适配器
 │   │   │   ├── __init__.py
 │   │   │   ├── structured_logger.py
@@ -184,10 +203,32 @@ sandbox/
 └── README.md
 │
 ├── deploy/                       # 部署配置
-│   └── k8s/                      # Kubernetes manifests
+│   ├── helm/                     # Helm Chart
+│   │   └── sandbox/              # Sandbox 系统 Helm Chart
+│   │       ├── Chart.yaml        # Chart 元数据
+│   │       ├── values.yaml       # 默认配置值
+│   │       └── templates/        # Kubernetes 资源模板
+│   │           ├── namespace.yaml
+│   │           ├── configmap.yaml
+│   │           ├── secret.yaml
+│   │           ├── s3fs-secret.yaml    # s3fs 认证密钥
+│   │           ├── serviceaccount.yaml
+│   │           ├── rbac.yaml            # RBAC 配置
+│   │           ├── control-plane-deployment.yaml
+│   │           ├── mariadb-deployment.yaml
+│   │           ├── minio-deployment.yaml
+│   │           └── web-deployment.yaml
+│   └── manifests/                # 原生 Kubernetes manifests
 │       ├── 00-namespace.yaml
 │       ├── 01-configmap.yaml
-│       └── ...
+│       ├── 02-secret.yaml
+│       ├── 03-serviceaccount.yaml
+│       ├── 04-role.yaml
+│       ├── 05-control-plane-deployment.yaml
+│       ├── 07-minio-deployment.yaml
+│       ├── 08-mariadb-deployment.yaml
+│       ├── 11-sandbox-web-deployment.yaml
+│       └── deploy.sh             # 部署脚本
 │
 ├── docker-compose.yml            # 开发环境
 ├── runtime/                      # 运行时模块
@@ -337,12 +378,16 @@ sandbox/
 ┌────────────────────────────────────────┼────────────────────┐
 │                    Infrastructure Layer (Adapters)          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │  Database   │  │   Storage   │  │   Runtime   │        │
-│  │  Adapter    │  │   Adapter   │  │   Adapter   │        │
+│  │  Database   │  │   Storage   │  │  Scheduler  │        │
+│  │  Adapter    │  │  (S3/MinIO) │  │  Adapter    │        │
+│  └─────────────┘  └─────────────┘  └─────────────┘        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │  Messaging  │  │    HTTP     │  │  Executors  │        │
+│  │  Adapter    │  │   Adapter   │  │   Client    │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘        │
 │  ┌─────────────┐  ┌─────────────┐                          │
-│  │  Messaging  │  │    HTTP     │                          │
-│  │  Adapter    │  │   Adapter   │                          │
+│  │ Background  │  │    Logging  │                          │
+│  │   Tasks     │  │   Adapter   │                          │
 │  └─────────────┘  └─────────────┘                          │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -373,20 +418,94 @@ sandbox/
 
 **职责**：提供技术实现，实现领域层定义的接口（Adapter）。
 
-- **Persistence**: 数据库持久化
+- **Persistence**: 数据库持久化（MariaDB + SQLAlchemy）
+- **Container Scheduler**: 容器调度（Docker/Kubernetes）
+- **Storage**: S3 兼容对象存储（MinIO/AWS S3）
+  - `S3Storage`: 统一存储接口实现，支持文件上传、下载、删除、列表操作
+  - s3fs 挂载: K8s 环境下通过 s3fs 将 S3 bucket 挂载到 Pod 的 /workspace 目录
+- **Executors**: 执行器 HTTP 客户端
+- **Background Tasks**: 后台任务管理（会话清理、健康检查）
 - **Messaging**: 消息队列
-- **External**: 外部服务集成
-- **Logging**: 日志记录
-- **Config**: 配置管理
+- **Logging**: 结构化日志记录
+- **Config**: 配置管理（Pydantic Settings）
+
+### 存储架构（Storage Architecture）
+
+系统采用 **MinIO + s3fs** 架构实现工作区存储：
+
+**Kubernetes 环境**：
+- Control Plane 通过 S3 API 将文件写入 MinIO 的 `/sessions/{session_id}/` 路径
+- Executor Pod 启动时使用 s3fs 将 S3 bucket 的 session 子目录挂载到 `/workspace`
+- s3fs 进程和 executor 进程运行在同一容器内
+- 支持 s3fs 密钥通过 Kubernetes Secret 管理
+
+**Docker 环境**：
+- 使用 Docker volume bind mount 直接挂载本地目录到 `/workspace`
+- Control Plane 通过 `S3Storage` 适配器管理文件
+
+**统一抽象**：
+- `IStorageService` 接口定义了统一的存储操作
+- `S3Storage` 实现了 S3 兼容存储的所有操作
+- 支持大文件分片上传（>5MB）
+- 自动清理 S3 目录标记以确保 s3fs 兼容性
 
 ### 4. Interfaces Layer (接口层)
 
 **职责**：与外部世界交互，处理请求/响应。
 
-- **REST API**: HTTP 接口
+- **REST API**: HTTP 接口（FastAPI）
 - **CLI**: 命令行接口
 - **gRPC**: RPC 接口（可选）
 - **WebSocket**: 实时通信（可选）
+
+## 部署架构
+
+### Helm Chart 部署
+
+项目提供了完整的 Helm Chart 用于 Kubernetes 部署：
+
+```bash
+# 部署
+helm install sandbox deploy/helm/sandbox \
+  --namespace sandbox-system \
+  --create-namespace
+
+# 升级
+helm upgrade sandbox deploy/helm/sandbox
+
+# 卸载
+helm uninstall sandbox --namespace sandbox-system
+```
+
+**Chart 结构**：
+- `templates/`: Kubernetes 资源模板
+  - `control-plane-deployment.yaml`: Control Plane 部署
+  - `mariadb-deployment.yaml`: 数据库部署
+  - `minio-deployment.yaml`: 对象存储部署
+  - `web-deployment.yaml`: Web 管理界面部署
+  - `s3fs-secret.yaml`: s3fs 认证密钥
+  - `rbac.yaml`: RBAC 配置
+- `values.yaml`: 默认配置值
+
+### 原生 Manifests 部署
+
+也提供了原生 Kubernetes manifests：
+
+```bash
+cd deploy/manifests
+./deploy.sh  # 自动部署所有资源
+```
+
+**关键组件**：
+- **Control Plane**: 管理 API 和调度逻辑
+- **MariaDB**: 会话、执行、模板数据持久化
+- **MinIO**: S3 兼容对象存储（工作区文件）
+- **Sandbox Web**: React 管理界面
+
+**存储配置**：
+- MinIO 数据通过 PVC 持久化
+- s3fs Secret 包含 MinIO 访问凭证
+- Control Plane 环境变量配置 S3 端点
 
 ## 编码规范
 
@@ -572,7 +691,7 @@ async def create_session(
 │  │  - 只读文件系统 + /workspace 可写    │ │
 │  └─────────────────────────────────────┘ │
 │                                          │
-│  /workspace (S3 Volume 或临时存储)       │
+│  /workspace (s3fs 挂载或 bind mount)     │
 └─────────────────────────────────────────┘
 ```
 
@@ -877,6 +996,39 @@ async def test_heartbeat_service():
 ```
 
 ### 迁移记录
+
+#### 2025-01-22: 存储架构重构（JuiceFS → MinIO + s3fs）
+
+**变更范围**:
+- 移除 JuiceFS 相关实现（`juicefs_storage.py`, `juicefs_sdk_storage.py`）
+- 简化存储模块为单一 `S3Storage` 实现
+- 更新 K8s 调度器使用 s3fs + bind mount 挂载工作区
+- 移除 JuiceFS CSI Driver、Setup Job 等 K8s 资源
+- 添加 s3fs Secret 管理（`s3fs-secret.yaml`）
+
+**新的存储架构**:
+- **Kubernetes 环境**: MinIO + s3fs
+  - Control Plane 通过 S3 API 写入文件到 MinIO
+  - Executor Pod 使用 s3fs 将 S3 bucket 挂载到 /workspace
+  - s3fs 密钥通过 Kubernetes Secret 管理
+- **Docker 环境**: S3Storage + bind mount
+  - 使用 Docker volume 直接挂载本地目录
+
+**优势**:
+- 简化架构，减少依赖（无需 JuiceFS SDK 和 CSI Driver）
+- 更好的可移植性（s3fs 是标准 FUSE 实现）
+- 降低运维复杂度（无需额外的 JuiceFS 守护进程）
+- 保持与 S3 API 的完全兼容性
+
+**清理的文件**:
+- `sandbox_control_plane/src/infrastructure/storage/juicefs_storage.py`
+- `sandbox_control_plane/src/infrastructure/storage/juicefs_sdk_storage.py`
+- `deploy/helm/sandbox/templates/juicefs-csi-driver.yaml`
+- `deploy/helm/sandbox/templates/juicefs-hostpath.yaml`
+- `deploy/helm/sandbox/templates/juicefs-setup-job.yaml`
+
+**新增的文件**:
+- `deploy/helm/sandbox/templates/s3fs-secret.yaml` - s3fs 认证密钥
 
 #### 2025-01-07: 完成六边形架构迁移
 

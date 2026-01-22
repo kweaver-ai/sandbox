@@ -1,15 +1,9 @@
 # Default values for sandbox-platform Helm chart
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
 
 global:
-  # Namespace where all resources will be deployed
   namespace: sandbox-system
-  # Runtime namespace for executor pods
   runtimeNamespace: sandbox-runtime
-  # Image registry
   imageRegistry: ""
-  # Image pull policy
   imagePullPolicy: IfNotPresent
 
 # Control Plane configuration
@@ -23,27 +17,21 @@ controlPlane:
     tag: "latest"
     pullPolicy: IfNotPresent
 
-  # Service configuration
   service:
     type: ClusterIP
     port: 8000
     annotations: {}
 
-  # Ingress configuration
   ingress:
     enabled: false
     className: "nginx"
     annotations: {}
-      # cert-manager.io/cluster-issuer: "letsencrypt-prod"
     hosts:
       - host: sandbox-control-plane.example.com
         paths:
           - path: /
             pathType: Prefix
     tls: []
-    #  - secretName: sandbox-control-plane-tls
-    #    hosts:
-    #      - sandbox-control-plane.example.com
 
   # Resource limits and requests
   resources:
@@ -74,9 +62,8 @@ controlPlane:
                     - sandbox-control-plane
             topologyKey: kubernetes.io/hostname
 
-  # Environment variables from ConfigMap
   env:
-    ENVIRONMENT: "staging"  # Changed to staging to enable auto table creation
+    ENVIRONMENT: "staging"
     DEBUG: "false"
     DATABASE_URL: "mysql+aiomysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/sandbox"
     KUBERNETES_NAMESPACE: "sandbox-runtime"
@@ -91,7 +78,6 @@ controlPlane:
     DISABLE_BWRAP: "true"
     PYTHONUNBUFFERED: "1"
 
-  # S3/MinIO configuration
   s3:
     endpointUrl: "http://minio.sandbox-system.svc.cluster.local:9000"
     bucket: "sandbox-workspace"
@@ -166,7 +152,6 @@ mariadb:
     accessMode: ReadWriteOnce
     size: 10Gi
 
-  # Database credentials
   auth:
     rootPassword: "password"
     database: "sandbox"
@@ -212,18 +197,15 @@ minio:
       cpu: 500m
       memory: 512Mi
 
-  # Persistence
   persistence:
     enabled: true
     storageClass: ""
     accessMode: ReadWriteOnce
     size: 10Gi
 
-  # Default buckets
   defaultBuckets:
     - sandbox-workspace
 
-  # Root credentials
   auth:
     rootUser: "minioadmin"
     rootPassword: "minioadmin"
@@ -247,11 +229,9 @@ configMap:
   create: true
   name: "sandbox-config"
 
-# Secret configuration
 secret:
   create: true
   name: "sandbox-secrets"
-  # S3 credentials (if external)
   s3:
     accessKeyId: "minioadmin"
     secretAccessKey: "minioadmin"

@@ -5,10 +5,9 @@
 """
 import os
 from functools import lru_cache
-import logging
-from typing import Optional
 
 from fastapi import FastAPI, Depends
+from src.infrastructure.logging import get_logger
 
 from src.application.services.session_service import SessionService
 from src.application.services.template_service import TemplateService
@@ -38,7 +37,7 @@ IS_IN_KUBERNETES = os.getenv("KUBERNETES_SERVICE_HOST") is not None
 # - Set to False to use Mock scheduler
 USE_MOCK_SCHEDULER = False  # Set to True to use Mock scheduler
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.info(f"Runtime environment: {'Kubernetes' if IS_IN_KUBERNETES else 'Local Docker'}")
 
 
@@ -333,7 +332,6 @@ class MockStorageService(IStorageService):
         return []
 
     async def delete_prefix(self, prefix: str) -> int:
-        """删除指定前缀的所有文件（Mock 实现）"""
         return 0
 
 
@@ -580,12 +578,9 @@ def get_storage_service():
     """
     获取存储服务（S3 或 Mock）
 
-    移除了 JuiceFS 相关逻辑，直接使用 S3 API 写入 MinIO
-
     架构说明：
     - Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
-    - Executor Pod 使用 s3fs init container 挂载 S3 bucket 的 session 子目录到 /workspace
-    - 不再需要 JuiceFS 元数据数据库和 CSI 驱动
+    - Executor Pod 在启动脚本中挂载 s3fs，将 S3 bucket 的 session 子目录挂载到 /workspace
     """
     global _storage_service_singleton
 
@@ -649,6 +644,130 @@ def get_file_service_db(
 _state_sync_service_singleton = None
 
 
+def _create_direct_session_repository(db_mgr):
+    """
+    创建直接使用数据库的会话仓储
+
+    用于状态同步服务，避免仓储层开销。
+    """
+    from src.infrastructure.persistence.models.session_model import SessionModel
+    from src.domain.entities.session import Session, SessionStatus
+    from src.domain.value_objects.resource_limit import ResourceLimit
+    from sqlalchemy import select
+
+    class DirectSessionRepository:
+        """直接使用数据库的仓储，用于状态同步"""
+
+        def __init__(self, db_mgr):
+            self._db_mgr = db_mgr
+
+        async def find_by_status(self, status: str, limit: int = 100):
+            """直接查询数据库"""
+            result = []
+            async with self._db_mgr.get_session() as session:
+                stmt = select(SessionModel).filter(
+                    SessionModel.status == status
+                ).limit(limit)
+                models_result = await session.execute(stmt)
+                for model in models_result.scalars():
+                    session_entity = Session(
+                        id=model.id,
+                        template_id=model.template_id,
+                        status=SessionStatus(model.status),
+                        resource_limit=ResourceLimit(
+                            cpu=model.resources_cpu,
+                            memory=model.resources_memory,
+                            disk=model.resources_disk,
+                            max_processes=128,
+                        ),
+                        workspace_path=model.workspace_path,
+                        runtime_type=model.runtime_type,
+                        runtime_node=model.runtime_node,
+                        container_id=model.container_id,
+                        pod_name=model.pod_name,
+                        env_vars=model.env_vars,
+                        timeout=model.timeout,
+                        created_at=model.created_at,
+                        updated_at=model.updated_at,
+                        last_activity_at=model.last_activity_at,
+                    )
+                    result.append(session_entity)
+            return result
+
+        async def find_by_id(self, session_id: str):
+            """通过 ID 查找"""
+            async with self._db_mgr.get_session() as session:
+                model = await session.get(SessionModel, session_id)
+                if model:
+                    return Session(
+                        id=model.id,
+                        template_id=model.template_id,
+                        status=SessionStatus(model.status),
+                        resource_limit=ResourceLimit(
+                            cpu=model.resources_cpu,
+                            memory=model.resources_memory,
+                            disk=model.resources_disk,
+                            max_processes=128,
+                        ),
+                        workspace_path=model.workspace_path,
+                        runtime_type=model.runtime_type,
+                        runtime_node=model.runtime_node,
+                        container_id=model.container_id,
+                        pod_name=model.pod_name,
+                        env_vars=model.env_vars,
+                        timeout=model.timeout,
+                        created_at=model.created_at,
+                        updated_at=model.updated_at,
+                        last_activity_at=model.last_activity_at,
+                    )
+                return None
+
+        async def save(self, session):
+            """保存 session"""
+            async with self._db_mgr.get_session() as db:
+                model = await db.get(SessionModel, session.id)
+                if model:
+                    # 处理 status 可能是枚举或字符串的情况
+                    if hasattr(session.status, 'value'):
+                        model.status = session.status.value
+                    else:
+                        model.status = session.status
+                    model.container_id = session.container_id
+                    model.runtime_node = session.runtime_node
+                    model.updated_at = session.updated_at
+                    await db.commit()
+
+    return DirectSessionRepository(db_mgr)
+
+
+def _create_scheduler_for_state_sync(container_scheduler):
+    """为状态同步服务创建调度器"""
+    settings = get_settings()
+
+    if USE_MOCK_SCHEDULER:
+        return MockScheduler()
+
+    if IS_IN_KUBERNETES:
+        from src.infrastructure.schedulers.k8s_scheduler_service import K8sSchedulerService
+
+        # 创建一个简单的 template repo 用于 scheduler
+        class SimpleTemplateRepo:
+            async def find_by_id(self, template_id: str):
+                return None
+
+        return K8sSchedulerService(
+            container_scheduler=container_scheduler,
+            template_repo=SimpleTemplateRepo(),
+            executor_client=None,
+            executor_port=8080,
+            control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
+            disable_bwrap=settings.disable_bwrap,
+        )
+
+    # 本地 Docker 环境
+    return MockScheduler()
+
+
 def get_state_sync_service():
     """
     获取状态同步服务（共享单例）
@@ -659,145 +778,22 @@ def get_state_sync_service():
     global _scheduler_singleton
     from src.application.services.state_sync_service import StateSyncService
 
-    # 使用模块级单例
     container_scheduler = _container_scheduler_singleton
 
-    # 创建直接使用数据库的仓储
+    # 创建会话仓储
     if USE_SQL_REPOSITORIES:
-        from src.infrastructure.persistence.database import db_manager
-
-        class DirectSessionRepository:
-            """直接使用数据库的仓储，用于状态同步"""
-            def __init__(self, db_mgr):
-                self._db_mgr = db_mgr
-
-            async def find_by_status(self, status: str, limit: int = 100):
-                """直接查询数据库"""
-                from src.infrastructure.persistence.models.session_model import SessionModel
-                from sqlalchemy import select
-                result = []
-                async with self._db_mgr.get_session() as session:
-                    stmt = select(SessionModel).filter(
-                        SessionModel.status == status
-                    ).limit(limit)
-                    models_result = await session.execute(stmt)
-                    for model in models_result.scalars():
-                        from src.domain.entities.session import Session, SessionStatus
-                        from src.domain.value_objects.resource_limit import ResourceLimit
-
-                        session_entity = Session(
-                            id=model.id,
-                            template_id=model.template_id,
-                            status=SessionStatus(model.status),
-                            resource_limit=ResourceLimit(
-                                cpu=model.resources_cpu,
-                                memory=model.resources_memory,
-                                disk=model.resources_disk,
-                                max_processes=128,  # 默认值
-                            ),
-                            workspace_path=model.workspace_path,
-                            runtime_type=model.runtime_type,
-                            runtime_node=model.runtime_node,
-                            container_id=model.container_id,
-                            pod_name=model.pod_name,
-                            env_vars=model.env_vars,
-                            timeout=model.timeout,
-                            created_at=model.created_at,
-                            updated_at=model.updated_at,
-                            last_activity_at=model.last_activity_at,
-                        )
-                        result.append(session_entity)
-                return result
-
-            async def find_by_id(self, session_id: str):
-                """通过 ID 查找"""
-                from src.infrastructure.persistence.models.session_model import SessionModel
-                async with self._db_mgr.get_session() as session:
-                    model = await session.get(SessionModel, session_id)
-                    if model:
-                        from src.domain.entities.session import Session, SessionStatus
-                        from src.domain.value_objects.resource_limit import ResourceLimit
-
-                        return Session(
-                            id=model.id,
-                            template_id=model.template_id,
-                            status=SessionStatus(model.status),
-                            resource_limit=ResourceLimit(
-                                cpu=model.resources_cpu,
-                                memory=model.resources_memory,
-                                disk=model.resources_disk,
-                                max_processes=128,  # 默认值
-                            ),
-                            workspace_path=model.workspace_path,
-                            runtime_type=model.runtime_type,
-                            runtime_node=model.runtime_node,
-                            container_id=model.container_id,
-                            pod_name=model.pod_name,
-                            env_vars=model.env_vars,
-                            timeout=model.timeout,
-                            created_at=model.created_at,
-                            updated_at=model.updated_at,
-                            last_activity_at=model.last_activity_at,
-                        )
-                return None
-
-            async def save(self, session):
-                """保存 session"""
-                from src.infrastructure.persistence.models.session_model import SessionModel
-                async with self._db_mgr.get_session() as db:
-                    model = await db.get(SessionModel, session.id)
-                    if model:
-                        # 处理 status 可能是枚举或字符串的情况
-                        if hasattr(session.status, 'value'):
-                            model.status = session.status.value
-                        else:
-                            model.status = session.status
-                        model.container_id = session.container_id
-                        model.runtime_node = session.runtime_node
-                        model.updated_at = session.updated_at
-                        await db.commit()
-
-        session_repo = DirectSessionRepository(db_manager)
+        session_repo = _create_direct_session_repository(db_manager)
     else:
         session_repo = MockSessionRepository()
 
-    # 创建 scheduler（如果还没有）
+    # 创建或复用调度器
     scheduler = _scheduler_singleton
     if scheduler is None:
-        # 创建 scheduler 服务（用于状态恢复）
-        settings = get_settings()
-
-        if USE_MOCK_SCHEDULER:
-            scheduler = MockScheduler()
-        elif IS_IN_KUBERNETES:
-            # K8s 环境
-            from src.infrastructure.schedulers.k8s_scheduler_service import K8sSchedulerService
-            from src.domain.repositories.template_repository import ITemplateRepository
-
-            # 创建一个简单的 template repo 用于 scheduler
-            class SimpleTemplateRepo:
-                async def find_by_id(self, template_id: str):
-                    return None
-
-            scheduler = K8sSchedulerService(
-                container_scheduler=container_scheduler,
-                template_repo=SimpleTemplateRepo(),
-                executor_client=None,
-                executor_port=8080,
-                control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
-                disable_bwrap=settings.disable_bwrap,
-            )
-        else:
-            # 本地 Docker 环境
-            scheduler = MockScheduler()
-
+        scheduler = _create_scheduler_for_state_sync(container_scheduler)
         _scheduler_singleton = scheduler
 
-    # 每次都创建新的 StateSyncService 实例，使用最新的仓储
-    state_sync_service = StateSyncService(
+    return StateSyncService(
         session_repo=session_repo,
         container_scheduler=container_scheduler,
         scheduler=scheduler,
     )
-
-    return state_sync_service

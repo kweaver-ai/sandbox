@@ -441,250 +441,32 @@ class K8sScheduler:
 - `deploy/helm/sandbox/templates/s3fs-secret.yaml` - s3fs 密钥配置
 - `deploy/helm/sandbox/values.yaml` - s3fs 配置项
 
-**S3 Workspace 挂载配置说明**：
+
+##### 2.2.2.1 S3 Workspace 挂载
 
 **Implementation Status**: ✅ Fully Implemented (s3fs + mount --bind)
 
-##### 2.2.2.1 Architecture Overview
+Kubernetes 调度器使用 **s3fs + bind mount** 方式实现 S3 workspace 挂载。
 
-The Sandbox Platform uses **s3fs** to provide POSIX-compliant file system access to S3-compatible object storage (MinIO) for workspace files. The s3fs FUSE filesystem runs inside each executor container, mounting the S3 bucket directly to `/workspace`.
+> **详细文档**: 完整的 S3 workspace 挂载架构、组件说明、配置和实现细节请参考 [10-minio-only-architecture.md](10-minio-only-architecture.md)。
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                          Kubernetes Cluster                                         │
-│                                                                                    │
-│  ┌──────────────────────────────────────────────────────────────────────────────┐  │
-│  │  Control Plane Deployment (FastAPI)                                          │  │
-│  │  • Session Management • Template CRUD • Execution API                        │  │
-│  │  • Storage Service (S3 API → MinIO)                                         │  │
-│  └───────────────────────────────────────┬──────────────────────────────────────┘  │
-│                                          │ HTTP                                    │
-│  ┌───────────────────────────────────────▼──────────────────────────────────────┐  │
-│  │                   K8s Scheduler Volume Mounting                              │  │
-│  │  ┌────────────────────────────────────────────────────────────────────────┐  │  │
-│  │  │       Executor Pod (emptyDir volume)                                    │  │  │
-│  │  │  Volume: workspace → emptyDir                                          │  │  │
-│  │  │  Container Mount: /workspace (emptyDir)                                 │  │  │
-│  │  │                                                                        │  │  │
-│  │  │  Startup Script:                                                       │  │  │
-│  │  │  1. s3fs mounts S3 bucket to /mnt/s3-root                              │  │  │
-│  │  │  2. mount --bind /mnt/s3-root/sessions/{id} /workspace                 │  │  │
-│  │  │  3. Executor reads/writes files via standard POSIX I/O                 │  │  │
-│  │  └────────────────────────────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────────────────────────────────────────────────────────┘  │
-│                                          │                                           │
-│  ┌───────────────────────────────────────▼──────────────────────────────────────┐  │
-│  │                        Storage Layer (sandbox-system namespace)              │  │
-│  │  ┌──────────────────────────────────────────────────────────────────────┐   │  │
-│  │  │ MinIO (sandbox-workspace)                                            │   │  │
-│  │  │ • S3-compatible API                                                  │   │  │
-│  │  │ • Access/Secret keys                                                 │   │  │
-│  │  │ • Direct file storage (sessions/{id}/...)                            │   │  │
-│  │  └──────────────────────────────────────────────────────────────────────┘   │  │
-│  └──────────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-```
+**快速概览**:
 
-##### 2.2.2.2 Component Breakdown
+- **挂载方式**: 容器内启动脚本挂载 s3fs，使用 bind mount 覆盖 /workspace
+- **存储后端**: MinIO（S3-compatible 对象存储）
+- **关键文件**:
+  - `src/infrastructure/container_scheduler/k8s_scheduler.py` - Pod 卷挂载配置
+  - `src/infrastructure/storage/s3_storage.py` - S3 API 包装器
+  - `deploy/helm/sandbox/templates/s3fs-secret.yaml` - s3fs 凭证
+  - `deploy/helm/sandbox/values.yaml` - s3fs 配置
 
-###### 2.2.2.2.1 MinIO (S3-Compatible Object Storage)
+**数据流**:
+1. **文件上传**: Client → Control Plane API → S3Storage Service → MinIO (S3 API)
+2. **容器内访问**: Executor → POSIX I/O (/workspace) → s3fs → MinIO (S3 API)
+3. **文件下载**: Client → Control Plane API → presigned URL → MinIO (direct)
 
-**Purpose**: Stores workspace files directly via S3 API
-
-**Configuration** (`07-minio-deployment.yaml`):
-- Image: `minio/minio:latest`
-- Port: 9000 (API), 9001 (Console)
-- Default Bucket: `sandbox-workspace`
-- Access Keys: `minioadmin` / `minioadmin` (change in production)
-
-**What It Stores**:
-- Workspace files: User uploaded code, dependencies, output files
-- File path structure: `sessions/{session_id}/{filename}`
-
-**Access URLs**:
-- API: `http://minio.sandbox-system.svc.cluster.local:9000`
-- Console: `http://localhost:9001` (via NodePort/PortForward)
-
----
-
-###### 2.2.2.2.2 s3fs FUSE Mount
-
-**Purpose**: Mount S3 bucket as a filesystem inside executor containers
-
-**Implementation** (`k8s_scheduler.py`):
-
-The executor container startup script performs these steps:
-
-```bash
-# 1. Mount entire S3 bucket to temporary location
-mkdir -p /mnt/s3-root
-s3fs {bucket} /mnt/s3-root \
-    -o url={minio_url} \
-    -o use_path_request_style \
-    -o allow_other \
-    -o uid=1000 \
-    -o gid=1000 \
-    -o passwd_file=/etc/s3fs-passwd/s3fs-passwd &
-
-# 2. Wait for mount to complete
-sleep 2
-
-# 3. Create session workspace directory
-SESSION_PATH="/mnt/s3-root/sessions/{session_id}"
-mkdir -p "$SESSION_PATH"
-
-# 4. Use bind mount to overlay session path onto /workspace
-mount --bind "$SESSION_PATH" /workspace
-
-# 5. Start executor as sandbox user
-exec gosu sandbox python -m executor.interfaces.http.rest
-```
-
-**Key Points**:
-- `/workspace` is an emptyDir volume (Kubernetes mount point)
-- `mount --bind` overlays the S3 session directory onto the emptyDir
-- Files are accessed at `/workspace/{filename}` (not `/workspace/sessions/{id}/{filename}`)
-
----
-
-###### 2.2.2.2.3 Control Plane Storage Service
-
-**Implementation** (`src/infrastructure/storage/s3_storage.py`):
-
-```python
-class S3Storage(IStorageService):
-    async def upload_file(self, s3_path: str, content: bytes):
-        # s3_path format: "sessions/{session_id}/{filename}"
-        self.s3_client.put_object(
-            Bucket=settings.s3_bucket,
-            Key=s3_path,
-            Body=content
-        )
-```
-
-**Environment Variables**:
-```bash
-# S3 Configuration
-S3_ENDPOINT_URL=http://minio.sandbox-system.svc.cluster.local:9000
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=minioadmin
-S3_BUCKET=sandbox-workspace
-S3_REGION=us-east-1
-```
-
----
-
-###### 2.2.2.2.4 K8s Scheduler (Volume Mounting)
-
-**Code Location**: `src/infrastructure/container_scheduler/k8s_scheduler.py`
-
-**Volume Configuration**:
-```python
-# Create emptyDir volume for /workspace
-volumes.append(
-    V1Volume(
-        name="workspace",
-        empty_dir=V1EmptyDirVolumeSource(),
-    )
-)
-
-# Mount emptyDir to /workspace (will be overlayed with bind mount)
-volume_mounts.append(
-    V1VolumeMount(
-        name="workspace",
-        mount_path="/workspace",
-    )
-)
-```
-
-**Executor Environment Variables**:
-```python
-env_vars.extend([
-    V1EnvVar(name="WORKSPACE_PATH", value="/workspace"),
-    V1EnvVar(name="S3_BUCKET", value=s3_workspace["bucket"]),
-    V1EnvVar(name="S3_PREFIX", value=s3_workspace["prefix"]),
-])
-```
-
----
-
-##### 2.2.2.3 Data Flow: File Upload → Executor Access
-
-**Scenario**: User uploads `main.py` to session workspace
-
-```
-1. Client Request
-   POST /api/v1/sessions/{session_id}/files
-   Body: multipart/form-data { file: main.py }
-
-2. Control Plane API Handler
-   └─> FileService.upload_file()
-       └─> S3Storage.upload_file("sessions/{id}/main.py", content)
-
-3. S3 Storage Service
-   └─> boto3.client.put_object(
-           Bucket="sandbox-workspace",
-           Key="sessions/{id}/main.py",
-           Body=content
-       )
-
-4. MinIO stores the file
-   └─> Path: sandbox-workspace/sessions/{id}/main.py
-
-5. K8s Scheduler Creates Pod
-   └─> k8s_scheduler.create_container()
-       ├─> Creates emptyDir volume for /workspace
-       └─> Includes s3fs startup script with S3 credentials
-
-6. Executor Pod Starts
-   └─> Startup script:
-       ├─> s3fs mounts S3 bucket to /mnt/s3-root
-       ├─> mount --bind /mnt/s3-root/sessions/{id} /workspace
-       └─> /workspace now shows files from sessions/{id}/
-
-7. Executor Reads File
-   └─> Python open("/workspace/main.py", "r")
-       └─> Standard POSIX read() syscall
-           └─> s3fs FUSE driver
-               └─> HTTP GET to MinIO
-                   └─> Returns file content
-```
-
----
-
-##### 2.2.2.4 Key Configuration Files
-
-| File | Purpose | Key Settings |
-|------|---------|--------------|
-| `deploy/helm/sandbox/templates/s3fs-secret.yaml` | s3fs credentials | S3 keys for mount |
-| `deploy/helm/sandbox/values.yaml` | Helm values | s3fs configuration |
-| `deploy/manifests/07-minio-deployment.yaml` | MinIO deployment | Bucket, access keys |
-| `src/infrastructure/config/settings.py` | Environment config | S3 credentials |
-| `src/infrastructure/storage/s3_storage.py` | S3 storage wrapper | boto3 client operations |
-| `src/infrastructure/container_scheduler/k8s_scheduler.py` | Pod volume mounting | s3fs startup script |
-
----
-
-##### 2.2.2.5 Summary
-
-**Critical Insights**:
-
-1. **Simple Architecture**: Files are stored directly in MinIO using S3 API. No metadata database is needed - the file path structure (`sessions/{id}/{filename}`) provides all necessary organization.
-
-2. **s3fs + bind mount**: The s3fs FUSE filesystem runs inside each executor container, mounting the entire S3 bucket to `/mnt/s3-root`. A bind mount then overlays the session-specific subdirectory to `/workspace`.
-
-3. **Privileged Mode Required**: s3fs requires FUSE mounting, which needs `privileged: true` and running as root in the container. The executor process switches to the sandbox user via `gosu`.
-
-4. **Direct S3 Access**: The Control Plane writes files directly to MinIO via S3 API. The executor containers read files via s3fs, which translates POSIX I/O to S3 API calls.
-
-5. **Path Mapping**:
-   - MinIO path: `sessions/{session_id}/test.py`
-   - s3fs mount: `/mnt/s3-root/sessions/{session_id}/test.py`
-   - bind mount target: `/workspace/test.py` ✅
-
-6. **Advantages**:
-   - **No CSI Driver** needed - s3fs runs in-container
-   - **No metadata database** - simpler deployment
-   - **Direct S3 API** writes from Control Plane
-   - **Per-container isolation** - each executor has its own s3fs process
-
+**关键特性**:
+- 无需 CSI Driver - s3fs 在容器内运行
+- 无需元数据数据库 - 文件路径结构提供所有组织
+- Control Plane 直接通过 S3 API 写入
+- 每个容器有独立的 s3fs 进程（隔离）

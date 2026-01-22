@@ -133,16 +133,6 @@ exec gosu sandbox python -m executor.interfaces.http.rest
 
 ## 性能考虑
 
-### 与 JuiceFS 对比
-
-| 特性 | s3fs | JuiceFS |
-|------|------|---------|
-| 复杂度 | 低 | 高 |
-| 组件数 | 1 | 4+ |
-| 元数据 | 无 (MinIO 直连) | 需要 MariaDB |
-| 性能 | 中等 | 高 |
-| 可维护性 | 高 | 低 |
-
 ### 优化建议
 
 1. **文件缓存**: 使用 `--use_cache` 选项

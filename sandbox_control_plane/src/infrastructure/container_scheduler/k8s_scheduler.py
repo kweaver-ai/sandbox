@@ -3,21 +3,12 @@ Kubernetes 容器调度器
 
 使用官方 Python kubernetes 客户端实现 Pod 的创建和管理。
 
-支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
-executor 容器在启动脚本中挂载 s3fs 到 /workspace。
-
 MinIO + s3fs 架构：
 - Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
 - Executor Pod 在启动脚本中挂载 s3fs，将 S3 bucket 的 session 子目录挂载到 /workspace
 - s3fs 进程和 executor 进程运行在同一容器内
-- 不再需要 JuiceFS 元数据数据库和 CSI 驱动
 
-s3fs 挂载方案：
-- 在 executor 容器的启动脚本中挂载 s3fs
-- s3fs 进程在后台运行，executor 进程在前台运行
-- 每个独立的 executor Pod 有自己的 s3fs 挂载进程
-
-支持 Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
+Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
 """
 import asyncio
 import json
@@ -178,8 +169,6 @@ class K8sScheduler(IContainerScheduler):
         # 限制长度（K8s Pod 名称最多 253 字符）
         return pod_name[:253]
 
-    # REMOVED: _build_juicefs_host_path() - No longer needed with s3fs approach
-    # REMOVED: _ensure_pvc_exists() - No longer needed with s3fs approach
 
     def _build_executor_container(
         self,
@@ -292,22 +281,14 @@ class K8sScheduler(IContainerScheduler):
             minio_url = settings.s3_endpoint_url or "http://minio.sandbox-system.svc.cluster.local:9000"
             bucket = s3_workspace["bucket"]
 
-            # S3 挂载脚本
-            # 使用 bucket 挂载 + bind mount 方案
-            # 关键：使用完整的 s3_prefix 而不是 session_id，避免路径层级问题
-            # 例如：s3_prefix = "sessions/sess_xxx"，而不是 "sess_xxx"
-            # 这样 /workspace 直接绑定到 /mnt/s3-root/sessions/sess_xxx
-            # 文件在 MinIO 的路径 sessions/sess_xxx/test.py 就会映射到 /workspace/test.py
-            # 注意：由于 /workspace 是 emptyDir 挂载点，必须使用 mount --bind
-            # 而不是 mv + ln -s（后者会导致符号链接创建在 emptyDir 内部）
+            # S3 挂载脚本（使用 bucket 挂载 + bind mount 方案）
             s3_prefix = s3_workspace["prefix"].rstrip('/')
             mount_script = f"""#!/bin/sh
 set -e
 
 echo "📂 Mounting S3 bucket {bucket} to /mnt/s3-root (session: {session_id})..."
 
-# 1. 挂载整个 S3 bucket 到临时位置
-# 添加 uid=1000,gid=1000 让挂载点对 sandbox 用户可访问
+# 挂载整个 S3 bucket 到临时位置（uid=1000,gid=1000 让挂载点对 sandbox 用户可访问）
 mkdir -p /mnt/s3-root
 s3fs {bucket} /mnt/s3-root \\
     -o url={minio_url} \\
@@ -320,27 +301,20 @@ s3fs {bucket} /mnt/s3-root \\
 S3FS_PID=$!
 echo "s3fs started with PID: $S3FS_PID"
 
-# 2. 等待挂载完成
+# 等待挂载完成
 sleep 2
 
-# 3. 创建 session workspace 目录（使用完整 S3 前缀）
-# s3_prefix 示例: "sessions/sess_xxx" 或 "sessions/sess_xxx/workspace"
-# 这样 /workspace 直接绑定到 session 目录，避免额外层级
+# 创建 session workspace 目录（使用完整 S3 前缀）
 SESSION_PATH="/mnt/s3-root/{s3_prefix}"
 echo "Ensuring session workspace exists: $SESSION_PATH"
 mkdir -p "$SESSION_PATH"
 
-# 4. 使用 bind mount 将 S3 路径挂载到 /workspace
-# 注意：/workspace 是 emptyDir 挂载点，不能用 mv + ln -s
-# 必须使用 mount --bind 来覆盖挂载点
-# 结果：/workspace 直接显示 SESSION_PATH 的内容
-# 文件访问：/workspace/test.py (不是 /workspace/sess_xxx/test.py)
+# 使用 bind mount 将 S3 路径挂载到 /workspace（/workspace 是 emptyDir 挂载点）
 mount --bind "$SESSION_PATH" /workspace
 
-# 5. 验证 bind mount
+# 验证 bind mount
 echo "Workspace bind mounted: $(ls -la /workspace)"
 
-# 7. 确保 s3fs 挂载正常
 echo "✅ S3 bucket mounted and workspace linked successfully"
 ls -la /workspace/
 
@@ -462,12 +436,6 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         - Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
         - Executor Pod 在启动脚本中挂载 s3fs，将 S3 bucket 的 session 子目录挂载到 /workspace
         - s3fs 进程和 executor 进程运行在同一容器内
-        - 不再需要 JuiceFS 元数据数据库和 CSI 驱动
-
-        Pod 配置：
-        - 单个 executor 容器（如果使用 S3，启动脚本会先挂载 s3fs 再启动 executor）
-
-        Python 依赖安装：
         - 如果有依赖，executor 容器会在启动时安装依赖
         """
         await self._ensure_connected()
@@ -610,7 +578,6 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         """
         await self._ensure_connected()
 
-        # 删除 Pod
         try:
             await asyncio.to_thread(
                 self._core_v1.delete_namespaced_pod,
@@ -642,7 +609,6 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         """
         await self._ensure_connected()
 
-        # 删除 Pod
         try:
             await asyncio.to_thread(
                 self._core_v1.delete_namespaced_pod,
@@ -677,21 +643,16 @@ exec gosu sandbox python -m executor.interfaces.http.rest
 
             # 转换 K8s Pod 状态到 ContainerInfo
             phase = pod.status.phase
-            if phase == "Running":
-                # 检查容器状态
-                if pod.status.container_statuses:
-                    for container_status in pod.status.container_statuses:
-                        if container_status.name == "executor":
-                            if container_status.state.terminated:
-                                phase = "exited"
-                            elif container_status.state.waiting:
-                                phase = "waiting"
-                            break
+            if phase == "Running" and pod.status.container_statuses:
+                for container_status in pod.status.container_statuses:
+                    if container_status.name == "executor":
+                        if container_status.state.terminated:
+                            phase = "exited"
+                        elif container_status.state.waiting:
+                            phase = "waiting"
+                        break
 
-            # 获取 IP 地址
             ip_address = pod.status.pod_ip
-
-            # 获取时间信息
             created_at = pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else ""
             started_at = pod.status.start_time.isoformat() if pod.status.start_time else None
 
@@ -829,18 +790,16 @@ exec gosu sandbox python -m executor.interfaces.http.rest
                     # 检查容器状态
                     if pod.status.container_statuses:
                         for container_status in pod.status.container_statuses:
-                            if container_status.name == "executor":
-                                if container_status.state.terminated:
-                                    logs = await self.get_container_logs(container_id, tail=-1)
-                                    terminated = container_status.state.terminated
-                                    return ContainerResult(
-                                        status="completed" if terminated.exit_code == 0 else "failed",
-                                        stdout=logs,
-                                        stderr="",
-                                        exit_code=terminated.exit_code,
-                                    )
+                            if container_status.name == "executor" and container_status.state.terminated:
+                                logs = await self.get_container_logs(container_id, tail=-1)
+                                terminated = container_status.state.terminated
+                                return ContainerResult(
+                                    status="completed" if terminated.exit_code == 0 else "failed",
+                                    stdout=logs,
+                                    stderr="",
+                                    exit_code=terminated.exit_code,
+                                )
 
-                    # 等待后重试
                     await asyncio.sleep(1)
 
                 except ApiException as e:
@@ -877,7 +836,6 @@ exec gosu sandbox python -m executor.interfaces.http.rest
         """
         try:
             await self._ensure_connected()
-            # 测试连接
             await asyncio.to_thread(
                 self._core_v1.list_namespace,
                 limit=1,
