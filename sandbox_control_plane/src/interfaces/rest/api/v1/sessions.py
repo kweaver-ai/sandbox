@@ -44,14 +44,12 @@ async def create_session(
     from src.domain.value_objects.resource_limit import ResourceLimit
 
     try:
-        # 转换请求为命令
         resource_limit = ResourceLimit(
             cpu=request.cpu,
             memory=request.memory,
             disk=request.disk
         )
 
-        # 转换依赖列表为 pip 规范
         dependencies_pip_specs = [dep.to_pip_spec() for dep in request.dependencies]
 
         command = CreateSessionCommand(
@@ -59,33 +57,14 @@ async def create_session(
             timeout=request.timeout,
             resource_limit=resource_limit,
             env_vars=request.env_vars,
-            # 依赖安装相关字段（新增）
             dependencies=dependencies_pip_specs,
             install_timeout=request.install_timeout,
             fail_on_dependency_error=request.fail_on_dependency_error,
             allow_version_conflicts=request.allow_version_conflicts,
         )
 
-        # 调用应用服务
         session_dto = await service.create_session(command)
-
-        return SessionResponse(
-            id=session_dto.id,
-            template_id=session_dto.template_id,
-            status=session_dto.status,
-            resource_limit=session_dto.resource_limit,
-            workspace_path=session_dto.workspace_path,
-            runtime_type=session_dto.runtime_type,
-            runtime_node=session_dto.runtime_node,
-            container_id=session_dto.container_id,
-            pod_name=session_dto.pod_name,
-            env_vars=session_dto.env_vars,
-            timeout=session_dto.timeout,
-            created_at=session_dto.created_at,
-            updated_at=session_dto.updated_at,
-            completed_at=session_dto.completed_at,
-            last_activity_at=session_dto.last_activity_at
-        )
+        return _map_dto_to_response(session_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -120,25 +99,8 @@ async def list_sessions(
             offset=offset
         )
 
-        # 转换为响应格式
         return SessionListResponse(
-            items=[SessionResponse(
-                id=item.id,
-                template_id=item.template_id,
-                status=item.status,
-                resource_limit=item.resource_limit,
-                workspace_path=item.workspace_path,
-                runtime_type=item.runtime_type,
-                runtime_node=item.runtime_node,
-                container_id=item.container_id,
-                pod_name=item.pod_name,
-                env_vars=item.env_vars,
-                timeout=item.timeout,
-                created_at=item.created_at,
-                updated_at=item.updated_at,
-                completed_at=item.completed_at,
-                last_activity_at=item.last_activity_at
-            ) for item in result["items"]],
+            items=[_map_dto_to_response(item) for item in result["items"]],
             total=result["total"],
             limit=result["limit"],
             offset=result["offset"],
@@ -163,24 +125,7 @@ async def get_session(
     try:
         query = GetSessionQuery(session_id=session_id)
         session_dto = await service.get_session(query)
-
-        return SessionResponse(
-            id=session_dto.id,
-            template_id=session_dto.template_id,
-            status=session_dto.status,
-            resource_limit=session_dto.resource_limit,
-            workspace_path=session_dto.workspace_path,
-            runtime_type=session_dto.runtime_type,
-            runtime_node=session_dto.runtime_node,
-            container_id=session_dto.container_id,
-            pod_name=session_dto.pod_name,
-            env_vars=session_dto.env_vars,
-            timeout=session_dto.timeout,
-            created_at=session_dto.created_at,
-            updated_at=session_dto.updated_at,
-            completed_at=session_dto.completed_at,
-            last_activity_at=session_dto.last_activity_at
-        )
+        return _map_dto_to_response(session_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -197,27 +142,32 @@ async def terminate_session(
     """终止会话"""
     try:
         session_dto = await service.terminate_session(session_id)
-
-        return SessionResponse(
-            id=session_dto.id,
-            template_id=session_dto.template_id,
-            status=session_dto.status,
-            resource_limit=session_dto.resource_limit,
-            workspace_path=session_dto.workspace_path,
-            runtime_type=session_dto.runtime_type,
-            runtime_node=session_dto.runtime_node,
-            container_id=session_dto.container_id,
-            pod_name=session_dto.pod_name,
-            env_vars=session_dto.env_vars,
-            timeout=session_dto.timeout,
-            created_at=session_dto.created_at,
-            updated_at=session_dto.updated_at,
-            completed_at=session_dto.completed_at,
-            last_activity_at=session_dto.last_activity_at
-        )
+        return _map_dto_to_response(session_dto)
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
+
+
+def _map_dto_to_response(dto: SessionDTO) -> SessionResponse:
+    """将 SessionDTO 映射为 SessionResponse"""
+    return SessionResponse(
+        id=dto.id,
+        template_id=dto.template_id,
+        status=dto.status,
+        resource_limit=dto.resource_limit,
+        workspace_path=dto.workspace_path,
+        runtime_type=dto.runtime_type,
+        runtime_node=dto.runtime_node,
+        container_id=dto.container_id,
+        pod_name=dto.pod_name,
+        env_vars=dto.env_vars,
+        timeout=dto.timeout,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+        completed_at=dto.completed_at,
+        last_activity_at=dto.last_activity_at
+    )
+

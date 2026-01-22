@@ -25,6 +25,7 @@ from src.infrastructure.container_scheduler.base import (
 )
 from src.infrastructure.config.settings import get_settings
 from src.infrastructure.logging import get_logger
+from src.shared.utils.dependencies import format_dependencies_for_script
 
 logger = get_logger(__name__)
 
@@ -110,27 +111,12 @@ class DockerScheduler(IContainerScheduler):
         3. 安装依赖到 /workspace/.venv/（如果指定）
         4. 使用 gosu 切换到 sandbox 用户运行 executor
         """
-        # 对于 MinIO，需要使用 use_path_request_style
         path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
 
-        # 依赖安装脚本片段
         dependency_install_script = ""
         if dependencies:
-            # 转换依赖格式：[{"name": "requests", "version": "==2.31.0"}] -> ["requests==2.31.0"]
-            pip_specs = []
-            for dep in dependencies:
-                if isinstance(dep, dict):
-                    name = dep.get("name", "")
-                    version = dep.get("version", "")
-                    if version:
-                        pip_specs.append(f"{name}{version}")
-                    else:
-                        pip_specs.append(name)
-                elif isinstance(dep, str):
-                    pip_specs.append(dep)
-
-            deps_json = json.dumps(dependencies)
-            deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+            deps_json, deps_list = format_dependencies_for_script(dependencies)
+            pip_specs = " ".join(f'"{spec}"' for spec in deps_list.split() if spec)
             dependency_install_script = f"""
 # ========== 安装 Python 依赖 ==========
 echo "📦 Installing dependencies: {deps_json}"
@@ -230,24 +216,10 @@ exec gosu sandbox bash -c 'export PYTHONPATH=$PYTHONPATH; export SANDBOX_VENV_PA
         2. 安装依赖到 /opt/sandbox-venv/（本地文件系统）
         3. 启动 executor
         """
-        # 依赖安装脚本片段
         dependency_install_script = ""
         if dependencies:
-            # 转换依赖格式：[{"name": "requests", "version": "==2.31.0"}] -> ["requests==2.31.0"]
-            pip_specs = []
-            for dep in dependencies:
-                if isinstance(dep, dict):
-                    name = dep.get("name", "")
-                    version = dep.get("version", "")
-                    if version:
-                        pip_specs.append(f"{name}{version}")
-                    else:
-                        pip_specs.append(name)
-                elif isinstance(dep, str):
-                    pip_specs.append(dep)
-
-            deps_json = json.dumps(dependencies)
-            deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+            deps_json, deps_list = format_dependencies_for_script(dependencies)
+            pip_specs = " ".join(f'"{spec}"' for spec in deps_list.split() if spec)
             dependency_install_script = f"""
 # ========== 安装 Python 依赖 ==========
 echo "📦 Installing dependencies: {deps_json}"

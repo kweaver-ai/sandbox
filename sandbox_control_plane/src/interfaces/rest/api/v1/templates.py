@@ -50,21 +50,7 @@ async def create_template(
         )
 
         template_dto = await service.create_template(command)
-
-        return TemplateResponse(
-            id=template_dto.id,
-            name=template_dto.name,
-            image_url=template_dto.image_url,
-            runtime_type=template_dto.runtime_type,
-            default_cpu_cores=template_dto.default_cpu_cores,
-            default_memory_mb=template_dto.default_memory_mb,
-            default_disk_mb=template_dto.default_disk_mb,
-            default_timeout_sec=template_dto.default_timeout_sec,
-            default_env_vars=template_dto.default_env_vars,
-            is_active=template_dto.is_active,
-            created_at=template_dto.created_at,
-            updated_at=template_dto.updated_at
-        )
+        return _map_dto_to_response(template_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -86,23 +72,7 @@ async def list_templates(
             offset=offset
         )
 
-        return [
-            TemplateResponse(
-                id=t.id,
-                name=t.name,
-                image_url=t.image_url,
-                runtime_type=t.runtime_type,
-                default_cpu_cores=t.default_cpu_cores,
-                default_memory_mb=t.default_memory_mb,
-                default_disk_mb=t.default_disk_mb,
-                default_timeout_sec=t.default_timeout_sec,
-                default_env_vars=t.default_env_vars,
-                is_active=t.is_active,
-                created_at=t.created_at,
-                updated_at=t.updated_at
-            )
-            for t in templates
-        ]
+        return [_map_dto_to_response(t) for t in templates]
 
     except Exception as e:
         raise HTTPException(
@@ -120,21 +90,7 @@ async def get_template(
     try:
         query = GetTemplateQuery(template_id=template_id)
         template_dto = await service.get_template(query)
-
-        return TemplateResponse(
-            id=template_dto.id,
-            name=template_dto.name,
-            image_url=template_dto.image_url,
-            runtime_type=template_dto.runtime_type,
-            default_cpu_cores=template_dto.default_cpu_cores,
-            default_memory_mb=template_dto.default_memory_mb,
-            default_disk_mb=template_dto.default_disk_mb,
-            default_timeout_sec=template_dto.default_timeout_sec,
-            default_env_vars=template_dto.default_env_vars,
-            is_active=template_dto.is_active,
-            created_at=template_dto.created_at,
-            updated_at=template_dto.updated_at
-        )
+        return _map_dto_to_response(template_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -163,21 +119,7 @@ async def update_template(
         )
 
         template_dto = await service.update_template(command)
-
-        return TemplateResponse(
-            id=template_dto.id,
-            name=template_dto.name,
-            image_url=template_dto.image_url,
-            runtime_type=template_dto.runtime_type,
-            default_cpu_cores=template_dto.default_cpu_cores,
-            default_memory_mb=template_dto.default_memory_mb,
-            default_disk_mb=template_dto.default_disk_mb,
-            default_timeout_sec=template_dto.default_timeout_sec,
-            default_env_vars=template_dto.default_env_vars,
-            is_active=template_dto.is_active,
-            created_at=template_dto.created_at,
-            updated_at=template_dto.updated_at
-        )
+        return _map_dto_to_response(template_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -201,3 +143,21 @@ async def delete_template(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
+
+def _map_dto_to_response(dto: TemplateDTO) -> TemplateResponse:
+    """将 TemplateDTO 映射为 TemplateResponse"""
+    return TemplateResponse(
+        id=dto.id,
+        name=dto.name,
+        image_url=dto.image_url,
+        runtime_type=dto.runtime_type,
+        default_cpu_cores=dto.default_cpu_cores,
+        default_memory_mb=dto.default_memory_mb,
+        default_disk_mb=dto.default_disk_mb,
+        default_timeout_sec=dto.default_timeout_sec,
+        default_env_vars=dto.default_env_vars,
+        is_active=dto.is_active,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at
+    )

@@ -535,16 +535,18 @@ class SessionService:
 
         for session in all_to_cleanup:
             if session.is_active():
-                # 销毁容器（如果调度器支持且容器存在）
                 if session.container_id and hasattr(self._scheduler, 'destroy_container'):
                     try:
                         await self._scheduler.destroy_container(
                             container_id=session.container_id
                         )
                     except Exception as e:
-                        # 记录错误但不中断流程
-                        import logging
-                        logging.warning(f"Failed to destroy container {session.container_id}: {e}")
+                        logger.warning(
+                            "Failed to destroy container during cleanup",
+                            session_id=session.id,
+                            container_id=session.container_id,
+                            error=str(e),
+                        )
 
                 session.mark_as_terminated()
                 await self._session_repo.save(session)

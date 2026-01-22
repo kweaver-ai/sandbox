@@ -80,18 +80,7 @@ async def get_execution_status(
     try:
         query = GetExecutionQuery(execution_id=execution_id)
         execution_dto = await service.get_execution(query)
-
-        return ExecutionResponse(
-            id=execution_dto.id,
-            session_id=execution_dto.session_id,
-            status=execution_dto.status,
-            code=execution_dto.code,
-            language=execution_dto.language,
-            timeout=execution_dto.timeout,
-            created_at=execution_dto.created_at,
-            started_at=execution_dto.started_at,
-            completed_at=execution_dto.completed_at
-        )
+        return _map_dto_to_response(execution_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -109,23 +98,7 @@ async def get_execution_result(
     try:
         query = GetExecutionQuery(execution_id=execution_id)
         execution_dto = await service.get_execution(query)
-
-        return ExecutionResponse(
-            id=execution_dto.id,
-            session_id=execution_dto.session_id,
-            status=execution_dto.status,
-            code=execution_dto.code,
-            language=execution_dto.language,
-            timeout=execution_dto.timeout,
-            stdout=execution_dto.stdout,
-            stderr=execution_dto.stderr,
-            exit_code=execution_dto.exit_code,
-            return_value=execution_dto.return_value,
-            metrics=execution_dto.metrics,
-            created_at=execution_dto.created_at,
-            started_at=execution_dto.started_at,
-            completed_at=execution_dto.completed_at
-        )
+        return _map_dto_to_response(execution_dto)
 
     except Exception as e:
         raise HTTPException(
@@ -160,3 +133,23 @@ async def list_executions(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
+
+def _map_dto_to_response(dto: ExecutionDTO) -> ExecutionResponse:
+    """将 ExecutionDTO 映射为 ExecutionResponse"""
+    return ExecutionResponse(
+        id=dto.id,
+        session_id=dto.session_id,
+        status=dto.status,
+        code=dto.code,
+        language=dto.language,
+        timeout=dto.timeout,
+        stdout=dto.stdout,
+        stderr=dto.stderr,
+        exit_code=dto.exit_code,
+        return_value=dto.return_value,
+        metrics=dto.metrics,
+        created_at=dto.created_at,
+        started_at=dto.started_at,
+        completed_at=dto.completed_at
+    )

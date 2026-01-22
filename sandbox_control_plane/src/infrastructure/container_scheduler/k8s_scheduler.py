@@ -48,6 +48,7 @@ from src.infrastructure.container_scheduler.base import (
 )
 from src.infrastructure.config.settings import get_settings
 from src.infrastructure.logging import get_logger
+from src.shared.utils.dependencies import format_dependencies_for_script
 
 logger = get_logger(__name__)
 
@@ -324,19 +325,7 @@ ls -la /workspace/
             if has_dependencies:
                 dependencies_json = config.labels.get("dependencies", "")
                 dependencies = json.loads(dependencies_json) if dependencies_json else []
-                pip_specs = []
-                for dep in dependencies:
-                    if isinstance(dep, dict):
-                        name = dep.get("name", "")
-                        version = dep.get("version", "")
-                        if version:
-                            pip_specs.append(f"{name}{version}")
-                        else:
-                            pip_specs.append(name)
-                    elif isinstance(dep, str):
-                        pip_specs.append(dep)
-
-                deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+                _, deps_list = format_dependencies_for_script(dependencies)
                 mount_script += f"""
 echo "📦 Installing dependencies..."
 VENV_DIR="/opt/sandbox-venv"
@@ -369,20 +358,7 @@ exec gosu sandbox python -m executor.interfaces.http.rest
             # 依赖由 executor 容器在启动时安装
             dependencies_json = config.labels.get("dependencies", "")
             dependencies = json.loads(dependencies_json) if dependencies_json else []
-
-            pip_specs = []
-            for dep in dependencies:
-                if isinstance(dep, dict):
-                    name = dep.get("name", "")
-                    version = dep.get("version", "")
-                    if version:
-                        pip_specs.append(f"{name}{version}")
-                    else:
-                        pip_specs.append(name)
-                elif isinstance(dep, str):
-                    pip_specs.append(dep)
-
-            deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+            _, deps_list = format_dependencies_for_script(dependencies)
             install_script = f"""
 #!/bin/sh
 set -e

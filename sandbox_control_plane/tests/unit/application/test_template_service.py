@@ -13,6 +13,7 @@ from src.application.queries.get_template import GetTemplateQuery
 from src.domain.entities.template import Template
 from src.domain.repositories.template_repository import ITemplateRepository
 from src.shared.errors.domain import NotFoundError, ValidationError
+from tests.helpers import create_mock_template
 
 
 class TestTemplateService:
@@ -59,11 +60,9 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_create_template_duplicate_name(self, service, template_repo):
         """测试创建重名模板"""
-        existing_template = Template(
-            id="existing-id",
-            name="Python Data Science",
-            image="python:3.11",
-            base_image="python:3.11-slim"
+        existing_template = create_mock_template(
+            template_id="existing-id",
+            name="Python Data Science"
         )
         template_repo.find_by_name.return_value = existing_template
 
@@ -84,11 +83,10 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_get_template_success(self, service, template_repo):
         """测试成功获取模板"""
-        template = Template(
-            id="python-datascience",
+        template = create_mock_template(
+            template_id="python-datascience",
             name="Python Data Science",
-            image="python:3.11-datascience",
-            base_image="python:3.11-slim"
+            image="python:3.11-datascience"
         )
         template_repo.find_by_id.return_value = template
 
@@ -112,18 +110,8 @@ class TestTemplateService:
     async def test_list_templates(self, service, template_repo):
         """测试列出所有模板"""
         templates = [
-            Template(
-                id="python-basic",
-                name="Python Basic",
-                image="python:3.11",
-                base_image="python:3.11-slim"
-            ),
-            Template(
-                id="python-datascience",
-                name="Python Data Science",
-                image="python:3.11-datascience",
-                base_image="python:3.11-slim"
-            ),
+            create_mock_template("python-basic", "Python Basic", "python:3.11"),
+            create_mock_template("python-datascience", "Python Data Science", "python:3.11-datascience"),
         ]
         template_repo.find_all.return_value = templates
 
@@ -137,15 +125,10 @@ class TestTemplateService:
     async def test_list_templates_with_pagination(self, service, template_repo):
         """测试分页列出模板"""
         all_templates = [
-            Template(
-                id=f"template-{i}",
-                name=f"Template {i}",
-                image="python:3.11",
-                base_image="python:3.11-slim"
-            )
-            for i in range(10)
+            create_mock_template(f"template-{i}", f"Template {i}", "python:3.11")
+            for i in range(5, 10)
         ]
-        template_repo.find_all.return_value = all_templates[5:10]
+        template_repo.find_all.return_value = all_templates
 
         results = await service.list_templates(limit=5, offset=5)
 
@@ -155,12 +138,7 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_update_template_success(self, service, template_repo):
         """测试成功更新模板"""
-        template = Template(
-            id="python-basic",
-            name="Python Basic",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
         template_repo.find_by_id.return_value = template
         template_repo.find_by_name.return_value = None
 
@@ -191,18 +169,8 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_update_template_duplicate_name(self, service, template_repo):
         """测试更新模板为重名"""
-        template = Template(
-            id="template-1",
-            name="Template 1",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
-        other_template = Template(
-            id="template-2",
-            name="Template 2",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
+        template = create_mock_template("template-1", "Template 1")
+        other_template = create_mock_template("template-2", "Template 2")
         template_repo.find_by_id.return_value = template
         template_repo.find_by_name.return_value = other_template
 
@@ -217,12 +185,7 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_update_template_resources(self, service, template_repo):
         """测试更新模板资源"""
-        template = Template(
-            id="python-basic",
-            name="Python Basic",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
         template_repo.find_by_id.return_value = template
         template_repo.find_by_name.return_value = None
 
@@ -242,12 +205,7 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_delete_template_success(self, service, template_repo):
         """测试成功删除模板"""
-        template = Template(
-            id="python-basic",
-            name="Python Basic",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
         template_repo.find_by_id.return_value = template
 
         await service.delete_template("python-basic")
@@ -265,20 +223,14 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_update_template_same_name(self, service, template_repo):
         """测试更新模板为相同名称（不应报错）"""
-        template = Template(
-            id="python-basic",
-            name="Python Basic",
-            image="python:3.11",
-            base_image="python:3.11-slim"
-        )
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
         template_repo.find_by_id.return_value = template
-        template_repo.find_by_name.return_value = template  # 同一个模板
+        template_repo.find_by_name.return_value = template
 
         command = UpdateTemplateCommand(
             template_id="python-basic",
-            name="Python Basic"  # 相同名称
+            name="Python Basic"
         )
 
-        # 不应抛出异常
         result = await service.update_template(command)
         assert result.id == "python-basic"
