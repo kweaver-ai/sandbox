@@ -944,68 +944,60 @@ flowchart TD
 
 本节详细描述 S3 workspace 挂载的实现机制，使容器内的用户代码能够像访问本地文件系统一样访问 S3 对象存储。
 
-**Implementation Status**: ✅ Fully Implemented (JuiceFS hostPath)
+**Implementation Status**: ✅ Fully Implemented (s3fs + bind mount)
 
-#### 4.4.1 架构概述（Kubernetes - JuiceFS hostPath）
+#### 4.4.1 架构概述（Kubernetes - s3fs + bind mount）
 
-Kubernetes 环境使用 **JuiceFS hostPath 方式**实现 S3 workspace 挂载，适合单节点开发环境（Docker Desktop、Kind、Minikube）。
+Kubernetes 环境使用 **s3fs + bind mount 方式**实现 S3 workspace 挂载。
 
 ```mermaid
 flowchart LR
     subgraph ControlPlane["Control Plane"]
         FileAPI["文件 API<br/>/sessions/{id}/files/*"]
         SessionService["Session Service"]
-        K8sScheduler["K8s Scheduler<br/>hostPath Mode"]
+        K8sScheduler["K8s Scheduler<br/>s3fs Mode"]
     end
 
     subgraph K8sCluster["Kubernetes Cluster"]
-        subgraph MountHelper["Mount Helper DaemonSet<br/>(Privileged)"]
-            JuiceFSMount["JuiceFS Mount<br/>/jfs/sandbox-workspace"]
-            HostPath["hostPath<br/>/mnt/jfs"]
-        end
-
         subgraph ExecutorPod["Executor Pod"]
-            HostPathVolume["hostPath Volume<br/>/mnt/jfs/.../sessions/{id}"]
-            WorkspaceMount["/workspace Mount"]
+            InitContainer["Init Container<br/>s3fs 挂载"]
+            S3FSMount["s3fs 挂载<br/>/mnt/s3-root"]
+            BindMount["bind mount<br/>→ /workspace"]
+            Workspace["/workspace 目录"]
             Executor["Executor<br/>(sandbox-executor)"]
         end
     end
 
     subgraph StorageLayer["Storage Layer"]
-        MariaDB["MariaDB<br/>(Metadata)"]
-        MinIO["MinIO<br/>(File Data)"]
+        MinIO["MinIO<br/>(S3-compatible)"]
     end
 
     FileAPI -->|"上传/下载"| S3Storage["S3Storage Service"]
     SessionService -->|"创建会话<br/>workspace_path=s3://..."| K8sScheduler
-    K8sScheduler -->|"创建 Pod<br/>hostPath: /mnt/jfs/..."| HostPathVolume
+    K8sScheduler -->|"创建 Pod<br/>启动脚本包含 s3fs 挂载"| InitContainer
 
-    JuiceFSMount <-->|"FUSE Mount"| HostPath
-    HostPath -.->|"共享挂载点"| HostPathVolume
-    HostPathVolume -->|"容器内挂载"| WorkspaceMount
-    WorkspaceMount -->|"文件读写"| Executor
-
-    JuiceFSMount <-->|"元数据"| MariaDB
-    JuiceFSMount <-->|"文件数据"| MinIO
+    InitContainer -->|"s3fs mount"| S3FSMount
+    S3FSMount <-->|"S3 API"| MinIO
+    BindMount -->|"覆盖"| Workspace
+    Workspace -->|"文件读写"| Executor
 
     style ControlPlane fill:#bbdefb
     style K8sCluster fill:#c8e6c9
     style ExecutorPod fill:#fff9c4
     style StorageLayer fill:#f8bbd0
-    style MountHelper fill:#ffccbc
+    style InitContainer fill:#ffccbc
 ```
 
 **关键设计决策**：
 
 | 组件 | 方案 | 说明 |
 |------|------|------|
-| 挂载方式 | **JuiceFS hostPath** | 通过 DaemonSet 预挂载，hostPath 共享 |
-| 挂载助手 | DaemonSet（特权） | 在每个节点运行，挂载 JuiceFS 到 `/jfs` |
-| 容器挂载点 | `/workspace` | 映射到 hostPath `/mnt/jfs/sandbox-workspace/sessions/{id}/` |
-| 元数据存储 | MariaDB | JuiceFS 元数据（目录结构、块信息） |
-| 文件数据存储 | MinIO | 实际文件内容 |
+| 挂载方式 | **s3fs + bind mount** | 容器内启动脚本挂载 s3fs，使用 bind mount 覆盖 /workspace |
+| 挂载时机 | 容器启动时 | 通过启动脚本自动完成 |
+| 容器挂载点 | `/workspace` | emptyDir 卷，通过 bind mount 覆盖 session 目录 |
+| 存储后端 | MinIO | S3-compatible 对象存储，无需额外元数据数据库 |
 
-#### 4.4.2 Kubernetes Scheduler 实现
+#### 4.4.2 s3fs 挂载脚本实现
 
 **S3 Workspace 检测**：
 
@@ -1025,11 +1017,21 @@ def _parse_s3_workspace(self, workspace_path: str) -> Optional[dict]:
 **hostPath 卷配置**：
 
 ```python
-def _build_juicefs_host_path(self, s3_prefix: str) -> str:
-    """构建 JuiceFS hostPath 路径"""
-    settings = get_settings()
-    base_path = settings.juicefs_host_path.rstrip('/')  # /mnt/jfs/sandbox-workspace
-    return f"{base_path}/{s3_prefix}"
+def _build_s3fs_mount_script(self, bucket: str, minio_url: str, s3_prefix: str) -> str:
+    """构建 s3fs 挂载脚本"""
+    return f"""
+# 挂载 S3 bucket
+s3fs {bucket} /mnt/s3-root \\
+    -o url={minio_url} \\
+    -o use_path_request_style \\
+    -o allow_other \\
+    -o uid=1000 -o gid=1000
+
+# 使用 bind mount 覆盖 /workspace
+SESSION_PATH="/mnt/s3-root/{s3_prefix}"
+mkdir -p "$SESSION_PATH"
+mount --bind "$SESSION_PATH" /workspace
+"""
 
 # 创建 Pod 时
 if s3_workspace := self._parse_s3_workspace(config.workspace_path):
@@ -1069,65 +1071,39 @@ spec:
         type: DirectoryOrCreate
 ```
 
-#### 4.4.3 JuiceFS 挂载助手配置
+#### 4.4.3 s3fs Secret 配置
 
-**DaemonSet 定义**：
+**Secret 定义**：
 
 ```yaml
-apiVersion: apps/v1
-kind: DaemonSet
+apiVersion: v1
+kind: Secret
 metadata:
-  name: juicefs-mount-helper
+  name: s3fs-passwd
   namespace: sandbox-system
-spec:
-  selector:
-    matchLabels:
-      app: juicefs-mount-helper
-  template:
-    spec:
-      hostNetwork: false
-      securityContext:
-        runAsUser: 0
-        fsGroup: 0
-      containers:
-        - name: mount-helper
-          image: juicedata/juicefs-fuse:latest
-          securityContext:
-            privileged: true
-            capabilities:
-              add:
-                - SYS_ADMIN
-          env:
-            - name: JFS_META_URL
-              value: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-            - name: JFS_STORAGE_TYPE
-              value: "minio"
-            - name: JFS_BUCKET
-              value: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"
-            - name: JFS_ACCESS_KEY
-              value: "minioadmin"
-            - name: JFS_SECRET_KEY
-              value: "minioadmin"
-          command:
-            - sh
-            - -c
-            - |
-              /usr/bin/juicefs mount \
-                --meta="${JFS_META_URL}" \
-                --storage="${JFS_STORAGE_TYPE}" \
-                --bucket="${JFS_BUCKET}" \
-                --access-key="${JFS_ACCESS_KEY}" \
-                --secret-key="${JFS_SECRET_KEY}" \
-                /jfs/sandbox-workspace
-              tail -f /dev/null
-          volumeMounts:
-            - name: juicefs-mount
-              mountPath: /jfs
-      volumes:
-        - name: juicefs-mount
-          hostPath:
-            path: /mnt/jfs
-            type: DirectoryOrCreate
+type: Opaque
+stringData:
+  s3fs-passwd: |
+    minioadmin:minioadmin
+```
+
+**Secret 挂载到 Executor Pod**：
+
+```yaml
+volumes:
+  - name: workspace
+    emptyDir: {}
+  - name: s3fs-passwd
+    secret:
+      secretName: s3fs-passwd
+      defaultMode: 0400
+
+volumeMounts:
+  - name: workspace
+    mountPath: /workspace
+  - name: s3fs-passwd
+    mountPath: /etc/s3fs-passwd
+    readOnly: true
 ```
 
 #### 4.4.4 Executor 镜像要求
@@ -1137,7 +1113,7 @@ spec:
 ```dockerfile
 FROM python:3.11-slim
 
-# 安装基础依赖（无需 s3fs）
+# 安装基础依赖
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -1158,14 +1134,14 @@ EXPOSE 8080
 CMD ["python", "-m", "executor.interfaces.http.rest"]
 ```
 
-**关键差异**（相比 s3fs sidecar 方式）：
+**关键特性**：
 
-| 特性 | s3fs Sidecar | JuiceFS hostPath |
-|------|-------------|-----------------|
-| 镜像大小 | 较大（包含 s3fs） | 较小（无需 s3fs） |
-| 特权要求 | Executor 容器需要 | 仅挂载助手需要 |
-| 启动脚本 | 需要挂载脚本 | 无需特殊脚本 |
-| 运行用户 | root → sandbox | 直接 sandbox |
+| 特性 | 说明 |
+|------|------|
+| 挂载方式 | s3fs 在容器内通过启动脚本挂载 |
+| 特权要求 | 需要 privileged 模式运行 s3fs |
+| 启动脚本 | 自动挂载 s3fs 和 bind mount |
+| 运行用户 | root (挂载) → gosu 切换到 sandbox |
 
 #### 4.4.4 文件 API 实现
 

@@ -118,8 +118,7 @@ graph TB
 
 **存储架构说明**：
 - Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
-- Executor Pod 使用 s3fs init container 挂载 S3 bucket 的 session 子目录到 /workspace
-- 不再需要 JuiceFS 元数据数据库和 CSI 驱动
+- Executor Pod 使用 s3fs 在容器内挂载 S3 bucket 的 session 子目录到 /workspace
 - 执行时生成的文件通过 S3 API 直接写入 MinIO
 - MariaDB 存储 stdout、stderr、执行状态和文件列表（artifacts）
 - 下载文件时通过文件 API 直接从 MinIO 获取

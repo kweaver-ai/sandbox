@@ -29,11 +29,3 @@ data:
 
   # 禁用 Bubblewrap（K8s 环境下推荐使用）
   DISABLE_BWRAP: "true"
-
-  # JuiceFS SDK Settings
-  JUICEFS_ENABLED: "true"
-  JUICEFS_HOST_PATH: "/var/jfs/sandbox-workspace"
-  JUICEFS_CONTAINER_MOUNT_PATH: "/mnt/jfs/sandbox-workspace"
-  JUICEFS_METAURL: "mysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/juicefs_metadata"
-  JUICEFS_STORAGE_TYPE: "minio"
-  JUICEFS_BUCKET: "http://minio.sandbox-system.svc.cluster.local:9000/sandbox-workspace"

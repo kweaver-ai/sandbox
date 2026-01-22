@@ -2,7 +2,7 @@
 # Kubernetes 本地部署脚本
 # 用于在本地 Kind/Minikube/K3s/Docker Desktop 环境中快速部署和测试
 #
-# 使用 JuiceFS hostPath 方式挂载 S3 workspace（适合单节点开发环境）
+# 使用 s3fs + bind mount 方式挂载 S3 workspace（适合单节点开发环境）
 
 set -e
 
@@ -145,29 +145,7 @@ deploy_resources() {
     info "存储层部署完成"
 
     info ""
-    info "=== Step 3: JuiceFS 数据库初始化 ==="
-    kubectl apply -f 09-juicefs-setup.yaml
-
-    info "Waiting for JuiceFS database initialization..."
-    kubectl wait --for=condition=complete job/juicefs-db-init -n sandbox-system --timeout=120s || {
-        warn "JuiceFS DB init may have already run, continuing..."
-    }
-
-    info "JuiceFS 数据库初始化完成"
-
-    info ""
-    info "=== Step 4: JuiceFS hostPath 挂载助手 ==="
-    kubectl apply -f 10-juicefs-hostpath-setup.yaml
-
-    info "Waiting for JuiceFS mount helper to be ready..."
-    kubectl wait --for=condition=ready pod -l app=juicefs-mount-helper -n sandbox-system --timeout=180s || {
-        warn "JuiceFS mount helper wait timeout, continuing anyway..."
-    }
-
-    info "JuiceFS hostPath 挂载助手部署完成"
-
-    info ""
-    info "=== Step 5: Control Plane ==="
+    info "=== Step 3: Control Plane ==="
     kubectl apply -f 05-control-plane-deployment.yaml
 
     info "Control Plane 部署完成"
@@ -205,22 +183,8 @@ verify_deployment() {
     step "Verifying deployment..."
 
     info ""
-    info "=== 验证 JuiceFS 挂载 ==="
-    info "检查挂载助手 Pod:"
-    kubectl get pods -n sandbox-system -l app=juicefs-mount-helper
-
-    info ""
-    info "检查 JuiceFS 挂载点:"
-    MOUNT_HELPER_POD=$(kubectl get pods -n sandbox-system -l app=juicefs-mount-helper -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [ -n "$MOUNT_HELPER_POD" ]; then
-        kubectl exec -n sandbox-system "$MOUNT_HELPER_POD" -- ls -la /jfs/sandbox-workspace 2>/dev/null || warn "Could not list mount point"
-    else
-        warn "Mount helper pod not found"
-    fi
-
-    info ""
     info "=== 验证数据库连接 ==="
-    kubectl exec -n sandbox-system deployment/mariadb -- mariadb -u root -p"password" -e "SHOW DATABASES LIKE 'juicefs%';"
+    kubectl exec -n sandbox-system deployment/mariadb -- mariadb -u root -p"password" -e "SHOW DATABASES;"
 
     info ""
     info "=== 验证 Control Plane ==="
@@ -257,21 +221,12 @@ show_resource_info() {
 
 💾 存储层 (07-08)
   07-minio-deployment.yaml  - MinIO 对象存储（S3 兼容，存储 workspace 文件）
-  08-mariadb-deployment.yaml - MariaDB 数据库（存储会话、执行记录、JuiceFS 元数据）
-
-🗄️  JuiceFS (09-10) - hostPath 方式
-  09-juicefs-setup.yaml       - JuiceFS 数据库初始化（创建 juicefs_metadata 数据库）
-  10-juicefs-hostpath-setup.yaml - JuiceFS 挂载助手 DaemonSet
-                               • 在节点上挂载 JuiceFS 到 /jfs
-                               • 通过 hostPath (/mnt/jfs) 暴露给其他 Pod
+  08-mariadb-deployment.yaml - MariaDB 数据库（存储会话、执行记录）
 
 🎮 Control Plane (05)
   05-control-plane-deployment.yaml - Control Plane 服务
                                    • REST API（会话管理、执行调度）
-                                   • 支持 JuiceFS hostPath 挂载
-
-🚫 不需要的文件
-  06-juicefs-csi-driver.yaml - CSI Driver（hostPath 不需要）
+                                   • 使用 s3fs 挂载 S3 workspace
 
 === 架构说明 ===
 
@@ -279,21 +234,16 @@ show_resource_info() {
 │                     Kubernetes Cluster                      │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  juicefs-mount-helper DaemonSet (Privileged)         │  │
-│  │  • 挂载 JuiceFS → /jfs (容器内)                      │  │
-│  │  • hostPath: /mnt/jfs (宿主机)                       │  │
+│  │       Executor Pod (emptyDir + s3fs)                  │  │
+│  │  • s3fs 挂载 S3 bucket 到 /mnt/s3-root                 │  │
+│  │  • mount --bind overlay session 目录到 /workspace      │  │
 │  └──────────────────────┬───────────────────────────────┘  │
 │                         │                                    │
-│  ┌──────────────────────▼───────────────────────────────┐  │
-│  │       Executor Pod (hostPath 卷)                     │  │
-│  │  /workspace → /mnt/jfs/... (JuiceFS 挂载)           │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                         │                                       │
 │  ┌──────────────────────▼───────────────────────────────┐  │
 │  │            Storage Layer                                 │  │
 │  │  ┌──────────────┐  ┌──────────────┐                    │  │
 │  │  │ MariaDB      │  │ MinIO        │                    │  │
-│  │  │ (Metadata)   │  │ (File Data)  │                    │  │
+│  │  │ (会话数据)   │  │ (文件存储)   │                    │  │
 │  │  └──────────────┘  └──────────────┘                    │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -308,7 +258,7 @@ main() {
     local show_info=${3:-false}
 
     info "=== Sandbox Control Plane K8s Deployment ==="
-    info "Deployment Mode: JuiceFS hostPath (适合 OrbStack/Docker Desktop/单节点环境)"
+    info "Deployment Mode: s3fs + bind mount (适合 OrbStack/Docker Desktop/单节点环境)"
     info ""
 
     # 显示资源说明
