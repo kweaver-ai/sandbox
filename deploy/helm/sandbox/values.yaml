@@ -89,9 +89,6 @@ controlPlane:
     MAX_LIFETIME_HOURS: "6"
     CLEANUP_INTERVAL_SECONDS: "300"
     DISABLE_BWRAP: "true"
-    JUICEFS_ENABLED: "true"  # Enable JuiceFS integration
-    JUICEFS_HOST_PATH: "/var/jfs"
-    JUICEFS_CONTAINER_MOUNT_PATH: "/mnt/jfs"
     PYTHONUNBUFFERED: "1"
 
   # S3/MinIO configuration
@@ -260,18 +257,19 @@ secret:
     secretAccessKey: "minioadmin"
     region: "us-east-1"
 
-# JuiceFS configuration
+# JuiceFS configuration (DISABLED - migrated to MinIO-only s3fs approach)
 juicefs:
-  enabled: true
+  enabled: false
   # CSI Driver (runs in kube-system namespace)
   csi:
-    enabled: true
+    enabled: false
     image: juicedata/juicefs-csi-driver
-    tag: v0.24.3
+    tag: v0.25.2
     namespace: kube-system
+    logLevel: 5
   # Setup job (initializes JuiceFS database and format)
   setup:
-    enabled: true
+    enabled: false
     image: juicedata/juicefs-fuse
     tag: ce-nightly
     # JuiceFS metadata database URL
@@ -287,9 +285,9 @@ juicefs:
     dbPassword: "juicefs_password"
   # HostPath DaemonSet (mount helper for executor pods)
   hostPath:
-    enabled: true
-    mountPath: "/var/jfs"  # JuiceFS mount point inside mount-helper container
-    hostPath: "/var/jfs"   # Host path that will be mounted into control-plane/executor pods
+    enabled: false
+    mountPath: "/var/jfs"   # JuiceFS mount point inside mount-helper container
+    hostPath: "/var/jfs"    # Host path that will be mounted into control-plane/executor pods
 
 # Runtime namespace configuration
 runtimeNamespace:

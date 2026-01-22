@@ -184,21 +184,6 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DISABLE_BWRAP
-            - name: JUICEFS_ENABLED
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.configMap.name }}
-                  key: JUICEFS_ENABLED
-            - name: JUICEFS_HOST_PATH
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.configMap.name }}
-                  key: JUICEFS_HOST_PATH
-            - name: JUICEFS_CONTAINER_MOUNT_PATH
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.configMap.name }}
-                  key: JUICEFS_CONTAINER_MOUNT_PATH
             - name: PYTHONUNBUFFERED
               valueFrom:
                 configMapKeyRef:
@@ -251,11 +236,6 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
-{{- if and .Values.juicefs.enabled .Values.juicefs.hostPath.enabled }}
-          volumeMounts:
-            - name: juicefs-mount
-              mountPath: {{ .Values.controlPlane.env.JUICEFS_CONTAINER_MOUNT_PATH | quote }}
-{{- end }}
       {{- with .Values.controlPlane.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -264,11 +244,4 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- if and .Values.juicefs.enabled .Values.juicefs.hostPath.enabled }}
-      volumes:
-        - name: juicefs-mount
-          hostPath:
-            path: {{ .Values.juicefs.hostPath.hostPath | quote }}
-            type: Directory
-{{- end }}
 {{- end }}

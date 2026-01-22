@@ -60,7 +60,22 @@
 - **8.1 指标定义** - 系统指标和业务指标
 - **8.2 监控集成** - Prometheus 和 Grafana
 
-### [9. 部署方案](08-monitoring-and-deployment.md#9-部署方案)
+### [9. JuiceFS 存储架构](09-juicefs-storage.md)
+- **9.1 概述** - 元数据与数据分离架构
+- **9.2 访问方式对比** - SDK、FUSE、S3 API
+- **9.3 SDK 模式** - 推荐的 CSI 模式实现
+- **9.4 FUSE 挂载模式** - hostPath DaemonSet 实现
+- **9.5 CSI Driver 集成** - PV/PVC 自动挂载
+- **9.6 故障排查** - 常见问题和解决方案
+
+### [10. MinIO-Only 架构方案](10-minio-only-architecture.md) 💡
+- **10.1 问题分析** - JuiceFS 架构痛点
+- **10.2 方案设计** - s3fs-fuse 挂载方案
+- **10.3 实现方案** - 代码和配置修改
+- **10.4 迁移步骤** - 从 JuiceFS 迁移到 MinIO
+- **10.5 风险评估** - 风险和缓解措施
+
+### [11. 部署方案](08-monitoring-and-deployment.md#9-部署方案)
 - **9.1 Docker Compose 部署** - 开发/小规模部署
 - **9.2 Kubernetes 部署** - 生产环境部署
 

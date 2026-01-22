@@ -75,7 +75,7 @@ graph TB
 
     subgraph Storage["存储层"]
         MariaDB["MariaDB<br/>(会话状态/模板)"]
-        S3["对象存储 S3<br/>(workspace 文件)"]
+        S3["MinIO<br/>(S3-compatible 对象存储)"]
         Etcd["Etcd<br/>(配置中心)"]
     end
 
@@ -113,14 +113,18 @@ graph TB
 - Container Scheduler: Docker/K8s 运行时实例管理
 - 存储层：
   - MariaDB（会话状态/模板/执行记录）
-  - S3 对象存储（workspace 文件，通过 Volume 挂载到容器）
+  - MinIO（S3-compatible 对象存储，workspace 文件）
   - Etcd（配置中心）
 
 **存储架构说明**：
-- workspace 目录通过 S3 CSI Driver 或类似机制挂载为容器 Volume
-- 执行时生成的文件直接写入 workspace，自动持久化到 S3
+- Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
+- Executor Pod 使用 s3fs init container 挂载 S3 bucket 的 session 子目录到 /workspace
+- 不再需要 JuiceFS 元数据数据库和 CSI 驱动
+- 执行时生成的文件通过 S3 API 直接写入 MinIO
 - MariaDB 存储 stdout、stderr、执行状态和文件列表（artifacts）
-- 下载文件时通过文件 API 直接从 S3 获取
+- 下载文件时通过文件 API 直接从 MinIO 获取
+
+> 详细存储架构请参考 [10. MinIO-Only 存储架构](10-minio-only-architecture.md)
 
 #### 部署架构
 ```mermaid
@@ -160,27 +164,34 @@ graph TB
         end
         
         subgraph DataLayer["💾 数据层 - Namespace: data"]
-            
+
             subgraph MariaDBCluster["StatefulSet: MariaDB Cluster"]
-                DB1["mariadb-0<br/>Role: Primary"]
+                DB1["mariadb-0<br/>Role: Primary<br/>Sandbox DB"]
                 DB2["mariadb-1<br/>Role: Replica"]
                 DB3["mariadb-2<br/>Role: Replica"]
             end
-            
+
             subgraph EtcdCluster["StatefulSet: Etcd Cluster"]
                 Etcd1["etcd-0"]
                 Etcd2["etcd-1"]
                 Etcd3["etcd-2"]
             end
-            
+
+            subgraph MinIOCluster["MinIO Cluster"]
+                MinIO1["minio-0<br/>S3 Workspace Storage"]
+                MinIO2["minio-1"]
+                MinIO3["minio-2"]
+                MinIO4["minio-3"]
+            end
+
             MariaDBService["Service: mariadb-svc<br/>Port: 3306"]
             EtcdService["Service: etcd-svc"]
+            MinIOService["Service: minio-svc<br/>Port: 9000/9001"]
         end
         
     end
     
     subgraph ExternalServices["☁️ 外部服务"]
-        S3["S3 / MinIO<br/>- 执行结果存储<br/>- 生成文件存储<br/>- 日志归档"]
         Registry["Container Registry<br/>- Docker Hub<br/>- Harbor<br/>- 私有镜像仓库"]
     end
     
@@ -207,6 +218,11 @@ graph TB
     EtcdService --> Etcd2
     EtcdService --> Etcd3
 
+    MinIOService --> MinIO1
+    MinIOService -.->|"数据复制"| MinIO2
+    MinIOService -.->|"数据复制"| MinIO3
+    MinIOService -.->|"数据复制"| MinIO4
+
     CP1 -.->|"K8s API<br/>创建 Pod"| SB1
     CP2 -.->|"K8s API<br/>创建 Pod"| SB2
     CP3 -.->|"K8s API<br/>创建 Pod"| SB3
@@ -215,10 +231,14 @@ graph TB
     NetworkPolicy -.->|限制| SB2
     NetworkPolicy -.->|限制| SB3
     
-    SB1 -->|"上报结果<br/>S3 API"| S3
-    SB2 -->|"上报结果<br/>S3 API"| S3
-    SB3 -->|"上报结果<br/>S3 API"| S3
-    
+    SB1 -->|"上报结果<br/>S3 API"| MinIOService
+    SB2 -->|"上报结果<br/>S3 API"| MinIOService
+    SB3 -->|"上报结果<br/>S3 API"| MinIOService
+
+    CP1 -.->|"写入会话状态<br/>S3 API"| MariaDBService
+    CP2 -.->|"写入会话状态<br/>S3 API"| MariaDBService
+    CP3 -.->|"写入会话状态<br/>S3 API"| MariaDBService
+
     CP1 -.->|"拉取镜像"| Registry
     Warm1 -.->|"基础镜像"| Registry
     SB1 -.->|"用户镜像"| Registry
@@ -229,12 +249,12 @@ graph TB
     classDef runtimeStyle fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
     classDef dataStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef externalStyle fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-    
+
     class Ingress,LB ingressStyle
     class CP1,CP2,CP3,CPService,HPA controlStyle
     class SB1,SB2,SB3,NetworkPolicy runtimeStyle
-    class DB1,DB2,DB3,Etcd1,Etcd2,Etcd3,MariaDBService,EtcdService dataStyle
-    class S3,Registry externalStyle
+    class DB1,DB2,DB3,Etcd1,Etcd2,Etcd3,MinIO1,MinIO2,MinIO3,MinIO4,MariaDBService,EtcdService,MinIOService dataStyle
+    class Registry externalStyle
 
 
 ```

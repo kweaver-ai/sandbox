@@ -11,7 +11,7 @@ data:
   ENVIRONMENT: {{ .Values.controlPlane.env.ENVIRONMENT | quote }}
   DEBUG: {{ .Values.controlPlane.env.DEBUG | quote }}
   DATABASE_URL: {{ .Values.controlPlane.env.DATABASE_URL | quote }}
-  KUBERNETES_NAMESPACE: {{ .Values.controlPlane.env.KUBERNETES_NAMESPACE | quote }}
+  KUBERNETES_NAMESPACE: {{ .Values.global.namespace | quote }}
   DEFAULT_TIMEOUT: {{ .Values.controlPlane.env.DEFAULT_TIMEOUT | quote }}
   MAX_TIMEOUT: {{ .Values.controlPlane.env.MAX_TIMEOUT | quote }}
   DEFAULT_CPU: {{ .Values.controlPlane.env.DEFAULT_CPU | quote }}
@@ -21,8 +21,5 @@ data:
   MAX_LIFETIME_HOURS: {{ .Values.controlPlane.env.MAX_LIFETIME_HOURS | quote }}
   CLEANUP_INTERVAL_SECONDS: {{ .Values.controlPlane.env.CLEANUP_INTERVAL_SECONDS | quote }}
   DISABLE_BWRAP: {{ .Values.controlPlane.env.DISABLE_BWRAP | quote }}
-  JUICEFS_ENABLED: {{ .Values.controlPlane.env.JUICEFS_ENABLED | quote }}
-  JUICEFS_HOST_PATH: {{ .Values.controlPlane.env.JUICEFS_HOST_PATH | quote }}
-  JUICEFS_CONTAINER_MOUNT_PATH: {{ .Values.controlPlane.env.JUICEFS_CONTAINER_MOUNT_PATH | quote }}
   PYTHONUNBUFFERED: {{ .Values.controlPlane.env.PYTHONUNBUFFERED | quote }}
 {{- end }}

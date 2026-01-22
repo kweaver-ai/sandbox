@@ -4,7 +4,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "sandbox.rbacName" . }}
-  namespace: {{ .Values.runtimeNamespace.name }}
+  namespace: {{ .Values.global.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: control-plane
@@ -30,7 +30,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "sandbox.rbacName" . }}
-  namespace: {{ .Values.runtimeNamespace.name }}
+  namespace: {{ .Values.global.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: control-plane

@@ -4,15 +4,15 @@
 # Mirror configuration for special network environments
 ARG USE_MIRROR=false
 ARG APT_MIRROR=mirrors.ustc.edu.cn
-ARG PIP_MIRROR=mirrors.ustc.edu.cn
+ARG PIP_MIRROR=mirrors.aliyun.com
 ARG PYTHON_IMAGE=python:3.11-slim
 
 FROM ${PYTHON_IMAGE}
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false
-ARG APT_MIRROR=mirrors.ustc.edu.cn
-ARG PIP_MIRROR=mirrors.ustc.edu.cn
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_MIRROR=mirrors.aliyun.com
 
 # Metadata
 LABEL maintainer="Sandbox Team"
@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # curl for health checks
     curl \
     ca-certificates \
+    wget \
     # Minimal build tools for Python packages
     gcc \
     python3-dev \

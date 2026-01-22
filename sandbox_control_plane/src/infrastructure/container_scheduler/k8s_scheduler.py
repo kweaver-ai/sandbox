@@ -4,19 +4,18 @@ Kubernetes 容器调度器
 使用官方 Python kubernetes 客户端实现 Pod 的创建和管理。
 
 支持 S3 workspace 挂载：当 workspace_path 以 s3:// 开头时，
-Pod 会通过 JuiceFS CSI Driver Mount Pod 模式将 S3 bucket 挂载到 /workspace 目录。
+executor 容器在启动脚本中挂载 s3fs 到 /workspace。
 
-JuiceFS 挂载架构（CSI Driver Mount Pod 模式）：
-- CSI Controller StatefulSet：管理 PV 生命周期
-- CSI Node DaemonSet：管理 Mount Pod 生命周期
-- Mount Pod：运行 JuiceFS 客户端，挂载文件系统到独立 Pod
-- Executor Pods：通过 PVC 共享 Mount Pod 的挂载点
+MinIO + s3fs 架构：
+- Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
+- Executor Pod 在启动脚本中挂载 s3fs，将 S3 bucket 的 session 子目录挂载到 /workspace
+- s3fs 进程和 executor 进程运行在同一容器内
+- 不再需要 JuiceFS 元数据数据库和 CSI 驱动
 
-CSI Driver 优势：
-- 标准的 Kubernetes CSI 接口
-- Mount Pod 复用（多个 Pod 共享同一个 Mount Pod）
-- 完全支持 POSIX 文件操作
-- 无需将 FUSE 挂载传播到宿主机
+s3fs 挂载方案：
+- 在 executor 容器的启动脚本中挂载 s3fs
+- s3fs 进程在后台运行，executor 进程在前台运行
+- 每个独立的 executor Pod 有自己的 s3fs 挂载进程
 
 支持 Python 依赖安装：按照 sandbox-design-v2.1.md 章节 5 设计。
 """
@@ -46,6 +45,7 @@ from kubernetes.client import (
     V1Capabilities,
     V1PodSecurityContext,
     V1EmptyDirVolumeSource,
+    V1SecretVolumeSource,
 )
 from kubernetes.client.rest import ApiException
 
@@ -86,7 +86,7 @@ class K8sScheduler(IContainerScheduler):
 
     def __init__(
         self,
-        namespace: str = "sandbox-runtime",
+        namespace: str = "sandbox-system",
         kube_config_path: Optional[str] = None,
         service_account_token: Optional[str] = None,
     ):
@@ -178,78 +178,28 @@ class K8sScheduler(IContainerScheduler):
         # 限制长度（K8s Pod 名称最多 253 字符）
         return pod_name[:253]
 
-    def _build_juicefs_host_path(self, s3_prefix: str) -> str:
-        """
-        构建 JuiceFS hostPath 路径
-
-        将 S3 路径前缀映射到 hostPath 挂载点路径
-
-        Args:
-            s3_prefix: S3 路径前缀，如 "sessions/test-001/workspace"
-
-        Returns:
-            hostPath 完整路径，如 "/mnt/jfs/sandbox-workspace/sessions/test-001/workspace"
-        """
-        settings = get_settings()
-        base_path = settings.juicefs_host_path.rstrip('/')
-        return f"{base_path}/{s3_prefix}"
-
-    async def _ensure_pvc_exists(self, pvc_name: str, s3_prefix: str) -> None:
-        """
-        确保 PVC 存在（使用 JuiceFS CSI Driver 动态配置）
-
-        Args:
-            pvc_name: PVC 名称
-            s3_prefix: S3 路径前缀（用于 JuiceFS 子路径）
-        """
-        settings = get_settings()
-
-        # PVC 配置（动态配置）
-        pvc = V1PersistentVolumeClaim(
-            metadata=V1ObjectMeta_imported(
-                name=pvc_name,
-                namespace=self._namespace,
-                annotations={
-                    # JuiceFS 子路径（可选）
-                    "juicefs/mount-path": s3_prefix,
-                }
-            ),
-            spec=V1PersistentVolumeClaimSpec(
-                access_modes=["ReadWriteOnce"],
-                storage_class_name="juicefs-sc",  # 使用 JuiceFS StorageClass
-                resources=V1ResourceRequirements(
-                    requests={"storage": "1Pi"}  # JuiceFS 不限制大小
-                )
-            )
-        )
-
-        # 创建 PVC（如果不存在）
-        try:
-            await asyncio.to_thread(
-                self._core_v1.create_namespaced_persistent_volume_claim,
-                namespace=self._namespace,
-                body=pvc
-            )
-            logger.info(f"Created PVC: {pvc_name}")
-        except ApiException as e:
-            if e.status == 409:  # Already exists
-                logger.debug(f"PVC already exists: {pvc_name}")
-            else:
-                raise
+    # REMOVED: _build_juicefs_host_path() - No longer needed with s3fs approach
+    # REMOVED: _ensure_pvc_exists() - No longer needed with s3fs approach
 
     def _build_executor_container(
         self,
         config: ContainerConfig,
         use_s3_mount: bool,
         has_dependencies: bool,
+        session_id: str = None,
+        s3_workspace: dict = None,
     ) -> V1Container:
         """
         构建主 executor 容器
 
+        如果使用 S3 挂载，启动脚本会先挂载 s3fs，然后启动 executor
+
         Args:
             config: 容器配置
-            use_s3_mount: 是否使用 S3 挂载（通过 JuiceFS CSI Driver）
+            use_s3_mount: 是否使用 S3 挂载（通过 s3fs 在容器内挂载）
             has_dependencies: 是否有依赖包
+            session_id: 会话 ID（用于 S3 子目录挂载）
+            s3_workspace: S3 workspace 配置（包含 bucket, prefix）
 
         Returns:
             V1Container 对象
@@ -309,20 +259,139 @@ class K8sScheduler(IContainerScheduler):
                 mount_path="/workspace",
             )
         ]
+        if use_s3_mount:
+            volume_mounts.append(
+                V1VolumeMount(
+                    name="s3fs-passwd",
+                    mount_path="/etc/s3fs-passwd",
+                    read_only=True,
+                )
+            )
 
-        # 安全上下文
+        # 安全上下文 - s3fs 需要 privileged 和 root 用户
+        # 注意：privileged=True 时容器必须以 root 运行，以便进行 FUSE 挂载
+        # 需要显式设置 runAsUser=0 来覆盖 Dockerfile 中的 USER 指令
+        # 有依赖时也需要 root 来安装依赖，然后用 gosu 切换到 sandbox 用户
+        needs_root = use_s3_mount or has_dependencies
         security_context = V1SecurityContext(
-            run_as_non_root=True,
-            run_as_user=1000,
-            run_as_group=1000,
-            allow_privilege_escalation=False,
-            capabilities=V1Capabilities(drop=["ALL"]),
+            # s3fs 挂载或依赖安装需要 root，最终使用 gosu 切换到 sandbox 用户
+            run_as_non_root=not needs_root,
+            run_as_user=0 if needs_root else 1000,  # 0 = root，显式设置以覆盖 Dockerfile USER
+            run_as_group=0 if needs_root else 1000,
+            allow_privilege_escalation=use_s3_mount,  # s3fs 需要特权
+            capabilities=V1Capabilities(drop=["ALL"]) if not needs_root else None,
             read_only_root_filesystem=False,
+            privileged=use_s3_mount,  # s3fs 需要 privileged 模式
         )
 
-        # 如果有依赖安装，使用启动脚本
+        # 构建启动命令
         command = None
-        if has_dependencies:
+        if use_s3_mount:
+            # 获取设置
+            settings = get_settings()
+            minio_url = settings.s3_endpoint_url or "http://minio.sandbox-system.svc.cluster.local:9000"
+            bucket = s3_workspace["bucket"]
+
+            # S3 挂载脚本
+            # 使用 bucket 挂载 + bind mount 方案
+            # 关键：使用完整的 s3_prefix 而不是 session_id，避免路径层级问题
+            # 例如：s3_prefix = "sessions/sess_xxx"，而不是 "sess_xxx"
+            # 这样 /workspace 直接绑定到 /mnt/s3-root/sessions/sess_xxx
+            # 文件在 MinIO 的路径 sessions/sess_xxx/test.py 就会映射到 /workspace/test.py
+            # 注意：由于 /workspace 是 emptyDir 挂载点，必须使用 mount --bind
+            # 而不是 mv + ln -s（后者会导致符号链接创建在 emptyDir 内部）
+            s3_prefix = s3_workspace["prefix"].rstrip('/')
+            mount_script = f"""#!/bin/sh
+set -e
+
+echo "📂 Mounting S3 bucket {bucket} to /mnt/s3-root (session: {session_id})..."
+
+# 1. 挂载整个 S3 bucket 到临时位置
+# 添加 uid=1000,gid=1000 让挂载点对 sandbox 用户可访问
+mkdir -p /mnt/s3-root
+s3fs {bucket} /mnt/s3-root \\
+    -o url={minio_url} \\
+    -o use_path_request_style \\
+    -o allow_other \\
+    -o uid=1000 \\
+    -o gid=1000 \\
+    -o passwd_file=/etc/s3fs-passwd/s3fs-passwd &
+
+S3FS_PID=$!
+echo "s3fs started with PID: $S3FS_PID"
+
+# 2. 等待挂载完成
+sleep 2
+
+# 3. 创建 session workspace 目录（使用完整 S3 前缀）
+# s3_prefix 示例: "sessions/sess_xxx" 或 "sessions/sess_xxx/workspace"
+# 这样 /workspace 直接绑定到 session 目录，避免额外层级
+SESSION_PATH="/mnt/s3-root/{s3_prefix}"
+echo "Ensuring session workspace exists: $SESSION_PATH"
+mkdir -p "$SESSION_PATH"
+
+# 4. 使用 bind mount 将 S3 路径挂载到 /workspace
+# 注意：/workspace 是 emptyDir 挂载点，不能用 mv + ln -s
+# 必须使用 mount --bind 来覆盖挂载点
+# 结果：/workspace 直接显示 SESSION_PATH 的内容
+# 文件访问：/workspace/test.py (不是 /workspace/sess_xxx/test.py)
+mount --bind "$SESSION_PATH" /workspace
+
+# 5. 验证 bind mount
+echo "Workspace bind mounted: $(ls -la /workspace)"
+
+# 7. 确保 s3fs 挂载正常
+echo "✅ S3 bucket mounted and workspace linked successfully"
+ls -la /workspace/
+
+"""
+
+            # 如果有依赖，安装依赖
+            if has_dependencies:
+                dependencies_json = config.labels.get("dependencies", "")
+                dependencies = json.loads(dependencies_json) if dependencies_json else []
+                pip_specs = []
+                for dep in dependencies:
+                    if isinstance(dep, dict):
+                        name = dep.get("name", "")
+                        version = dep.get("version", "")
+                        if version:
+                            pip_specs.append(f"{name}{version}")
+                        else:
+                            pip_specs.append(name)
+                    elif isinstance(dep, str):
+                        pip_specs.append(dep)
+
+                deps_list = " ".join(f'"{spec}"' for spec in pip_specs)
+                mount_script += f"""
+echo "📦 Installing dependencies..."
+VENV_DIR="/opt/sandbox-venv"
+mkdir -p $VENV_DIR
+
+pip3 install \\
+    --target $VENV_DIR \\
+    --no-cache-dir \\
+    --no-warn-script-location \\
+    --disable-pip-version-check \\
+    --index-url https://pypi.org/simple/ \\
+    {deps_list}
+
+echo "✅ Dependencies installed"
+
+export PYTHONPATH="$VENV_DIR:/app:/workspace"
+export SANDBOX_VENV_PATH="$VENV_DIR"
+"""
+
+            # 启动 executor (前台) - 使用 gosu 切换到 sandbox 用户
+            mount_script += """
+echo "🚀 Starting executor as sandbox user..."
+# 使用 gosu 切换到 sandbox 用户并启动 executor
+# gosu 会正确传递信号，避免进程变成僵尸
+exec gosu sandbox python -m executor.interfaces.http.rest
+"""
+            command = ["sh", "-c", mount_script]
+
+        elif has_dependencies:
             # 依赖由 executor 容器在启动时安装
             dependencies_json = config.labels.get("dependencies", "")
             dependencies = json.loads(dependencies_json) if dependencies_json else []
@@ -364,8 +433,12 @@ pip3 install \\
 echo "✅ Dependencies installed"
 rm -rf /tmp/pip-cache
 
-# 启动 executor
-exec python -m executor.interfaces.http.rest
+# 修复 venv 目录权限（以 root 安装，需要让 sandbox 用户可读）
+chown -R sandbox:sandbox /opt/sandbox-venv
+
+# 启动 executor - 使用 gosu 切换到 sandbox 用户
+echo "🚀 Starting executor as sandbox user..."
+exec gosu sandbox python -m executor.interfaces.http.rest
 """
             command = ["sh", "-c", install_script]
 
@@ -383,14 +456,16 @@ exec python -m executor.interfaces.http.rest
 
     async def create_container(self, config: ContainerConfig) -> str:
         """
-        创建 Kubernetes Pod
+        创建 Kubernetes Pod - 使用 s3fs 在 executor 容器内挂载
+
+        架构说明：
+        - Control Plane 通过 S3 API 将文件写入 MinIO 的 /sessions/{session_id}/ 路径
+        - Executor Pod 在启动脚本中挂载 s3fs，将 S3 bucket 的 session 子目录挂载到 /workspace
+        - s3fs 进程和 executor 进程运行在同一容器内
+        - 不再需要 JuiceFS 元数据数据库和 CSI 驱动
 
         Pod 配置：
-        - 主容器: executor（运行用户代码）
-
-        S3 Workspace 挂载：
-        当 workspace_path 以 s3:// 开头时，使用 JuiceFS hostPath 方式挂载，
-        S3 bucket 会通过预先挂载的 hostPath 暴露到容器的 /workspace 目录。
+        - 单个 executor 容器（如果使用 S3，启动脚本会先挂载 s3fs 再启动 executor）
 
         Python 依赖安装：
         - 如果有依赖，executor 容器会在启动时安装依赖
@@ -401,49 +476,44 @@ exec python -m executor.interfaces.http.rest
         s3_workspace = self._parse_s3_workspace(config.workspace_path)
         use_s3_mount = s3_workspace is not None
 
-        # 检查是否使用 CSI Driver 模式
-        settings = get_settings()
-        use_csi_mode = settings.juicefs_csi_enabled and use_s3_mount
-
         # 检查是否有依赖
         dependencies_json = config.labels.get("dependencies", "")
         has_dependencies = bool(dependencies_json)
 
-        # 构建容器列表
+        # 提取 session_id 仅用于日志记录（挂载使用完整 s3_prefix）
+        session_id = s3_prefix_from_path(s3_workspace["prefix"]) if s3_workspace else config.name
+
+        # 构建容器列表 - 只有 executor 容器
         containers = []
 
-        # 主 executor 容器
+        # 构建 executor 容器（在启动脚本中挂载 s3fs）
+        # 注意：挂载脚本使用完整的 s3_prefix，而不是 session_id，以避免路径层级问题
         executor_container = self._build_executor_container(
             config=config,
             use_s3_mount=use_s3_mount,
             has_dependencies=has_dependencies,
+            session_id=session_id,
+            s3_workspace=s3_workspace,
         )
         containers.append(executor_container)
 
         # 构建卷
         volumes = []
-        if use_csi_mode and s3_workspace:
-            # CSI 模式：使用 PVC
-            pvc_name = f"{config.name}-workspace"
-            await self._ensure_pvc_exists(pvc_name, s3_workspace["prefix"])
+        if use_s3_mount:
+            # 使用 emptyDir 用于 s3fs 挂载
             volumes.append(
                 V1Volume(
                     name="workspace",
-                    persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-                        claim_name=pvc_name,
-                        read_only=False
-                    )
+                    empty_dir=V1EmptyDirVolumeSource(),
                 )
             )
-        elif use_s3_mount and s3_workspace:
-            # hostPath 模式：使用 hostPath 指向 JuiceFS 挂载点
-            host_path = self._build_juicefs_host_path(s3_workspace["prefix"])
+            # 添加 s3fs-passwd secret
             volumes.append(
                 V1Volume(
-                    name="workspace",
-                    host_path=V1HostPathVolumeSource(
-                        path=host_path,
-                        type="DirectoryOrCreate",
+                    name="s3fs-passwd",
+                    secret=V1SecretVolumeSource(
+                        secret_name="s3fs-passwd",
+                        default_mode=0o400,
                     ),
                 )
             )
@@ -465,7 +535,7 @@ exec python -m executor.interfaces.http.rest
             "sandbox-type": "execution",
         }
         if use_s3_mount:
-            labels["mount-method"] = "csi-pvc" if use_csi_mode else "hostPath"
+            labels["mount-method"] = "s3fs"
         labels.update(config.labels)
 
         # 构建 annotations（dependencies 放在这里，没有格式限制）
@@ -503,7 +573,7 @@ exec python -m executor.interfaces.http.rest
                 namespace=self._namespace,
                 body=pod,
             )
-            mount_method = "hostPath" if use_s3_mount else "emptyDir"
+            mount_method = "s3fs" if use_s3_mount else "emptyDir"
             logger.info(
                 f"Created pod {created_pod.metadata.name} for session {config.name} "
                 f"in namespace {self._namespace} (mount method: {mount_method})"
@@ -532,8 +602,7 @@ exec python -m executor.interfaces.http.rest
         """
         停止（删除）Pod
 
-        使用 hostPath 方式时，无需清理 PVC，JuiceFS 挂载点由
-        mount-helper DaemonSet 管理。
+        使用 s3fs 方式时，无需清理 PVC，s3fs 挂载在 Pod 删除时自动清理。
 
         Args:
             container_id: Pod 名称
@@ -565,8 +634,7 @@ exec python -m executor.interfaces.http.rest
         """
         删除 Pod
 
-        使用 hostPath 方式时，无需清理 PVC，JuiceFS 挂载点由
-        mount-helper DaemonSet 管理。
+        使用 s3fs 方式时，无需清理 PVC，s3fs 挂载在 Pod 删除时自动清理。
 
         Args:
             container_id: Pod 名称
