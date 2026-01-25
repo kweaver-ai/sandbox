@@ -46,29 +46,22 @@ async def submit_execution(
     - **timeout**: 超时时间（秒），默认 30
     - **event**: 事件数据
     """
-    try:
-        command = ExecuteCodeCommand(
-            session_id=session_id,
-            code=request.code,
-            language=request.language,
-            timeout=request.timeout,
-            event_data=request.event
-        )
+    command = ExecuteCodeCommand(
+        session_id=session_id,
+        code=request.code,
+        language=request.language,
+        timeout=request.timeout,
+        event_data=request.event
+    )
 
-        execution_dto = await service.execute_code(command)
+    execution_dto = await service.execute_code(command)
 
-        return ExecuteCodeResponse(
-            execution_id=execution_dto.id,
-            session_id=execution_dto.session_id,
-            status=execution_dto.status,
-            created_at=execution_dto.created_at
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    return ExecuteCodeResponse(
+        execution_id=execution_dto.id,
+        session_id=execution_dto.session_id,
+        status=execution_dto.status,
+        created_at=execution_dto.created_at
+    )
 
 
 @router.get("/{execution_id}/status", response_model=ExecutionResponse)
@@ -77,16 +70,9 @@ async def get_execution_status(
     service: SessionService = Depends(_get_session_service)
 ):
     """获取执行状态"""
-    try:
-        query = GetExecutionQuery(execution_id=execution_id)
-        execution_dto = await service.get_execution(query)
-        return _map_dto_to_response(execution_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    query = GetExecutionQuery(execution_id=execution_id)
+    execution_dto = await service.get_execution(query)
+    return _map_dto_to_response(execution_dto)
 
 
 @router.get("/{execution_id}/result", response_model=ExecutionResponse)
@@ -95,16 +81,9 @@ async def get_execution_result(
     service: SessionService = Depends(_get_session_service)
 ):
     """获取执行结果"""
-    try:
-        query = GetExecutionQuery(execution_id=execution_id)
-        execution_dto = await service.get_execution(query)
-        return _map_dto_to_response(execution_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    query = GetExecutionQuery(execution_id=execution_id)
+    execution_dto = await service.get_execution(query)
+    return _map_dto_to_response(execution_dto)
 
 
 @router.get("/sessions/{session_id}/executions")
@@ -115,24 +94,14 @@ async def list_executions(
     service: SessionService = Depends(_get_session_service)
 ):
     """列出会话的所有执行"""
-    try:
-        executions = await service.list_executions(
-            session_id=session_id,
-            limit=limit
-        )
+    executions = await service.list_executions(session_id=session_id, limit=limit)
 
-        return {
-            "items": executions,
-            "total": len(executions),
-            "limit": limit,
-            "offset": offset
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    return {
+        "items": executions,
+        "total": len(executions),
+        "limit": limit,
+        "offset": offset
+    }
 
 
 def _map_dto_to_response(dto: ExecutionDTO) -> ExecutionResponse:

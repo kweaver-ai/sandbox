@@ -36,27 +36,20 @@ async def create_template(
     - **default_timeout_sec**: 默认超时时间（秒）
     - **default_env_vars**: 默认环境变量
     """
-    try:
-        command = CreateTemplateCommand(
-            template_id=request.id,
-            name=request.name,
-            image_url=request.image_url,
-            runtime_type=request.runtime_type,
-            default_cpu_cores=request.default_cpu_cores,
-            default_memory_mb=request.default_memory_mb,
-            default_disk_mb=request.default_disk_mb,
-            default_timeout_sec=request.default_timeout,
-            default_env_vars=request.default_env_vars
-        )
+    command = CreateTemplateCommand(
+        template_id=request.id,
+        name=request.name,
+        image_url=request.image_url,
+        runtime_type=request.runtime_type,
+        default_cpu_cores=request.default_cpu_cores,
+        default_memory_mb=request.default_memory_mb,
+        default_disk_mb=request.default_disk_mb,
+        default_timeout_sec=request.default_timeout,
+        default_env_vars=request.default_env_vars
+    )
 
-        template_dto = await service.create_template(command)
-        return _map_dto_to_response(template_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    template_dto = await service.create_template(command)
+    return _map_dto_to_response(template_dto)
 
 
 @router.get("", response_model=List[TemplateResponse])
@@ -66,19 +59,8 @@ async def list_templates(
     service: TemplateService = Depends(get_template_service_db)
 ):
     """列出所有模板"""
-    try:
-        templates = await service.list_templates(
-            limit=limit,
-            offset=offset
-        )
-
-        return [_map_dto_to_response(t) for t in templates]
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    templates = await service.list_templates(limit=limit, offset=offset)
+    return [_map_dto_to_response(t) for t in templates]
 
 
 @router.get("/{template_id}", response_model=TemplateResponse)
@@ -87,16 +69,9 @@ async def get_template(
     service: TemplateService = Depends(get_template_service_db)
 ):
     """获取模板详情"""
-    try:
-        query = GetTemplateQuery(template_id=template_id)
-        template_dto = await service.get_template(query)
-        return _map_dto_to_response(template_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    query = GetTemplateQuery(template_id=template_id)
+    template_dto = await service.get_template(query)
+    return _map_dto_to_response(template_dto)
 
 
 @router.put("/{template_id}", response_model=TemplateResponse)
@@ -106,26 +81,19 @@ async def update_template(
     service: TemplateService = Depends(get_template_service_db)
 ):
     """更新模板"""
-    try:
-        command = UpdateTemplateCommand(
-            template_id=template_id,
-            name=request.name,
-            image_url=request.image_url,
-            default_cpu_cores=request.default_cpu_cores,
-            default_memory_mb=request.default_memory_mb,
-            default_disk_mb=request.default_disk_mb,
-            default_timeout_sec=request.default_timeout,
-            default_env_vars=request.default_env_vars
-        )
+    command = UpdateTemplateCommand(
+        template_id=template_id,
+        name=request.name,
+        image_url=request.image_url,
+        default_cpu_cores=request.default_cpu_cores,
+        default_memory_mb=request.default_memory_mb,
+        default_disk_mb=request.default_disk_mb,
+        default_timeout_sec=request.default_timeout,
+        default_env_vars=request.default_env_vars
+    )
 
-        template_dto = await service.update_template(command)
-        return _map_dto_to_response(template_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    template_dto = await service.update_template(command)
+    return _map_dto_to_response(template_dto)
 
 
 @router.delete("/{template_id}")
@@ -134,15 +102,8 @@ async def delete_template(
     service: TemplateService = Depends(get_template_service_db)
 ):
     """删除模板"""
-    try:
-        await service.delete_template(template_id)
-        return {"message": "Template deleted successfully"}
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    await service.delete_template(template_id)
+    return {"message": "Template deleted successfully"}
 
 
 def _map_dto_to_response(dto: TemplateDTO) -> TemplateResponse:

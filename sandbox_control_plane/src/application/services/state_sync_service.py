@@ -60,49 +60,14 @@ class StateSyncService:
             active_sessions = running_sessions + creating_sessions
 
             stats["total"] = len(active_sessions)
-            logger.info(
-                "Found active sessions to sync",
-                count=len(active_sessions),
-            )
+            logger.info("Found active sessions to sync", count=len(active_sessions))
 
             for session in active_sessions:
                 if not session.container_id:
-                    logger.warning(
-                        "Session has no container_id, skipping",
-                        session_id=session.id,
-                    )
+                    logger.warning("Session has no container_id, skipping", session_id=session.id)
                     continue
 
-                try:
-                    is_running = await self._container_scheduler.is_container_running(
-                        session.container_id
-                    )
-
-                    if is_running:
-                        stats["healthy"] += 1
-                        logger.debug(
-                            "Session container is healthy",
-                            session_id=session.id,
-                            container_id=session.container_id[:12],
-                        )
-                    else:
-                        stats["unhealthy"] += 1
-                        logger.warning(
-                            "Session container is unhealthy",
-                            session_id=session.id,
-                            container_id=session.container_id[:12],
-                        )
-
-                        recovered = await self._attempt_recovery(session)
-                        if recovered:
-                            stats["recovered"] += 1
-                        else:
-                            stats["failed"] += 1
-
-                except Exception as e:
-                    error_msg = f"Error syncing session {session.id}: {e}"
-                    logger.error(error_msg, exc_info=True)
-                    stats["errors"].append(error_msg)
+                await self._check_and_recover_session(session, stats)
 
             logger.info(
                 "State sync completed",
@@ -139,42 +104,14 @@ class StateSyncService:
 
         try:
             running_sessions = await self._session_repo.find_by_status("running")
-
-            logger.info(
-                "Checking running sessions",
-                count=len(running_sessions),
-            )
+            logger.info("Checking running sessions", count=len(running_sessions))
 
             for session in running_sessions:
                 if not session.container_id:
                     continue
 
                 stats["checked"] += 1
-
-                try:
-                    is_running = await self._container_scheduler.is_container_running(
-                        session.container_id
-                    )
-
-                    if is_running:
-                        stats["healthy"] += 1
-                    else:
-                        stats["unhealthy"] += 1
-                        logger.warning(
-                            "Session container is unhealthy",
-                            session_id=session.id,
-                            container_id=session.container_id[:12],
-                        )
-                        recovered = await self._attempt_recovery(session)
-                        if recovered:
-                            stats["recovered"] += 1
-                        else:
-                            stats["failed"] += 1
-
-                except Exception as e:
-                    error_msg = f"Error checking session {session.id}: {e}"
-                    logger.error(error_msg, exc_info=True)
-                    stats["errors"].append(error_msg)
+                await self._check_and_recover_session(session, stats)
 
             if stats["checked"] > 0:
                 logger.info(
@@ -192,16 +129,44 @@ class StateSyncService:
 
         return stats
 
+    async def _check_and_recover_session(self, session: Session, stats: Dict[str, int]) -> None:
+        """检查单个会话的健康状态并尝试恢复"""
+        try:
+            is_running = await self._container_scheduler.is_container_running(session.container_id)
+
+            if is_running:
+                stats["healthy"] += 1
+                logger.debug(
+                    "Session container is healthy",
+                    session_id=session.id,
+                    container_id=session.container_id[:12],
+                )
+            else:
+                stats["unhealthy"] += 1
+                logger.warning(
+                    "Session container is unhealthy",
+                    session_id=session.id,
+                    container_id=session.container_id[:12],
+                )
+
+                recovered = await self._attempt_recovery(session)
+                if recovered:
+                    stats["recovered"] += 1
+                else:
+                    stats["failed"] += 1
+
+        except Exception as e:
+            error_msg = f"Error checking session {session.id}: {e}"
+            logger.error(error_msg, exc_info=True)
+            stats["errors"].append(error_msg)
+
     async def _attempt_recovery(self, session: Session) -> bool:
         """
         尝试恢复 Session
 
         策略：创建新容器（不再使用预热池）
         """
-        logger.info(
-            "Attempting recovery for session",
-            session_id=session.id,
-        )
+        logger.info("Attempting recovery for session", session_id=session.id)
 
         try:
             from src.infrastructure.container_scheduler.base import ContainerConfig

@@ -25,7 +25,7 @@ from src.infrastructure.container_scheduler.base import (
 )
 from src.infrastructure.config.settings import get_settings
 from src.infrastructure.logging import get_logger
-from src.shared.utils.dependencies import format_dependencies_for_script
+from src.shared.utils.dependencies import format_dependencies_for_script, format_dependency_install_script_for_shell
 
 logger = get_logger(__name__)
 
@@ -112,42 +112,7 @@ class DockerScheduler(IContainerScheduler):
         4. 使用 gosu 切换到 sandbox 用户运行 executor
         """
         path_style_option = "-o use_path_request_style" if s3_endpoint_url else ""
-
-        dependency_install_script = ""
-        if dependencies:
-            deps_json, deps_list = format_dependencies_for_script(dependencies)
-            pip_specs = " ".join(f'"{spec}"' for spec in deps_list.split() if spec)
-            dependency_install_script = f"""
-# ========== 安装 Python 依赖 ==========
-echo "📦 Installing dependencies: {deps_json}"
-echo "📦 Pip specs: {pip_specs}"
-
-# 将依赖安装到容器本地文件系统（而非 S3 挂载点）
-# S3 挂载点是网络文件系统，不适合作为 pip 安装目标
-VENV_DIR="/opt/sandbox-venv"
-mkdir -p $VENV_DIR
-mkdir -p /tmp/pip-cache
-
-echo "Installing dependencies to local filesystem: $VENV_DIR"
-
-if pip3 install \\
-    --target $VENV_DIR \\
-    --cache-dir /tmp/pip-cache \\
-    --no-cache-dir \\
-    --no-warn-script-location \\
-    --disable-pip-version-check \\
-    --index-url https://pypi.org/simple/ \\
-    {deps_list}; then
-    echo "✅ Dependencies installed successfully to $VENV_DIR"
-    # 修改属主为 sandbox 用户（gosu 切换前以 root 安装）
-    chown -R sandbox:sandbox $VENV_DIR
-    # 清理缓存
-    rm -rf /tmp/pip-cache
-else
-    echo "❌ Failed to install dependencies"
-    exit 1
-fi
-"""
+        dependency_install_script = format_dependency_install_script_for_shell(dependencies)
 
         return f"""#!/bin/bash
 set -e
@@ -216,38 +181,7 @@ exec gosu sandbox bash -c 'export PYTHONPATH=$PYTHONPATH; export SANDBOX_VENV_PA
         2. 安装依赖到 /opt/sandbox-venv/（本地文件系统）
         3. 启动 executor
         """
-        dependency_install_script = ""
-        if dependencies:
-            deps_json, deps_list = format_dependencies_for_script(dependencies)
-            pip_specs = " ".join(f'"{spec}"' for spec in deps_list.split() if spec)
-            dependency_install_script = f"""
-# ========== 安装 Python 依赖 ==========
-echo "📦 Installing dependencies: {deps_json}"
-echo "📦 Pip specs: {pip_specs}"
-
-# 将依赖安装到容器本地文件系统
-VENV_DIR="/opt/sandbox-venv"
-mkdir -p $VENV_DIR
-mkdir -p /tmp/pip-cache
-
-echo "Installing dependencies to: $VENV_DIR"
-
-if pip3 install \\
-    --target $VENV_DIR \\
-    --cache-dir /tmp/pip-cache \\
-    --no-cache-dir \\
-    --no-warn-script-location \\
-    --disable-pip-version-check \\
-    --index-url https://pypi.org/simple/ \\
-    {deps_list}; then
-    echo "✅ Dependencies installed successfully"
-    # 清理缓存
-    rm -rf /tmp/pip-cache
-else
-    echo "❌ Failed to install dependencies"
-    exit 1
-fi
-"""
+        dependency_install_script = format_dependency_install_script_for_shell(dependencies)
 
         return f"""#!/bin/bash
 set -e

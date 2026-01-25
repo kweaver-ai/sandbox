@@ -48,7 +48,7 @@ from src.infrastructure.container_scheduler.base import (
 )
 from src.infrastructure.config.settings import get_settings
 from src.infrastructure.logging import get_logger
-from src.shared.utils.dependencies import format_dependencies_for_script
+from src.shared.utils.dependencies import format_dependencies_for_script, format_dependency_install_script_for_shell
 
 logger = get_logger(__name__)
 
@@ -358,30 +358,13 @@ exec gosu sandbox python -m executor.interfaces.http.rest
             # 依赖由 executor 容器在启动时安装
             dependencies_json = config.labels.get("dependencies", "")
             dependencies = json.loads(dependencies_json) if dependencies_json else []
-            _, deps_list = format_dependencies_for_script(dependencies)
-            install_script = f"""
-#!/bin/sh
+            install_script = format_dependency_install_script_for_shell(dependencies)
+
+            install_script = f"""#!/bin/sh
 set -e
 echo "📦 Installing dependencies..."
 
-# 将依赖安装到容器本地文件系统
-VENV_DIR="/opt/sandbox-venv"
-mkdir -p $VENV_DIR
-mkdir -p /tmp/pip-cache
-
-echo "Installing dependencies to: $VENV_DIR"
-
-pip3 install \\
-    --target $VENV_DIR \\
-    --cache-dir /tmp/pip-cache \\
-    --no-cache-dir \\
-    --no-warn-script-location \\
-    --disable-pip-version-check \\
-    --index-url https://pypi.org/simple/ \\
-    {deps_list}
-
-echo "✅ Dependencies installed"
-rm -rf /tmp/pip-cache
+{install_script}
 
 # 修复 venv 目录权限（以 root 安装，需要让 sandbox 用户可读）
 chown -R sandbox:sandbox /opt/sandbox-venv

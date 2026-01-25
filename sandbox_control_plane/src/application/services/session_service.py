@@ -9,13 +9,14 @@ import uuid
 
 from src.domain.entities.session import Session
 from src.domain.entities.execution import Execution
+from src.domain.entities.template import Template
 from src.domain.value_objects.resource_limit import ResourceLimit
 from src.domain.value_objects.execution_status import SessionStatus, ExecutionStatus
 from src.domain.value_objects.execution_request import ExecutionRequest
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.execution_repository import IExecutionRepository
 from src.domain.repositories.template_repository import ITemplateRepository
-from src.domain.services.scheduler import IScheduler, ScheduleRequest
+from src.domain.services.scheduler import IScheduler, ScheduleRequest, RuntimeNode
 from src.domain.services.storage import IStorageService
 from src.application.commands.create_session import CreateSessionCommand
 from src.infrastructure.config.settings import get_settings
@@ -71,28 +72,58 @@ class SessionService:
         )
 
         # 1. 验证模板
-        template = await self._template_repo.find_by_id(command.template_id)
-        if not template:
-            logger.error(
-                "Template not found",
-                template_id=command.template_id,
-            )
-            raise NotFoundError(f"Template not found: {command.template_id}")
-
-        logger.debug(
-            "Template validated",
-            template_id=template.id,
-            image=template.image,
-        )
+        template = await self._validate_template(command.template_id)
 
         # 2. 生成会话 ID
         session_id = self._generate_session_id()
-        logger.debug(
-            "Generated session ID",
-            session_id=session_id,
-        )
+        logger.debug("Generated session ID", session_id=session_id)
 
         # 3. 调用调度器
+        runtime_node = await self._schedule_session(command, session_id)
+
+        # 4. 创建会话实体
+        session = self._create_session_entity(
+            session_id=session_id,
+            command=command,
+            template=template,
+            runtime_node=runtime_node,
+        )
+
+        # 5. 保存到仓储
+        await self._session_repo.save(session)
+        logger.debug("Session saved to repository", session_id=session_id)
+
+        # 6. 创建容器
+        container_id = await self._create_container_for_session(
+            session=session,
+            template=template,
+            command=command,
+            runtime_node=runtime_node,
+        )
+
+        logger.info(
+            "Session created successfully",
+            session_id=session_id,
+            container_id=container_id,
+            status=session.status.value,
+        )
+
+        return SessionDTO.from_entity(session)
+
+    async def _validate_template(self, template_id: str) -> Template:
+        """验证模板存在"""
+        from src.domain.entities.template import Template
+
+        template = await self._template_repo.find_by_id(template_id)
+        if not template:
+            logger.error("Template not found", template_id=template_id)
+            raise NotFoundError(f"Template not found: {template_id}")
+
+        logger.debug("Template validated", template_id=template.id, image=template.image)
+        return template
+
+    async def _schedule_session(self, command: CreateSessionCommand, session_id: str) -> RuntimeNode:
+        """调度会话到运行时节点"""
         schedule_request = ScheduleRequest(
             template_id=command.template_id,
             resource_limit=command.resource_limit or ResourceLimit.default(),
@@ -106,19 +137,25 @@ class SessionService:
             runtime_node=runtime_node.id,
             node_type=runtime_node.type,
         )
+        return runtime_node
 
-        # 4. 创建会话实体
-        # 从模板镜像推断运行时类型
+    def _create_session_entity(
+        self,
+        session_id: str,
+        command: CreateSessionCommand,
+        template,
+        runtime_node: RuntimeNode,
+    ) -> Session:
+        """创建会话实体"""
+        from src.domain.entities.template import Template
+
         runtime_type = self._infer_runtime_type(template.image)
-
         resource_limit = command.resource_limit or ResourceLimit.default()
         settings = get_settings()
         workspace_path = f"s3://{settings.s3_bucket}/sessions/{session_id}"
-
-        # 获取依赖列表（新增）
         dependencies = command.dependencies or []
 
-        session = Session(
+        return Session(
             id=session_id,
             template_id=command.template_id,
             status=SessionStatus.CREATING,
@@ -128,91 +165,91 @@ class SessionService:
             runtime_node=runtime_node.id,
             env_vars=command.env_vars or {},
             timeout=command.timeout,
-            # 依赖安装相关字段（新增）
             requested_dependencies=dependencies,
             dependency_install_status="installing" if dependencies else "completed",
         )
 
-        # 5. 保存到仓储
-        await self._session_repo.save(session)
-        logger.debug(
-            "Session saved to repository",
-            session_id=session_id,
-        )
+    async def _create_container_for_session(
+        self,
+        session: Session,
+        template,
+        command: CreateSessionCommand,
+        runtime_node: RuntimeNode,
+    ) -> Optional[str]:
+        """为会话创建容器"""
+        from src.domain.entities.template import Template
 
-        # 6. 创建 Docker 容器（如果调度器支持）
         container_id = None
+        dependencies = command.dependencies or []
+
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
                 logger.info(
                     "Creating container for session",
-                    session_id=session_id,
+                    session_id=session.id,
                     image=template.image,
                     dependencies_count=len(dependencies),
                 )
 
                 container_id = await self._scheduler.create_container_for_session(
-                    session_id=session_id,
+                    session_id=session.id,
                     template_id=command.template_id,
                     image=template.image,
-                    resource_limit=resource_limit,
+                    resource_limit=session.resource_limit,
                     env_vars=session.env_vars,
-                    workspace_path=workspace_path,
-                    node_id=runtime_node.id,  # 传入调度选择的节点 ID
-                    dependencies=dependencies,  # 新增：传递依赖列表
+                    workspace_path=session.workspace_path,
+                    node_id=runtime_node.id,
+                    dependencies=dependencies,
                 )
 
-                # 只保存 container_id，不立即设置状态为 RUNNING
-                # 等待 executor 通过 ready 回调来设置状态
                 session.container_id = container_id
                 await self._session_repo.save(session)
 
                 logger.info(
                     "Container created successfully, waiting for executor ready",
-                    session_id=session_id,
+                    session_id=session.id,
                     container_id=container_id,
                     runtime_node=runtime_node.id,
                     dependencies_count=len(dependencies),
                 )
         except Exception as e:
-            logger.exception(
-                "Failed to create container",
-                session_id=session_id,
-                error=str(e),
+            await self._handle_container_creation_failure(
+                session=session,
+                container_id=container_id,
+                error=e,
             )
 
-            # 容器创建失败，销毁部分创建的容器（如有），标记会话为失败状态
-            if container_id and hasattr(self._scheduler, 'destroy_container'):
-                try:
-                    await self._scheduler.destroy_container(container_id)
-                    logger.debug(
-                        "Cleaned up failed container",
-                        container_id=container_id,
-                    )
-                except Exception:
-                    pass  # 忽略清理错误
+        return container_id
 
-            session.status = SessionStatus.FAILED
-            # 如果有依赖，标记依赖安装失败
-            if session.has_dependencies():
-                session.set_dependencies_failed(str(e))
-            await self._session_repo.save(session)
-
-            logger.error(
-                "Session creation failed",
-                session_id=session_id,
-                error=str(e),
-            )
-            raise ValidationError(f"Failed to create container: {e}")
-
-        logger.info(
-            "Session created successfully",
-            session_id=session_id,
-            container_id=container_id,
-            status=session.status.value,
+    async def _handle_container_creation_failure(
+        self,
+        session: Session,
+        container_id: Optional[str],
+        error: Exception,
+    ) -> None:
+        """处理容器创建失败"""
+        logger.exception(
+            "Failed to create container",
+            session_id=session.id,
+            error=str(error),
         )
 
-        return SessionDTO.from_entity(session)
+        # 清理已创建的容器
+        if container_id and hasattr(self._scheduler, 'destroy_container'):
+            try:
+                await self._scheduler.destroy_container(container_id)
+                logger.debug("Cleaned up failed container", container_id=container_id)
+            except Exception:
+                pass  # 忽略清理错误
+
+        # 标记会话为失败状态
+        session.status = SessionStatus.FAILED
+        if session.has_dependencies():
+            session.set_dependencies_failed(str(error))
+        await self._session_repo.save(session)
+
+        logger.error("Session creation failed", session_id=session.id, error=str(error))
+        raise ValidationError(f"Failed to create container: {error}")
 
     async def get_session(self, query: GetSessionQuery) -> SessionDTO:
         """获取会话用例"""
@@ -284,25 +321,15 @@ class SessionService:
         4. 清理 S3 文件（如果配置了存储服务）
         5. 更新会话状态
         """
-        logger.info(
-            "Terminating session",
-            session_id=session_id,
-        )
+        logger.info("Terminating session", session_id=session_id)
 
         session = await self._session_repo.find_by_id(session_id)
         if not session:
-            logger.warning(
-                "Session not found for termination",
-                session_id=session_id,
-            )
+            logger.warning("Session not found for termination", session_id=session_id)
             raise NotFoundError(f"Session not found: {session_id}")
 
         if session.is_terminated():
-            logger.info(
-                "Session already terminated",
-                session_id=session_id,
-                status=session.status.value,
-            )
+            logger.info("Session already terminated", session_id=session_id, status=session.status.value)
             return SessionDTO.from_entity(session)
 
         logger.debug(
@@ -312,70 +339,62 @@ class SessionService:
             status=session.status.value,
         )
 
-        # 销毁 Docker 容器（如果调度器支持且容器存在）
-        if session.container_id and hasattr(self._scheduler, 'destroy_container'):
-            try:
-                logger.info(
-                    "Destroying container",
-                    session_id=session_id,
-                    container_id=session.container_id,
-                )
-                await self._scheduler.destroy_container(
-                    container_id=session.container_id
-                )
-                logger.info(
-                    "Container destroyed successfully",
-                    session_id=session_id,
-                    container_id=session.container_id,
-                )
-            except Exception as e:
-                # 记录错误但不中断流程
-                logger.warning(
-                    "Failed to destroy container",
-                    session_id=session_id,
-                    container_id=session.container_id,
-                    error=str(e),
-                )
+        # 销毁容器
+        await self._destroy_container(session)
 
-        # 清理 S3 文件（如果配置了存储服务）
-        if self._storage_service:
-            try:
-                # workspace_path 格式: s3://bucket/sessions/{session_id}/
-                # 提取前缀用于批量删除
-                if session.workspace_path.startswith("s3://"):
-                    logger.info(
-                        "Cleaning up S3 workspace files",
-                        session_id=session_id,
-                        workspace_path=session.workspace_path,
-                    )
-                    # 使用完整的 workspace_path 作为前缀
-                    deleted_count = await self._storage_service.delete_prefix(session.workspace_path)
-                    logger.info(
-                        "S3 files deleted",
-                        session_id=session_id,
-                        deleted_count=deleted_count,
-                        workspace_path=session.workspace_path,
-                    )
-            except Exception as e:
-                # 记录错误但不中断流程
-                logger.warning(
-                    "Failed to cleanup S3 files",
-                    session_id=session_id,
-                    workspace_path=session.workspace_path,
-                    error=str(e),
-                )
+        # 清理 S3 文件
+        await self._cleanup_storage(session)
 
         # 更新会话状态
         session.mark_as_terminated()
         await self._session_repo.save(session)
 
-        logger.info(
-            "Session terminated successfully",
-            session_id=session_id,
-            final_status=session.status.value,
-        )
+        logger.info("Session terminated successfully", session_id=session_id, final_status=session.status.value)
 
         return SessionDTO.from_entity(session)
+
+    async def _destroy_container(self, session: Session) -> None:
+        """销毁会话的容器"""
+        if not session.container_id or not hasattr(self._scheduler, 'destroy_container'):
+            return
+
+        try:
+            logger.info("Destroying container", session_id=session.id, container_id=session.container_id)
+            await self._scheduler.destroy_container(container_id=session.container_id)
+            logger.info("Container destroyed successfully", session_id=session.id, container_id=session.container_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to destroy container",
+                session_id=session.id,
+                container_id=session.container_id,
+                error=str(e),
+            )
+
+    async def _cleanup_storage(self, session: Session) -> None:
+        """清理会话的存储文件"""
+        if not self._storage_service or not session.workspace_path.startswith("s3://"):
+            return
+
+        try:
+            logger.info(
+                "Cleaning up S3 workspace files",
+                session_id=session.id,
+                workspace_path=session.workspace_path,
+            )
+            deleted_count = await self._storage_service.delete_prefix(session.workspace_path)
+            logger.info(
+                "S3 files deleted",
+                session_id=session.id,
+                deleted_count=deleted_count,
+                workspace_path=session.workspace_path,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to cleanup S3 files",
+                session_id=session.id,
+                workspace_path=session.workspace_path,
+                error=str(e),
+            )
 
     async def execute_code(self, command: ExecuteCodeCommand) -> ExecutionDTO:
         """
@@ -534,25 +553,31 @@ class SessionService:
         cleaned_count = 0
 
         for session in all_to_cleanup:
-            if session.is_active():
-                if session.container_id and hasattr(self._scheduler, 'destroy_container'):
-                    try:
-                        await self._scheduler.destroy_container(
-                            container_id=session.container_id
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to destroy container during cleanup",
-                            session_id=session.id,
-                            container_id=session.container_id,
-                            error=str(e),
-                        )
-
-                session.mark_as_terminated()
-                await self._session_repo.save(session)
+            if await self._cleanup_session(session):
                 cleaned_count += 1
 
         return cleaned_count
+
+    async def _cleanup_session(self, session: Session) -> bool:
+        """清理单个会话"""
+        if not session.is_active():
+            return False
+
+        # 销毁容器
+        if session.container_id and hasattr(self._scheduler, 'destroy_container'):
+            try:
+                await self._scheduler.destroy_container(container_id=session.container_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to destroy container during cleanup",
+                    session_id=session.id,
+                    container_id=session.container_id,
+                    error=str(e),
+                )
+
+        session.mark_as_terminated()
+        await self._session_repo.save(session)
+        return True
 
     def _generate_session_id(self) -> str:
         """生成会话 ID"""

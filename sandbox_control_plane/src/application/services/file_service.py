@@ -79,21 +79,24 @@ class FileService:
             raise NotFoundError(f"File not found: {path}")
 
         file_info = await self._storage_service.get_file_info(s3_path)
+        file_size = file_info["size"]
 
-        # 小文件直接返回内容，大文件返回预签名 URL
-        if file_info["size"] < 10 * 1024 * 1024:  # 10MB
+        # 小文件（<10MB）直接返回内容，大文件返回预签名 URL
+        SMALL_FILE_THRESHOLD = 10 * 1024 * 1024  # 10MB
+
+        if file_size < SMALL_FILE_THRESHOLD:
             content = await self._storage_service.download_file(s3_path)
             return {
                 "content": content,
                 "content_type": file_info.get("content_type", "application/octet-stream"),
-                "size": file_info["size"],
+                "size": file_size,
             }
-        else:
-            presigned_url = await self._storage_service.generate_presigned_url(s3_path)
-            return {
-                "presigned_url": presigned_url,
-                "size": file_info["size"],
-            }
+
+        presigned_url = await self._storage_service.generate_presigned_url(s3_path)
+        return {
+            "presigned_url": presigned_url,
+            "size": file_size,
+        }
 
     async def list_files(
         self,
@@ -117,14 +120,13 @@ class FileService:
         prefix = session.workspace_path.rstrip("/")
         files = await self._storage_service.list_files(prefix, limit)
 
-        result = []
         prefix_len = len(prefix) + 1
+        result = []
+
         for file in files:
             key = file["key"]
-            if key.startswith(prefix):
-                relative_name = key[prefix_len:].lstrip("/")
-            else:
-                relative_name = key
+            # 提取相对于 workspace 的文件名
+            relative_name = key[prefix_len:].lstrip("/") if key.startswith(prefix) else key
 
             result.append({
                 "name": relative_name,

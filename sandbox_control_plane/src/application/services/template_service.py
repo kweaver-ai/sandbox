@@ -95,20 +95,24 @@ class TemplateService:
         if not template:
             raise NotFoundError(f"Template not found: {command.template_id}")
 
+        # 验证名称唯一性
         if command.name and command.name != template.name:
             existing = await self._template_repo.find_by_name(command.name)
             if existing and existing.id != template.id:
                 raise ValidationError(f"Template name already exists: {command.name}")
 
+        # 更新镜像
         if command.image_url is not None:
             template.update_image(command.image_url)
 
-        from src.domain.value_objects.resource_limit import ResourceLimit
-
+        # 更新资源限制
         if any([command.default_cpu_cores, command.default_memory_mb, command.default_disk_mb]):
+            from src.domain.value_objects.resource_limit import ResourceLimit
+
             cpu = str(command.default_cpu_cores) if command.default_cpu_cores else template.default_resources.cpu
             memory = f"{command.default_memory_mb}Mi" if command.default_memory_mb else template.default_resources.memory
             disk = f"{command.default_disk_mb}Mi" if command.default_disk_mb else template.default_resources.disk
+
             template.default_resources = ResourceLimit(
                 cpu=cpu,
                 memory=memory,

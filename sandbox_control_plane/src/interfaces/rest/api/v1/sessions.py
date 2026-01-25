@@ -91,27 +91,20 @@ async def list_sessions(
     - **limit**: 返回数量限制（1-200，默认 50）
     - **offset**: 偏移量（用于分页，默认 0）
     """
-    try:
-        result = await service.list_sessions(
-            status=status,
-            template_id=template_id,
-            limit=limit,
-            offset=offset
-        )
+    result = await service.list_sessions(
+        status=status,
+        template_id=template_id,
+        limit=limit,
+        offset=offset
+    )
 
-        return SessionListResponse(
-            items=[_map_dto_to_response(item) for item in result["items"]],
-            total=result["total"],
-            limit=result["limit"],
-            offset=result["offset"],
-            has_more=result["has_more"]
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+    return SessionListResponse(
+        items=[_map_dto_to_response(item) for item in result["items"]],
+        total=result["total"],
+        limit=result["limit"],
+        offset=result["offset"],
+        has_more=result["has_more"]
+    )
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -122,16 +115,9 @@ async def get_session(
     """获取会话详情"""
     from src.application.queries.get_session import GetSessionQuery
 
-    try:
-        query = GetSessionQuery(session_id=session_id)
-        session_dto = await service.get_session(query)
-        return _map_dto_to_response(session_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    query = GetSessionQuery(session_id=session_id)
+    session_dto = await service.get_session(query)
+    return _map_dto_to_response(session_dto)
 
 
 @router.delete("/{session_id}", response_model=SessionResponse)
@@ -140,15 +126,8 @@ async def terminate_session(
     service: SessionService = Depends(get_session_service_db)
 ):
     """终止会话"""
-    try:
-        session_dto = await service.terminate_session(session_id)
-        return _map_dto_to_response(session_dto)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    session_dto = await service.terminate_session(session_id)
+    return _map_dto_to_response(session_dto)
 
 
 def _map_dto_to_response(dto: SessionDTO) -> SessionResponse:
