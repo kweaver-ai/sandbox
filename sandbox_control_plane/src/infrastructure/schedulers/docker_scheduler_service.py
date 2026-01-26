@@ -3,7 +3,6 @@ Docker 调度服务
 
 实现调度策略，选择最优节点并创建容器。
 """
-import logging
 from typing import List, Optional
 
 from src.domain.services.scheduler import (
@@ -19,8 +18,9 @@ from src.infrastructure.container_scheduler.base import (
     ContainerConfig,
 )
 from src.infrastructure.executors import ExecutorClient
+from src.infrastructure.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DockerSchedulerService(IScheduler):
@@ -133,7 +133,7 @@ class DockerSchedulerService(IScheduler):
     async def mark_node_unhealthy(self, node_id: str) -> None:
         """标记节点为不健康"""
         await self._runtime_node_repo.update_status(node_id, "offline")
-        logger.warning(f"Marked node {node_id} as unhealthy")
+        logger.warning("Marked node as unhealthy", node_id=node_id)
 
     def _select_least_loaded(self, nodes: List[RuntimeNode]) -> RuntimeNode:
         """
@@ -314,9 +314,13 @@ class DockerSchedulerService(IScheduler):
         try:
             await self._container_scheduler.stop_container(container_id, timeout=timeout)
             await self._container_scheduler.remove_container(container_id)
-            logger.info(f"Destroyed container {container_id}")
+            logger.info("Destroyed container", container_id=container_id)
         except Exception as e:
-            logger.error(f"Failed to destroy container {container_id}: {e}")
+            logger.error(
+                "Failed to destroy container",
+                container_id=container_id,
+                error=str(e),
+            )
             raise
 
     async def get_container_info(self, container_id: str):
@@ -355,7 +359,12 @@ class DockerSchedulerService(IScheduler):
         container_name = container_info.name
         executor_url = f"http://{container_name}:{self._executor_port}"
 
-        logger.info(f"Submitting execution to executor: {executor_url}, session_id={session_id}, container_id={container_id}")
+        logger.info(
+            "Submitting execution to executor",
+            executor_url=executor_url,
+            session_id=session_id,
+            container_id=container_id,
+        )
 
         # 使用执行器客户端提交请求
         try:
@@ -370,10 +379,18 @@ class DockerSchedulerService(IScheduler):
                 env_vars=execution_request.env_vars,
             )
 
-            logger.info(f"Execution submitted successfully: execution_id={execution_id}, session_id={session_id}")
+            logger.info(
+                "Execution submitted successfully",
+                execution_id=execution_id,
+                session_id=session_id,
+            )
 
             return execution_id
 
         except Exception as e:
-            logger.error(f"Failed to submit execution to executor: {executor_url}, error={e}")
+            logger.error(
+                "Failed to submit execution to executor",
+                executor_url=executor_url,
+                error=str(e),
+            )
             raise
