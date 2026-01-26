@@ -1,6 +1,25 @@
 {{- if .Values.mariadb.enabled }}
 ---
 apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mariadb-pv
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ include "sandbox.fullname" . }}
+    component: mariadb
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /data/mariadb
+
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mariadb
@@ -11,12 +30,11 @@ metadata:
 spec:
   accessModes:
     - {{ .Values.mariadb.persistence.accessMode }}
+  storageClassName: manual
+  volumeName: mariadb-pv
   resources:
     requests:
       storage: {{ .Values.mariadb.persistence.size }}
-  {{- if .Values.mariadb.persistence.storageClass }}
-  storageClassName: {{ .Values.mariadb.persistence.storageClass }}
-  {{- end }}
 
 ---
 apiVersion: apps/v1

@@ -1,6 +1,25 @@
 {{- if .Values.minio.enabled }}
 ---
 apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: minio-pv
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ include "sandbox.fullname" . }}
+    component: minio
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /data/minio
+
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: minio
@@ -11,12 +30,11 @@ metadata:
 spec:
   accessModes:
     - {{ .Values.minio.persistence.accessMode }}
+  storageClassName: manual
+  volumeName: minio-pv
   resources:
     requests:
       storage: {{ .Values.minio.persistence.size }}
-  {{- if .Values.minio.persistence.storageClass }}
-  storageClassName: {{ .Values.minio.persistence.storageClass }}
-  {{- end }}
 
 ---
 apiVersion: apps/v1
