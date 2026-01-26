@@ -24,6 +24,7 @@ from src.infrastructure.dependencies import (
     get_session_service_db,
     get_session_service as get_mock_session_service,
 )
+from src.infrastructure.persistence.database import db_manager
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -110,6 +111,10 @@ async def execute_code_sync(
         ExecutionStatus.CRASHED.value
     }
 
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting sync polling loop: execution_id={execution_id}, USE_SQL_REPOSITORIES={USE_SQL_REPOSITORIES}")
+
     while True:
         # Check timeout
         elapsed = loop.time() - start_time
@@ -119,9 +124,14 @@ async def execute_code_sync(
                 detail=f"Synchronous execution timeout after {sync_timeout}s"
             )
 
-        # Get current status
-        query = GetExecutionQuery(execution_id=execution_id)
-        execution_dto = await service.get_execution(query)
+        # Get current status - use a fresh database session for each poll
+        # to avoid REPEATABLE-READ transaction isolation issues
+        if USE_SQL_REPOSITORIES:
+            execution_dto = await _get_execution_with_fresh_session(execution_id)
+        else:
+            # Mock mode - use the service directly
+            query = GetExecutionQuery(execution_id=execution_id)
+            execution_dto = await service.get_execution(query)
 
         # Check if terminal state
         if execution_dto.status in terminal_states:
@@ -129,6 +139,25 @@ async def execute_code_sync(
 
         # Wait before next poll
         await asyncio.sleep(poll_interval)
+
+
+async def _get_execution_with_fresh_session(execution_id: str) -> ExecutionDTO:
+    """
+    Get execution using a fresh database session.
+
+    This is required for the sync execution polling loop to work around
+    MySQL's REPEATABLE-READ transaction isolation. Each poll needs to
+    see the latest committed data from the executor callback.
+    """
+    from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
+
+    async with db_manager.get_session() as session:
+        repo = SqlExecutionRepository(session)
+        execution = await repo.find_by_id(execution_id)
+        if not execution:
+            from src.shared.errors.domain import NotFoundError
+            raise NotFoundError(f"Execution not found: {execution_id}")
+        return ExecutionDTO.from_entity(execution)
 
 
 @router.get("/{execution_id}/status", response_model=ExecutionResponse)

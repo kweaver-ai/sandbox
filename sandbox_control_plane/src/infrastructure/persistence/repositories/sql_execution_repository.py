@@ -67,7 +67,11 @@ class SqlExecutionRepository(IExecutionRepository):
 
     async def find_by_id(self, execution_id: str) -> Optional[Execution]:
         """根据 ID 查找执行记录"""
-        model = await self._session.get(ExecutionModel, execution_id)
+        # Use a fresh query to avoid stale data from session cache
+        # This is important for the sync execution polling loop
+        stmt = select(ExecutionModel).where(ExecutionModel.id == execution_id)
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
     async def find_by_session_id(

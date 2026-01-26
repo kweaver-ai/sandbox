@@ -189,6 +189,9 @@ class SessionService:
                     session_id=session.id,
                     image=template.image,
                     dependencies_count=len(dependencies),
+                    dependencies=dependencies,
+                    runtime_node_id=runtime_node.id,
+                    runtime_node_type=runtime_node.type,
                 )
 
                 container_id = await self._scheduler.create_container_for_session(
@@ -206,13 +209,25 @@ class SessionService:
                 await self._session_repo.save(session)
 
                 logger.info(
-                    "Container created successfully, waiting for executor ready",
+                    "Container created successfully, session saved",
                     session_id=session.id,
                     container_id=container_id,
                     runtime_node=runtime_node.id,
                     dependencies_count=len(dependencies),
+                    session_status=session.status.value,
+                )
+            else:
+                logger.warning(
+                    "Scheduler does not support create_container_for_session",
+                    scheduler_type=type(self._scheduler).__name__,
                 )
         except Exception as e:
+            logger.exception(
+                "Exception during container creation",
+                session_id=session.id,
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             await self._handle_container_creation_failure(
                 session=session,
                 container_id=container_id,
@@ -229,18 +244,25 @@ class SessionService:
     ) -> None:
         """处理容器创建失败"""
         logger.exception(
-            "Failed to create container",
+            "Container creation failed, starting cleanup",
             session_id=session.id,
+            container_id=container_id,
+            error_type=type(error).__name__,
             error=str(error),
         )
 
         # 清理已创建的容器
         if container_id and hasattr(self._scheduler, 'destroy_container'):
             try:
+                logger.info("Attempting to clean up failed container", container_id=container_id)
                 await self._scheduler.destroy_container(container_id)
                 logger.debug("Cleaned up failed container", container_id=container_id)
-            except Exception:
-                pass  # 忽略清理错误
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed to cleanup container",
+                    container_id=container_id,
+                    cleanup_error=str(cleanup_error),
+                )
 
         # 标记会话为失败状态
         session.status = SessionStatus.FAILED
@@ -248,7 +270,12 @@ class SessionService:
             session.set_dependencies_failed(str(error))
         await self._session_repo.save(session)
 
-        logger.error("Session creation failed", session_id=session.id, error=str(error))
+        logger.error(
+            "Session creation failed",
+            session_id=session.id,
+            final_status=session.status.value,
+            container_id=container_id,
+        )
         raise ValidationError(f"Failed to create container: {error}")
 
     async def get_session(self, query: GetSessionQuery) -> SessionDTO:

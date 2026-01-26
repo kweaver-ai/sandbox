@@ -209,6 +209,9 @@ async def report_execution_result(
         # 6. 保存到仓储
         await execution_repo.save(execution)
 
+        # 6.5. 提交事务，确保其他请求可以立即看到更新后的执行状态
+        await execution_repo.commit()
+
         logger.info(
             f"Execution result recorded: {execution_id}, status={domain_status}, "
             f"exit_code={report.exit_code}"

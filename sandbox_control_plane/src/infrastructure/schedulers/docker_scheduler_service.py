@@ -60,9 +60,24 @@ class DockerSchedulerService(IScheduler):
         1. 检查是否有已缓存该模板的节点（模板亲和性）
         2. 选择负载最低的健康节点
         """
+        logger.info(
+            "Starting node selection",
+            session_id=request.session_id,
+            template_id=request.template_id,
+            cpu_limit=request.resource_limit.cpu,
+            memory_limit=request.resource_limit.memory,
+        )
+
         # 1. 获取所有健康节点
         healthy_nodes = await self.get_healthy_nodes()
+        logger.debug(
+            "Found healthy nodes",
+            node_count=len(healthy_nodes),
+            nodes=[n.id for n in healthy_nodes],
+        )
+
         if not healthy_nodes:
+            logger.error("No healthy runtime nodes available")
             raise RuntimeError("No healthy runtime nodes available")
 
         # 2. 按模板亲和性排序
@@ -71,15 +86,36 @@ class DockerSchedulerService(IScheduler):
             if node.has_template(request.template_id)
         ]
 
+        logger.debug(
+            "Node affinity check",
+            template_id=request.template_id,
+            affinity_nodes_count=len(affinity_nodes),
+            affinity_node_ids=[n.id for n in affinity_nodes],
+        )
+
         if affinity_nodes:
             # 选择亲和节点中负载最低的
             selected = self._select_least_loaded(affinity_nodes)
-            logger.info(f"Selected affinity node: {selected.id} (template cached)")
+            logger.info(
+                "Selected affinity node",
+                node_id=selected.id,
+                session_id=request.session_id,
+                reason="template_cached",
+                node_load=selected.get_load_ratio(),
+                node_sessions=selected.session_count,
+            )
             return selected
 
         # 3. 使用负载均衡选择节点
         selected = self._select_least_loaded(healthy_nodes)
-        logger.info(f"Selected node by load balancing: {selected.id}")
+        logger.info(
+            "Selected node by load balancing",
+            node_id=selected.id,
+            session_id=request.session_id,
+            reason="load_balancing",
+            node_load=selected.get_load_ratio(),
+            node_sessions=selected.session_count,
+        )
         return selected
 
     async def get_node(self, node_id: str) -> Optional[RuntimeNode]:
@@ -143,18 +179,38 @@ class DockerSchedulerService(IScheduler):
         """
         import json
 
+        logger.info(
+            "Creating container for session",
+            session_id=session_id,
+            template_id=template_id,
+            image=image,
+            node_id=node_id,
+            dependencies_count=len(dependencies) if dependencies else 0,
+            dependencies=dependencies,
+        )
+
         # 获取节点信息
         node = await self.get_node(node_id)
         if not node:
+            logger.error("Node not found", node_id=node_id, session_id=session_id)
             raise RuntimeError(f"Node not found: {node_id}")
+
+        logger.debug(
+            "Node retrieved",
+            node_id=node.id,
+            node_type=node.type,
+            node_status=node.status,
+        )
 
         # 创建容器配置
         # dependencies_json 传递给 docker_scheduler.py 用于动态生成 entrypoint 脚本
         dependencies_json = json.dumps(dependencies) if dependencies else ""
 
+        container_name = f"sandbox-{session_id}"
+
         config = ContainerConfig(
             image=image,
-            name=f"sandbox-{session_id}",
+            name=container_name,
             env_vars={
                 **env_vars,
                 "SESSION_ID": session_id,
@@ -174,21 +230,75 @@ class DockerSchedulerService(IScheduler):
             },
         )
 
+        logger.debug(
+            "Container configuration prepared",
+            session_id=session_id,
+            container_name=container_name,
+            cpu_limit=config.cpu_limit,
+            memory_limit=config.memory_limit,
+            disk_limit=config.disk_limit,
+            workspace_path=workspace_path,
+            env_vars_count=len(config.env_vars),
+        )
+
         # 同步创建容器（等待完成）
         try:
+            logger.info(
+                "Creating container",
+                session_id=session_id,
+                container_name=container_name,
+                image=image,
+            )
+
             container_id = await self._container_scheduler.create_container(config)
+
+            logger.info(
+                "Container created, starting now",
+                session_id=session_id,
+                container_id=container_id,
+                container_name=container_name,
+            )
+
             await self._container_scheduler.start_container(container_id)
 
             logger.info(
-                f"Created and started container {container_id} "
-                f"for session {session_id} on node {node.id}"
+                "Container started successfully",
+                session_id=session_id,
+                container_id=container_id,
+                container_name=container_name,
+                node_id=node.id,
             )
 
+            # 获取容器状态确认
+            try:
+                container_info = await self._container_scheduler.get_container_status(container_name)
+                logger.info(
+                    "Container status after start",
+                    session_id=session_id,
+                    container_id=container_id,
+                    container_name=container_name,
+                    status=container_info.status,
+                    ip_address=container_info.ip_address,
+                )
+            except Exception as status_error:
+                logger.warning(
+                    "Failed to get container status after start",
+                    session_id=session_id,
+                    container_id=container_id,
+                    error=str(status_error),
+                )
+
             # 使用容器名称作为 ID（用于执行器通信）
-            return f"sandbox-{session_id}"
+            return container_name
 
         except Exception as e:
-            logger.error(f"Failed to create container for session {session_id}: {e}")
+            logger.exception(
+                "Failed to create/start container",
+                session_id=session_id,
+                container_name=container_name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
             raise
 
     async def destroy_container(

@@ -53,8 +53,28 @@ class DockerScheduler(IContainerScheduler):
     async def _ensure_docker(self) -> Docker:
         """确保 Docker 客户端已初始化"""
         if not self._initialized:
+            logger.debug(
+                "Initializing Docker client",
+                docker_url=self._docker_url,
+            )
             self._docker = Docker(url=self._docker_url)
             self._initialized = True
+
+            # 验证 Docker 连接
+            try:
+                version = await self._docker.version()
+                logger.debug(
+                    "Docker client initialized and verified",
+                    docker_url=self._docker_url,
+                    docker_version=version.get("Version"),
+                    api_version=version.get("ApiVersion"),
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to verify Docker connection",
+                    docker_url=self._docker_url,
+                    error=str(e),
+                )
         return self._docker
 
     async def close(self) -> None:
@@ -215,12 +235,29 @@ exec python -m executor.interfaces.http.rest
         - 创建 entrypoint 脚本，在启动 executor 之前先挂载 S3
         - 容器启动后自动 cd 到 workspace 子目录
         """
+        logger.info(
+            "Starting container creation",
+            container_name=config.name,
+            image=config.image,
+            network_name=config.network_name,
+        )
+
         docker = await self._ensure_docker()
+
+        logger.debug("Docker client obtained")
 
         # 解析资源限制
         cpu_quota = int(float(config.cpu_limit) * 100000)
         memory_bytes = self._parse_memory_to_bytes(config.memory_limit)
         disk_bytes = self._parse_memory_to_bytes(config.disk_limit)
+
+        logger.debug(
+            "Resource limits parsed",
+            cpu_limit=config.cpu_limit,
+            cpu_quota=cpu_quota,
+            memory_limit=config.memory_limit,
+            memory_bytes=memory_bytes,
+        )
 
         # 检查是否需要 S3 workspace 挂载
         s3_workspace = self._parse_s3_workspace(config.workspace_path)
@@ -229,6 +266,14 @@ exec python -m executor.interfaces.http.rest
         # 检查是否需要安装依赖
         dependencies_json = config.labels.get("dependencies", "")
         has_dependencies = bool(dependencies_json)
+
+        logger.debug(
+            "Container configuration checks",
+            use_s3_mount=use_s3_mount,
+            s3_workspace=s3_workspace,
+            has_dependencies=has_dependencies,
+            dependencies_json=dependencies_json,
+        )
 
         # 基础环境变量
         env_vars = dict(config.env_vars)
@@ -252,6 +297,14 @@ exec python -m executor.interfaces.http.rest
             },
         }
 
+        logger.debug(
+            "Base container config prepared",
+            image=config.image,
+            hostname=config.name,
+            env_count=len(container_config["Env"]),
+            network_mode=config.network_name,
+        )
+
         # 注意：StorageOpt.size 仅在 Linux 的 overlay2 + xfs (pquota) 环境下支持
         # Mac Docker Desktop 不支持，因此这里不设置 StorageOpt
         # 生产环境可通过 K8s 的 ephemeral-storage 或 Linux 的磁盘配额来限制磁盘使用
@@ -261,6 +314,8 @@ exec python -m executor.interfaces.http.rest
         # 1. 在宿主机启用: sudo sysctl -w kernel.unprivileged_userns_clone=1
         # 2. 或者设置环境变量 DISABLE_BWRAP=true 来禁用 bubblewrap
         if not use_s3_mount:
+            logger.debug("Configuring non-S3 container mode")
+
             # 从 config.labels 中提取依赖列表
             dependencies_json = config.labels.get("dependencies", "")
             dependencies = json.loads(dependencies_json) if dependencies_json else None
@@ -294,8 +349,17 @@ exec python -m executor.interfaces.http.rest
             container_config["HostConfig"]["SecurityOpt"].append("seccomp=default")
             container_config["HostConfig"]["User"] = "1000:1000"
 
+            logger.debug(
+                "Non-S3 security config applied",
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges", "seccomp=default"],
+                user="1000:1000",
+            )
+
         # 如果使用 S3 workspace 挂载，添加必要的配置
         if use_s3_mount:
+            logger.debug("Configuring S3 mount mode")
+
             settings = get_settings()
 
             # 新增：从 config.labels 中提取依赖列表
@@ -317,6 +381,13 @@ exec python -m executor.interfaces.http.rest
                     "CgroupPermissions": "rwm"
                 }
             ]
+
+            logger.debug(
+                "S3 mount capabilities configured",
+                user="root",
+                cap_add=["SYS_ADMIN"],
+                devices_added=1,
+            )
 
             # 添加 tmpfs 用于 s3fs 缓存和依赖安装
             if dependencies:
@@ -346,6 +417,13 @@ exec python -m executor.interfaces.http.rest
             for k, v in s3_env_vars.items():
                 container_config["Env"].append(f"{k}={v}")
 
+            logger.debug(
+                "S3 environment variables added",
+                s3_bucket=s3_workspace["bucket"],
+                s3_prefix=s3_workspace["prefix"],
+                s3_endpoint_url=settings.s3_endpoint_url,
+            )
+
             # 新增：添加 PYTHONPATH 环境变量以支持依赖导入
             # /app 必须在最前面，以便 executor 模块能被找到
             if dependencies:
@@ -370,26 +448,113 @@ exec python -m executor.interfaces.http.rest
                 f"dependencies={len(dependencies) if dependencies else 0}"
             )
 
+        logger.debug(
+            "Container config finalized",
+            container_name=config.name,
+            has_entrypoint="Entrypoint" in container_config,
+            has_cmd="Cmd" in container_config,
+            env_count=len(container_config["Env"]),
+        )
+
         try:
-            container = await docker.containers.create(container_config, name=config.name)
             logger.info(
-                f"Created container {container.id} for session {config.name} "
-                f"on network {config.network_name} (S3 mount: {use_s3_mount})"
+                "Calling Docker API to create container",
+                container_name=config.name,
+                image=config.image,
+            )
+
+            container = await docker.containers.create(container_config, name=config.name)
+
+            logger.info(
+                f"Container created successfully",
+                container_id=container.id,
+                container_name=config.name,
+                network_name=config.network_name,
+                use_s3_mount=use_s3_mount,
             )
             return container.id
         except DockerError as e:
-            logger.error(f"Failed to create container: {e}")
+            logger.exception(
+                "Docker API error during container creation",
+                container_name=config.name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise
+        except Exception as e:
+            logger.exception(
+                "Unexpected error during container creation",
+                container_name=config.name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
             raise
 
     async def start_container(self, container_id: str) -> None:
         """启动容器"""
+        logger.info("Starting container", container_id=container_id)
+
         docker = await self._ensure_docker()
         try:
+            logger.debug("Getting container reference", container_id=container_id)
             container = docker.containers.container(container_id)
+
+            logger.debug("Calling container.start()", container_id=container_id)
             await container.start()
-            logger.info(f"Started container {container_id}")
+
+            logger.info(
+                "Container started successfully",
+                container_id=container_id,
+            )
+
+            # 等待一小段时间后检查容器状态
+            await asyncio.sleep(0.5)
+
+            try:
+                info = await container.show()
+                container_status = info["State"]["Status"]
+                logger.info(
+                    "Container status after start",
+                    container_id=container_id,
+                    status=container_status,
+                    running=info["State"].get("Running", False),
+                    exit_code=info["State"].get("ExitCode"),
+                    error=info["State"].get("Error"),
+                )
+
+                # 如果容器已经退出，记录日志
+                if container_status == "exited":
+                    exit_code = info["State"].get("ExitCode", -1)
+                    logger.error(
+                        "Container exited immediately after start",
+                        container_id=container_id,
+                        exit_code=exit_code,
+                        error=info["State"].get("Error", "unknown"),
+                        oom_killed=info["State"].get("OOMKilled", False),
+                    )
+
+            except Exception as status_error:
+                logger.warning(
+                    "Failed to get container status after start",
+                    container_id=container_id,
+                    error=str(status_error),
+                )
+
         except DockerError as e:
-            logger.error(f"Failed to start container {container_id}: {e}")
+            logger.exception(
+                "Docker error during container start",
+                container_id=container_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise
+        except Exception as e:
+            logger.exception(
+                "Unexpected error during container start",
+                container_id=container_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
             raise
 
     async def stop_container(
