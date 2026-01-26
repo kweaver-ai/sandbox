@@ -3,14 +3,16 @@
 
 定义执行相关的 HTTP 端点。
 """
+import asyncio
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import Optional
 
 from src.application.services.session_service import SessionService
 from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.queries.get_execution import GetExecutionQuery
 from src.application.dtos.execution_dto import ExecutionDTO
+from src.domain.value_objects.execution_status import ExecutionStatus
 from src.interfaces.rest.schemas.request import ExecuteCodeRequest
 from src.interfaces.rest.schemas.response import (
     ExecutionResponse,
@@ -62,6 +64,71 @@ async def submit_execution(
         status=execution_dto.status,
         created_at=execution_dto.created_at
     )
+
+
+@router.post("/sessions/{session_id}/execute-sync", response_model=ExecutionResponse)
+async def execute_code_sync(
+    session_id: str,
+    request: ExecuteCodeRequest,
+    poll_interval: float = Query(default=0.5, ge=0.1, le=10.0, description="Polling interval in seconds"),
+    sync_timeout: int = Query(default=300, ge=10, le=3600, description="Maximum wait time in seconds"),
+    service: SessionService = Depends(_get_session_service)
+):
+    """
+    Synchronous code execution endpoint
+
+    Internally calls async execution and polls for result until:
+    - Execution reaches terminal state (COMPLETED, FAILED, TIMEOUT, CRASHED)
+    - sync_timeout is reached
+
+    - **poll_interval**: Polling interval in seconds (default: 0.5, range: 0.1-10.0)
+    - **sync_timeout**: Maximum wait time in seconds (default: 300, range: 10-3600)
+    - **code**: Code to execute
+    - **language**: Programming language (python, javascript, shell)
+    - **timeout**: Execution timeout in seconds
+    - **event**: Event data
+    """
+    # 1. Submit execution
+    command = ExecuteCodeCommand(
+        session_id=session_id,
+        code=request.code,
+        language=request.language,
+        timeout=request.timeout,
+        event_data=request.event
+    )
+    execution_dto = await service.execute_code(command)
+    execution_id = execution_dto.id
+
+    # 2. Poll for result with timeout
+    loop = asyncio.get_event_loop()
+    start_time = loop.time()
+    # Terminal states for early exit
+    terminal_states = {
+        ExecutionStatus.COMPLETED.value,
+        ExecutionStatus.FAILED.value,
+        ExecutionStatus.TIMEOUT.value,
+        ExecutionStatus.CRASHED.value
+    }
+
+    while True:
+        # Check timeout
+        elapsed = loop.time() - start_time
+        if elapsed >= sync_timeout:
+            raise HTTPException(
+                status_code=status.HTTP_408_REQUEST_TIMEOUT,
+                detail=f"Synchronous execution timeout after {sync_timeout}s"
+            )
+
+        # Get current status
+        query = GetExecutionQuery(execution_id=execution_id)
+        execution_dto = await service.get_execution(query)
+
+        # Check if terminal state
+        if execution_dto.status in terminal_states:
+            return _map_dto_to_response(execution_dto)
+
+        # Wait before next poll
+        await asyncio.sleep(poll_interval)
 
 
 @router.get("/{execution_id}/status", response_model=ExecutionResponse)
