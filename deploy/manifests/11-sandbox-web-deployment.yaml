@@ -94,11 +94,14 @@ spec:
               containerPort: 80
               protocol: TCP
 
-          env:
-            # API base URL for the web console
-            # Points to the Control Plane service within the cluster
-            - name: VITE_API_BASE_URL
-              value: "http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000"
+          # NOTE: DO NOT set VITE_API_BASE_URL environment variable.
+          # The frontend uses runtime URL detection via getApiBaseUrl() which
+          # dynamically infers the API URL from the browser's location.
+          # This ensures the frontend works correctly when accessed via:
+          # - Ingress/Domain name
+          # - NodePort/LoadBalancer IP
+          # - Port-forwarding
+          # See: sandbox_web/src/utils/config.ts
 
           # 资源限制
           resources:

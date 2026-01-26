@@ -110,8 +110,14 @@ spec:
               echo "Control Plane is ready!"
       containers:
         - name: web
-          image: "{{- if .Values.web.image.registry }}{{ .Values.web.image.registry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          image: "{{- if .Values.web.image.image.registry }}{{ .Values.web.image.registry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+
+          {{- /* NOTE: DO NOT add VITE_API_BASE_URL environment variable here.
+               The frontend uses runtime URL detection via getApiBaseUrl()
+               which dynamically infers the API URL from the browser's location.
+               This ensures compatibility with Ingress, NodePort, LoadBalancer,
+               and port-forwarding access methods. */ -}}
           ports:
             - name: http
               containerPort: {{ .Values.web.service.port }}
