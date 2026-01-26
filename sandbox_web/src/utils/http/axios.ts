@@ -19,6 +19,11 @@ apiClient.interceptors.request.use(
     // Dynamically set baseURL from runtime config
     config.baseURL = getApiBaseUrl();
 
+    // Debug logging for API URL detection (can be disabled in production)
+    if (import.meta.env.DEV) {
+      console.debug(`[API] Request to: ${config.baseURL}${config.url}`);
+    }
+
     // 可以在这里添加认证 token
     // const token = localStorage.getItem('token');
     // if (token) {

@@ -17,13 +17,17 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
   sed -i 's/dl-cdn.alpinelinux.org/'$APK_MIRROR'/g' /etc/apk/repositories; \
   fi
 
-RUN npm config set registry https://registry.npmmirror.com/
+RUN npm config set registry https://registry.npmmirror.com/ && \
+    npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-timeout 180000
 
 # Copy package files
 COPY package.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies with retry on network errors
+RUN npm install || (echo "Retrying npm install..." && npm install)
 
 # Copy source code
 COPY . .

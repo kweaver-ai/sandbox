@@ -71,7 +71,8 @@ services:
           memory: 64M
     environment:
       - NODE_ENV=production
-      - VITE_API_BASE_URL=http://control-plane:8000
+      # DO NOT set VITE_API_BASE_URL here - it gets baked into the build
+      # The frontend uses runtime detection via getApiBaseUrl()
     depends_on:
       control-plane:
         condition: service_healthy
