@@ -51,7 +51,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
       pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
       pip config set global.trusted-host $PIP_MIRROR; \
     fi && \
-    pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir . && \
     # Clean up pip cache
     rm -rf /root/.cache/pip
 
