@@ -311,6 +311,11 @@ version: '3.8'
 services:
   executor:
     image: sandbox-executor:v1.0
+    cap_drop:
+      - ALL
+    security_opt:
+      - seccomp=default
+      - no-new-privileges
     environment:
       - CONTROL_PLANE_URL=http://control-plane:8000
       - WORKSPACE_PATH=/workspace
@@ -319,13 +324,15 @@ services:
       - MAX_MEMORY_MB=512
     ports:
       - "8080:8080"
-    privileged: true
 ```
+
+**注意**: 使用上述配置前，请确保宿主机已启用用户命名空间（参见 [用户命名空间配置指南](user-namespace-guide.md)）。
 
 ---
 
 ## 相关文档
 
+- [用户命名空间配置](user-namespace-guide.md) - 双层隔离原理和配置
 - [快速开始](quick-start.md) - 环境设置和基本配置
 - [架构设计](architecture.md) - 了解隔离机制
 - [部署指南](deployment.md) - 生产环境配置

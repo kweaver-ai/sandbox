@@ -36,7 +36,7 @@ class ExecutionResultReport(BaseModel):
     stderr: str = Field("", description="标准错误")
     exit_code: int = Field(..., description="进程退出码")
     execution_time: float = Field(..., description="执行耗时（秒）")
-    return_value: Optional[Dict[str, Any]] = Field(None, description="handler 函数返回值")
+    return_value: Optional[Any] = Field(None, description="handler 函数返回值")
     metrics: Optional[ExecutionMetrics] = Field(None, description="性能指标")
     artifacts: List[str] = Field(default_factory=list, description="生成的文件路径列表")
 

@@ -14,6 +14,37 @@
 
 ## Docker 部署
 
+### 前置要求
+
+Bubblewrap 需要宿主机启用**非特权用户命名空间**支持。
+
+**Ubuntu/Debian**:
+```bash
+# 启用非特权用户命名空间
+sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+# 持久化配置
+echo "kernel.unprivileged_userns_clone=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**CentOS/RHEL**:
+```bash
+# 设置用户命名空间最大数量
+echo "user.max_user_namespaces=10000" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**验证配置**:
+```bash
+# 检查当前设置
+sysctl kernel.unprivileged_userns_clone  # Ubuntu/Debian
+sysctl user.max_user_namespaces          # CentOS/RHEL
+
+# 测试用户命名空间
+unshare -U -m echo "User namespaces work"
+```
+
 ### 构建镜像
 
 ```bash
@@ -23,10 +54,13 @@ docker build -t sandbox-executor:v1.0 .
 
 ### 运行容器
 
+**推荐方式（安全配置）**:
 ```bash
 docker run -d \
   --name sandbox-executor \
-  --privileged \
+  --security-opt seccomp=default \
+  --security-opt no-new-privileges \
+  --cap-drop ALL \
   -p 8080:8080 \
   -e CONTROL_PLANE_URL=http://host.docker.internal:8000 \
   -e WORKSPACE_PATH=/workspace \
@@ -39,10 +73,17 @@ docker run -d \
 
 | 参数 | 说明 |
 |------|------|
-| `--privileged` | 必需：Bubblewrap 创建命名空间需要特权模式 |
+| `--security-opt seccomp=default` | 启用用户命名空间的 seccomp 配置 |
+| `--security-opt no-new-privileges` | 禁止权限提升 |
+| `--cap-drop ALL` | 移除所有 Linux capabilities |
 | `-p 8080:8080` | 端口映射 |
 | `-e CONTROL_PLANE_URL` | Control Plane 地址 |
 | `-v $(pwd)/workspace:/workspace` | 工作目录挂载 |
+
+**⚠️ 安全警告**：
+- **不要使用** `--privileged` 标志，这会完全破坏容器隔离
+- Bubblewrap 通过用户命名空间工作，不需要特权模式
+- 如果遇到权限错误，请检查宿主机的用户命名空间配置
 
 ### 验证部署
 
@@ -77,6 +118,10 @@ docker rmi sandbox-executor:v1.0
 
 ## Docker Compose 部署
 
+### 前置要求
+
+确保宿主机已启用用户命名空间（参见上文 Docker 部署的前置要求）。
+
 ### Compose 配置
 
 ```yaml
@@ -89,7 +134,11 @@ services:
       dockerfile: Dockerfile
     image: sandbox-executor:v1.0
     container_name: sandbox-executor
-    privileged: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - seccomp=default
+      - no-new-privileges
     ports:
       - "8080:8080"
     environment:
@@ -153,6 +202,18 @@ docker-compose up -d --scale executor=3
 
 ## Kubernetes 部署
 
+### 前置要求
+
+确保 Kubernetes 节点已启用用户命名空间：
+
+```bash
+# 在所有节点上执行
+sudo sysctl -w kernel.unprivileged_userns_clone=1  # Ubuntu/Debian
+# 或
+echo "user.max_user_namespaces=10000" | sudo tee -a /etc/sysctl.conf  # CentOS/RHEL
+sudo sysctl -p
+```
+
 ### 部署配置
 
 ```yaml
@@ -187,7 +248,12 @@ spec:
         - name: LOG_LEVEL
           value: "INFO"
         securityContext:
-          privileged: true  # Bubblewrap 需要
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
         resources:
           requests:
             memory: "512Mi"
@@ -433,6 +499,7 @@ docker exec sandbox-executor tar -xzf /tmp/workspace-backup.tar.gz -C /
 
 ## 相关文档
 
+- [用户命名空间配置](user-namespace-guide.md) - 双层隔离原理和配置
 - [快速开始](quick-start.md) - 本地开发部署
 - [配置说明](configuration.md) - 环境变量和配置
 - [故障排查](troubleshooting.md) - 常见问题解决

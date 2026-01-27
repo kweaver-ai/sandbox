@@ -72,7 +72,7 @@ class ExecutionResponse(BaseModel):
     created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    return_value: Optional[Dict[str, Any]] = None
+    return_value: Optional[Any] = None
     metrics: Optional[Dict[str, Any]] = None
 
 

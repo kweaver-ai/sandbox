@@ -22,26 +22,51 @@ bwrap: No permissions to create new namespace
 bwrap: Creating new namespace failed: Operation not permitted
 ```
 
-**原因**: Bubblewrap 需要特权模式来创建命名空间。
+**原因**: 宿主机未启用非特权用户命名空间支持。
 
 **解决方案**:
 
-Docker:
+**不要使用 `--privileged`**，这会完全破坏容器安全隔离！
+
+**正确做法 - 在宿主机启用用户命名空间**:
+
+Ubuntu/Debian:
 ```bash
-docker run --privileged sandbox-executor:v1.0
+# 临时启用
+sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+# 持久化配置
+echo "kernel.unprivileged_userns_clone=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
 ```
 
-Kubernetes:
-```yaml
-securityContext:
-  privileged: true
+CentOS/RHEL:
+```bash
+# 设置用户命名空间最大数量
+echo "user.max_user_namespaces=10000" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
 ```
 
-本地开发:
+验证配置:
 ```bash
-# 确保不使用 rootless 容器
-sudo docker run --privileged sandbox-executor:v1.0
+# 测试用户命名空间
+unshare -U -m echo "User namespaces work"
+
+# 检查系统配置
+sysctl kernel.unprivileged_userns_clone  # Ubuntu/Debian
+sysctl user.max_user_namespaces          # CentOS/RHEL
 ```
+
+**临时替代方案（不推荐用于生产）**:
+```bash
+# 禁用 Bubblewrap，降级到普通 subprocess 模式
+export DISABLE_BWRAP=true
+```
+
+**安全说明**:
+- Bubblewrap 通过用户命名空间工作，**不需要** `--privileged`
+- 使用 `--privileged` 会让容器获得宿主机的完全访问权限
+- 正确配置后，容器可以在非特权模式下运行，保持双层隔离
 
 ---
 
@@ -451,6 +476,7 @@ EOF
 
 ## 相关文档
 
+- [用户命名空间配置](user-namespace-guide.md) - 双层隔离原理和用户命名空间配置
 - [配置说明](configuration.md) - 环境变量配置
 - [部署指南](deployment.md) - 部署相关问题
 - [开发指南](development.md) - 调试技巧
