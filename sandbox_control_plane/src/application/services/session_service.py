@@ -25,7 +25,7 @@ from src.application.queries.get_session import GetSessionQuery
 from src.application.queries.get_execution import GetExecutionQuery
 from src.application.dtos.session_dto import SessionDTO
 from src.application.dtos.execution_dto import ExecutionDTO
-from src.shared.errors.domain import NotFoundError, ValidationError
+from src.shared.errors.domain import NotFoundError, ValidationError, ConflictError
 from src.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,9 +74,23 @@ class SessionService:
         # 1. 验证模板
         template = await self._validate_template(command.template_id)
 
-        # 2. 生成会话 ID
-        session_id = self._generate_session_id()
-        logger.debug("Generated session ID", session_id=session_id)
+        # 2. 处理会话 ID（手动指定或自动生成）
+        if command.id:
+            # 手动指定 ID，检查冲突
+            session_id = command.id
+            existing_session = await self._session_repo.find_by_id(session_id)
+            if existing_session:
+                logger.warning(
+                    "Session ID already exists",
+                    session_id=session_id,
+                    existing_status=existing_session.status.value,
+                )
+                raise ConflictError(f"Session ID already exists: {session_id}")
+            logger.debug("Using manually specified session ID", session_id=session_id)
+        else:
+            # 自动生成会话 ID
+            session_id = self._generate_session_id()
+            logger.debug("Generated session ID", session_id=session_id)
 
         # 3. 调用调度器
         runtime_node = await self._schedule_session(command, session_id)

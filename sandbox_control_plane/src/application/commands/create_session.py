@@ -21,6 +21,7 @@ class CreateSessionCommand:
     timeout: int = 300
     resource_limit: ResourceLimit | None = None
     env_vars: Dict[str, str] | None = None
+    id: Optional[str] = None  # 手动指定会话 ID（可选）
 
     # 依赖安装相关字段（新增）
     dependencies: List[str] = field(default_factory=list)

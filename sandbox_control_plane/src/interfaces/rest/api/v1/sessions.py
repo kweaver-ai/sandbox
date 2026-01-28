@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
 
 from src.application.services.session_service import SessionService
+from src.shared.errors.domain import ConflictError
 from src.application.commands.create_session import CreateSessionCommand
 from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.dtos.session_dto import SessionDTO
@@ -53,6 +54,7 @@ async def create_session(
         dependencies_pip_specs = [dep.to_pip_spec() for dep in request.dependencies]
 
         command = CreateSessionCommand(
+            id=request.id,
             template_id=request.template_id,
             timeout=request.timeout,
             resource_limit=resource_limit,
@@ -66,6 +68,11 @@ async def create_session(
         session_dto = await service.create_session(command)
         return _map_dto_to_response(session_dto)
 
+    except ConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

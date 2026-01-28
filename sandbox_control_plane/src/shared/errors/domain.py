@@ -58,3 +58,8 @@ class TemplateNotFoundError(DomainError):
 class NodeUnavailableError(DomainError):
     """节点不可用错误"""
     pass
+
+
+class ConflictError(DomainError):
+    """资源冲突错误"""
+    pass
