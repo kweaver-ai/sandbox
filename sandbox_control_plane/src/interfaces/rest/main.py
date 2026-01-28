@@ -219,6 +219,28 @@ def create_app() -> FastAPI:
 
 def _register_exception_handlers(app: FastAPI) -> None:
     """注册异常处理器"""
+    from src.shared.errors.domain import NotFoundError
+
+    @app.exception_handler(NotFoundError)
+    async def not_found_exception_handler(
+        request: Request,
+        exc: NotFoundError
+    ) -> JSONResponse:
+        """404 异常处理"""
+        logger.warning(
+            "Resource not found",
+            path=request.url.path,
+            method=request.method,
+            error=str(exc),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "error": "Not Found",
+                "message": exc.message,
+                "detail": str(exc),
+            },
+        )
 
     @app.exception_handler(Exception)
     async def global_exception_handler(
