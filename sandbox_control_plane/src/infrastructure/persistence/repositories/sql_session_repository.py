@@ -2,7 +2,9 @@
 会话仓储实现
 
 使用 SQLAlchemy 实现会话仓储接口。
+按照数据表命名规范使用 f_ 前缀字段名。
 """
+import time
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import select, update, delete, func
@@ -25,26 +27,44 @@ class SqlSessionRepository(ISessionRepository):
 
     async def save(self, session: Session) -> None:
         """保存会话"""
+        import json
         model = await self._session.get(SessionModel, session.id)
+        now_ms = int(time.time() * 1000)
 
         if model:
             # 更新现有记录
-            model.template_id = session.template_id
-            model.status = session.status.value
-            model.runtime_type = session.runtime_type
-            model.runtime_node = session.runtime_node
-            model.container_id = session.container_id
-            model.pod_name = session.pod_name
-            model.workspace_path = session.workspace_path
-            model.resources_cpu = session.resource_limit.cpu
-            model.resources_memory = session.resource_limit.memory
-            model.resources_disk = session.resource_limit.disk
-            model.resources_max_processes = session.resource_limit.max_processes
-            model.env_vars = session.env_vars
-            model.timeout = session.timeout
-            model.last_activity_at = session.last_activity_at
-            model.updated_at = session.updated_at
-            model.completed_at = session.completed_at
+            model.f_template_id = session.template_id
+            model.f_status = session.status.value if hasattr(session.status, 'value') else session.status
+            model.f_runtime_type = session.runtime_type
+            model.f_runtime_node = session.runtime_node or ""
+            model.f_container_id = session.container_id or ""
+            model.f_pod_name = session.pod_name or ""
+            model.f_workspace_path = session.workspace_path
+            model.f_resources_cpu = session.resource_limit.cpu
+            model.f_resources_memory = session.resource_limit.memory
+            model.f_resources_disk = session.resource_limit.disk
+            model.f_env_vars = json.dumps(session.env_vars, ensure_ascii=False) if session.env_vars else ""
+            model.f_timeout = session.timeout
+            model.f_last_activity_at = int(session.last_activity_at.timestamp() * 1000) if session.last_activity_at else now_ms
+            model.f_updated_at = now_ms
+            model.f_completed_at = int(session.completed_at.timestamp() * 1000) if session.completed_at else 0
+
+            # 依赖安装字段
+            model.f_requested_dependencies = json.dumps(session.requested_dependencies, ensure_ascii=False) if session.requested_dependencies else ""
+            if session.installed_dependencies:
+                deps_list = [
+                    {
+                        "name": dep.name,
+                        "version": dep.version,
+                        "install_location": dep.install_location,
+                        "install_time": dep.install_time.isoformat(),
+                        "is_from_template": dep.is_from_template,
+                    }
+                    for dep in session.installed_dependencies
+                ]
+                model.f_installed_dependencies = json.dumps(deps_list, ensure_ascii=False)
+            model.f_dependency_install_status = session.dependency_install_status
+            model.f_dependency_install_error = session.dependency_install_error or ""
         else:
             # 创建新记录
             model = SessionModel.from_entity(session)
@@ -59,7 +79,7 @@ class SqlSessionRepository(ISessionRepository):
 
     async def find_by_container_id(self, container_id: str) -> Optional[Session]:
         """根据容器 ID 查找会话"""
-        stmt = select(SessionModel).where(SessionModel.container_id == container_id)
+        stmt = select(SessionModel).where(SessionModel.f_container_id == container_id)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
@@ -68,7 +88,7 @@ class SqlSessionRepository(ISessionRepository):
         """根据状态查找会话"""
         stmt = (
             select(SessionModel)
-            .where(SessionModel.status == status)
+            .where(SessionModel.f_status == status)
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -76,17 +96,18 @@ class SqlSessionRepository(ISessionRepository):
 
     async def find_by_template(self, template_id: str) -> List[Session]:
         """根据模板 ID 查找会话"""
-        stmt = select(SessionModel).where(SessionModel.template_id == template_id)
+        stmt = select(SessionModel).where(SessionModel.f_template_id == template_id)
         result = await self._session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def find_idle_sessions(self, idle_threshold: datetime) -> List[Session]:
         """查找空闲会话"""
+        threshold_ms = int(idle_threshold.timestamp() * 1000)
         stmt = (
             select(SessionModel)
             .where(
-                SessionModel.status.in_(["creating", "running"]),
-                SessionModel.last_activity_at < idle_threshold
+                SessionModel.f_status.in_(["creating", "running"]),
+                SessionModel.f_last_activity_at < threshold_ms
             )
         )
         result = await self._session.execute(stmt)
@@ -94,17 +115,18 @@ class SqlSessionRepository(ISessionRepository):
 
     async def find_expired_sessions(self, created_before: datetime) -> List[Session]:
         """查找过期会话"""
+        before_ms = int(created_before.timestamp() * 1000)
         stmt = (
             select(SessionModel)
-            .where(SessionModel.created_at < created_before)
-            .where(SessionModel.status.in_(["creating", "running"]))
+            .where(SessionModel.f_created_at < before_ms)
+            .where(SessionModel.f_status.in_(["creating", "running"]))
         )
         result = await self._session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def delete(self, session_id: str) -> None:
         """删除会话"""
-        stmt = delete(SessionModel).where(SessionModel.id == session_id)
+        stmt = delete(SessionModel).where(SessionModel.f_id == session_id)
         await self._session.execute(stmt)
         await self._session.flush()
 
@@ -118,7 +140,7 @@ class SqlSessionRepository(ISessionRepository):
         stmt = (
             select(func.count())
             .select_from(SessionModel)
-            .where(SessionModel.status == status)
+            .where(SessionModel.f_status == status)
         )
         result = await self._session.execute(stmt)
         return result.scalar() or 0
@@ -128,8 +150,8 @@ class SqlSessionRepository(ISessionRepository):
         stmt = (
             select(func.count())
             .select_from(SessionModel)
-            .where(SessionModel.runtime_node == runtime_node)
-            .where(SessionModel.status.in_(["creating", "running"]))
+            .where(SessionModel.f_runtime_node == runtime_node)
+            .where(SessionModel.f_status.in_(["creating", "running"]))
         )
         result = await self._session.execute(stmt)
         return result.scalar() or 0
@@ -162,14 +184,14 @@ class SqlSessionRepository(ISessionRepository):
 
         # 添加筛选条件
         if status:
-            stmt = stmt.where(SessionModel.status == status)
+            stmt = stmt.where(SessionModel.f_status == status)
         if template_id:
-            stmt = stmt.where(SessionModel.template_id == template_id)
+            stmt = stmt.where(SessionModel.f_template_id == template_id)
 
         # 排序和分页
         stmt = (
             stmt
-            .order_by(SessionModel.created_at.desc())
+            .order_by(SessionModel.f_created_at.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -196,9 +218,9 @@ class SqlSessionRepository(ISessionRepository):
 
         # 添加筛选条件
         if status:
-            stmt = stmt.where(SessionModel.status == status)
+            stmt = stmt.where(SessionModel.f_status == status)
         if template_id:
-            stmt = stmt.where(SessionModel.template_id == template_id)
+            stmt = stmt.where(SessionModel.f_template_id == template_id)
 
         result = await self._session.execute(stmt)
         return result.scalar() or 0

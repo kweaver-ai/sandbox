@@ -39,31 +39,18 @@ metadata:
   {{- end }}
 spec:
   ingressClassName: {{ .Values.controlPlane.ingress.className }}
-  {{- if .Values.controlPlane.ingress.tls }}
-  tls:
-    {{- range .Values.controlPlane.ingress.tls }}
-    - hosts:
-        {{- range .hosts }}
-        - {{ . | quote }}
-        {{- end }}
-      secretName: {{ .secretName }}
-    {{- end }}
-  {{- end }}
   rules:
-    {{- range .Values.controlPlane.ingress.hosts }}
-    - host: {{ .host | quote }}
-      http:
-        paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
-            backend:
-              service:
-                name: {{ include "sandbox.controlPlaneName" $ }}
-                port:
-                  number: {{ $.Values.controlPlane.service.port }}
-          {{- end }}
-    {{- end }}
+  - http:
+      paths:
+        {{- range .paths }}
+        - path: {{ .path }}
+          pathType: {{ .pathType }}
+          backend:
+            service:
+              name: {{ include "sandbox.controlPlaneName" $ }}
+              port:
+                number: {{ $.Values.controlPlane.service.port }}
+        {{- end }}
 {{- end }}
 
 ---

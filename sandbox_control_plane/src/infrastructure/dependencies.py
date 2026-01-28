@@ -666,30 +666,30 @@ def _create_direct_session_repository(db_mgr):
             result = []
             async with self._db_mgr.get_session() as session:
                 stmt = select(SessionModel).filter(
-                    SessionModel.status == status
+                    SessionModel.f_status == status
                 ).limit(limit)
                 models_result = await session.execute(stmt)
                 for model in models_result.scalars():
                     session_entity = Session(
-                        id=model.id,
-                        template_id=model.template_id,
-                        status=SessionStatus(model.status),
+                        id=model.f_id,
+                        template_id=model.f_template_id,
+                        status=SessionStatus(model.f_status),
                         resource_limit=ResourceLimit(
-                            cpu=model.resources_cpu,
-                            memory=model.resources_memory,
-                            disk=model.resources_disk,
+                            cpu=model.f_resources_cpu,
+                            memory=model.f_resources_memory,
+                            disk=model.f_resources_disk,
                             max_processes=128,
                         ),
-                        workspace_path=model.workspace_path,
-                        runtime_type=model.runtime_type,
-                        runtime_node=model.runtime_node,
-                        container_id=model.container_id,
-                        pod_name=model.pod_name,
-                        env_vars=model.env_vars,
-                        timeout=model.timeout,
-                        created_at=model.created_at,
-                        updated_at=model.updated_at,
-                        last_activity_at=model.last_activity_at,
+                        workspace_path=model.f_workspace_path,
+                        runtime_type=model.f_runtime_type,
+                        runtime_node=model.f_runtime_node or None,
+                        container_id=model.f_container_id or None,
+                        pod_name=model.f_pod_name or None,
+                        env_vars=model._parse_json(model.f_env_vars) or {},
+                        timeout=model.f_timeout,
+                        created_at=model._millis_to_datetime(model.f_created_at) or datetime.now(),
+                        updated_at=model._millis_to_datetime(model.f_updated_at) or datetime.now(),
+                        last_activity_at=model._millis_to_datetime(model.f_last_activity_at) or datetime.now(),
                     )
                     result.append(session_entity)
             return result
@@ -700,41 +700,42 @@ def _create_direct_session_repository(db_mgr):
                 model = await session.get(SessionModel, session_id)
                 if model:
                     return Session(
-                        id=model.id,
-                        template_id=model.template_id,
-                        status=SessionStatus(model.status),
+                        id=model.f_id,
+                        template_id=model.f_template_id,
+                        status=SessionStatus(model.f_status),
                         resource_limit=ResourceLimit(
-                            cpu=model.resources_cpu,
-                            memory=model.resources_memory,
-                            disk=model.resources_disk,
+                            cpu=model.f_resources_cpu,
+                            memory=model.f_resources_memory,
+                            disk=model.f_resources_disk,
                             max_processes=128,
                         ),
-                        workspace_path=model.workspace_path,
-                        runtime_type=model.runtime_type,
-                        runtime_node=model.runtime_node,
-                        container_id=model.container_id,
-                        pod_name=model.pod_name,
-                        env_vars=model.env_vars,
-                        timeout=model.timeout,
-                        created_at=model.created_at,
-                        updated_at=model.updated_at,
-                        last_activity_at=model.last_activity_at,
+                        workspace_path=model.f_workspace_path,
+                        runtime_type=model.f_runtime_type,
+                        runtime_node=model.f_runtime_node or None,
+                        container_id=model.f_container_id or None,
+                        pod_name=model.f_pod_name or None,
+                        env_vars=model._parse_json(model.f_env_vars) or {},
+                        timeout=model.f_timeout,
+                        created_at=model._millis_to_datetime(model.f_created_at) or datetime.now(),
+                        updated_at=model._millis_to_datetime(model.f_updated_at) or datetime.now(),
+                        last_activity_at=model._millis_to_datetime(model.f_last_activity_at) or datetime.now(),
                     )
                 return None
 
         async def save(self, session):
             """保存 session"""
+            import time
             async with self._db_mgr.get_session() as db:
                 model = await db.get(SessionModel, session.id)
                 if model:
                     # 处理 status 可能是枚举或字符串的情况
                     if hasattr(session.status, 'value'):
-                        model.status = session.status.value
+                        model.f_status = session.status.value
                     else:
-                        model.status = session.status
-                    model.container_id = session.container_id
-                    model.runtime_node = session.runtime_node
-                    model.updated_at = session.updated_at
+                        model.f_status = session.status
+                    model.f_container_id = session.container_id or ""
+                    model.f_runtime_node = session.runtime_node or ""
+                    model.f_updated_at = int(time.time() * 1000)
                     await db.commit()
 
     return DirectSessionRepository(db_mgr)

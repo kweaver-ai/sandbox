@@ -180,14 +180,11 @@ minio:
 
   ingress:
     enabled: false
-    className: "nginx"
+    className: "class-443"
     annotations: {}
-    hosts:
-      - host: minio.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
+    paths:
+      - path: /
+        pathType: ImplementationSpecific
 
   resources:
     requests:
@@ -256,3 +253,5 @@ securityContext:
     drop:
       - ALL
   readOnlyRootFilesystem: false
+
+

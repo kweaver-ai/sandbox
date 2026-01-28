@@ -2,9 +2,13 @@
 模板仓储实现
 
 使用 SQLAlchemy 实现模板仓储接口。
+按照数据表命名规范使用 f_ 前缀字段名。
 """
 import re
+import json
+import time
 from typing import List
+from decimal import Decimal
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +30,7 @@ class SqlTemplateRepository(ITemplateRepository):
     async def save(self, template: Template) -> None:
         """保存模板"""
         model = await self._session.get(TemplateModel, template.id)
+        now_ms = int(time.time() * 1000)
 
         def parse_mb_value(value: str) -> int:
             """解析资源值（将 '512Mi', '1Gi' 等转换为 MB）"""
@@ -52,15 +57,17 @@ class SqlTemplateRepository(ITemplateRepository):
 
         if model:
             # 更新现有记录
-            model.name = template.name
-            model.image_url = template.image
-            model.base_image = template.base_image
-            model.pre_installed_packages = template.pre_installed_packages
-            model.runtime_type = "python3.11"  # Default, should be from entity
-            model.default_cpu_cores = float(template.default_resources.cpu)
-            model.default_memory_mb = parse_mb_value(template.default_resources.memory)
-            model.default_disk_mb = parse_mb_value(template.default_resources.disk)
-            model.security_context = template.security_context
+            model.f_name = template.name
+            model.f_description = ""
+            model.f_image_url = template.image
+            model.f_base_image = template.base_image
+            model.f_pre_installed_packages = json.dumps(template.pre_installed_packages, ensure_ascii=False) if template.pre_installed_packages else "[]"
+            model.f_runtime_type = "python3.11"  # Default, should be from entity
+            model.f_default_cpu_cores = Decimal(template.default_resources.cpu)
+            model.f_default_memory_mb = parse_mb_value(template.default_resources.memory)
+            model.f_default_disk_mb = parse_mb_value(template.default_resources.disk)
+            model.f_security_context = json.dumps(template.security_context, ensure_ascii=False) if template.security_context else "{}"
+            model.f_updated_at = now_ms
         else:
             # 创建新记录
             model = TemplateModel.from_entity(template)
@@ -75,7 +82,7 @@ class SqlTemplateRepository(ITemplateRepository):
 
     async def find_by_name(self, name: str) -> Template | None:
         """根据名称查找模板"""
-        stmt = select(TemplateModel).where(TemplateModel.name == name)
+        stmt = select(TemplateModel).where(TemplateModel.f_name == name)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
@@ -86,14 +93,14 @@ class SqlTemplateRepository(ITemplateRepository):
             select(TemplateModel)
             .offset(offset)
             .limit(limit)
-            .order_by(TemplateModel.name)
+            .order_by(TemplateModel.f_name)
         )
         result = await self._session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def delete(self, template_id: str) -> None:
         """删除模板"""
-        stmt = delete(TemplateModel).where(TemplateModel.id == template_id)
+        stmt = delete(TemplateModel).where(TemplateModel.f_id == template_id)
         await self._session.execute(stmt)
         await self._session.flush()
 
@@ -104,7 +111,7 @@ class SqlTemplateRepository(ITemplateRepository):
 
     async def exists_by_name(self, name: str) -> bool:
         """检查名称是否存在"""
-        stmt = select(func.count()).select_from(TemplateModel).where(TemplateModel.name == name)
+        stmt = select(func.count()).select_from(TemplateModel).where(TemplateModel.f_name == name)
         result = await self._session.execute(stmt)
         return (result.scalar() or 0) > 0
 

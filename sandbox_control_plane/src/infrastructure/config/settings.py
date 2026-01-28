@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # ============== 数据库配置 ==============
     database_url: str = Field(
-        default="mysql+aiomysql://sandbox:password@localhost:3308/sandbox"
+        default="mysql+aiomysql://sandbox:password@localhost:3308/adp"
     )
     db_pool_size: int = Field(default=20)
     db_max_overflow: int = Field(default=40)
