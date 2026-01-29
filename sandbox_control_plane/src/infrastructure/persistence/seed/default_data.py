@@ -63,7 +63,7 @@ def get_default_templates() -> List[TemplateModel]:
             f_id="python-basic",
             f_name="Python Basic",
             f_description="基础 Python 执行环境",
-            f_image_url="sandbox-template-python-basic:latest",
+            f_image_url="sandbox-template-python-basic:v1.0.0",
             f_base_image="",
             f_runtime_type="python3.11",
             f_default_cpu_cores=Decimal("1.0"),
