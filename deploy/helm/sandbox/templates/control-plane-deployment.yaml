@@ -38,11 +38,11 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  ingressClassName: {{ .Values.depServices.class-443.ingressClass | default "nginx" }}
+  ingressClassName: {{ index .Values.depServices "class-443" "ingressClass" | default "nginx" }}
   rules:
   - http:
       paths:
-        {{- range .paths }}
+        {{- range .Values.controlPlane.ingress.paths }}
         - path: {{ .path }}
           pathType: {{ .pathType }}
           backend:
@@ -127,85 +127,71 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_TYPE
-              optional: true
             - name: DB_HOST
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_HOST
-              optional: true
             - name: DB_PORT
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_PORT
-              optional: true
             - name: DB_HOST_READ
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_HOST_READ
-              optional: true
             - name: DB_PORT_READ
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_PORT_READ
-              optional: true
             - name: DB_USER
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_USER
-              optional: true
             - name: DB_PASSWORD
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_PASSWORD
-              optional: true
             - name: DB_DATABASE
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_DATABASE
-              optional: true
             - name: DB_MAX_CONNECTIONS
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_MAX_CONNECTIONS
-              optional: true
             - name: DB_MAX_READ_CONNECTIONS
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_MAX_READ_CONNECTIONS
-              optional: true
             - name: DB_CHARSET
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_CHARSET
-              optional: true
             - name: DB_TIMEOUT
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_TIMEOUT
-              optional: true
             - name: DB_READ_TIMEOUT
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_READ_TIMEOUT
-              optional: true
             - name: DB_WRITE_TIMEOUT
               valueFrom:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DB_WRITE_TIMEOUT
-              optional: true
             - name: KUBERNETES_NAMESPACE
               valueFrom:
                 configMapKeyRef:

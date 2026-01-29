@@ -26,11 +26,9 @@ controlPlane:
     enabled: false
     className: "nginx"
     annotations: {}
-    hosts:
-      - host: sandbox-control-plane.example.com
-        paths:
-          - path: /
-            pathType: Prefix
+    paths:
+      - path: /
+        pathType: Prefix
     tls: []
 
   # Resource limits and requests
@@ -103,11 +101,9 @@ web:
     enabled: false
     className: "nginx"
     annotations: {}
-    hosts:
-      - host: sandbox-web.example.com
-        paths:
-          - path: /
-            pathType: Prefix
+    paths:
+      - path: /
+        pathType: Prefix
     tls: []
 
   resources:
