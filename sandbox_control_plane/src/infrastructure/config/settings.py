@@ -3,9 +3,11 @@
 
 使用 Pydantic Settings 管理应用配置。
 """
+import os
 from functools import lru_cache
+from urllib.parse import quote_plus
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +39,62 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=20)
     db_max_overflow: int = Field(default=40)
     db_pool_recycle: int = Field(default=3600)
+
+    # ============== RDS 数据库配置（从 depServices.rds 注入） ==============
+    # 这些字段优先于 database_url，如果设置了则使用这些值构建数据库连接
+    db_type: str | None = Field(default=None)  # 数据库类型，如 MYSQL, POSTGRESQL
+    db_host: str | None = Field(default=None)  # 主库主机
+    db_port: int | None = Field(default=None)  # 主库端口
+    db_host_read: str | None = Field(default=None)  # 从库主机（读写分离）
+    db_port_read: int | None = Field(default=None)  # 从库端口
+    db_user: str | None = Field(default=None)  # 数据库用户
+    db_password: str | None = Field(default=None)  # 数据库密码
+    db_database: str | None = Field(default=None)  # 数据库名
+    db_max_connections: int | None = Field(default=None)  # 最大连接数
+    db_max_read_connections: int | None = Field(default=None)  # 最大读连接数
+    db_charset: str | None = Field(default=None)  # 字符集
+    db_timeout: int | None = Field(default=None)  # 连接超时
+    db_read_timeout: int | None = Field(default=None)  # 读超时
+    db_write_timeout: int | None = Field(default=None)  # 写超时
+
+    @computed_field
+    @property
+    def effective_database_url(self) -> str:
+        """
+        计算有效的数据库 URL
+
+        优先使用 RDS 环境变量构建数据库连接，如果未设置则使用 database_url
+        """
+        # 如果所有必需的 RDS 字段都已设置，则使用 RDS 配置
+        if all([
+            self.db_type,
+            self.db_host,
+            self.db_port is not None,
+            self.db_user,
+            self.db_password is not None,
+            self.db_database,
+        ]):
+            # 构建 aiomysql 连接 URL
+            # 格式: mysql+aiomysql://user:password@host:port/database
+            user = quote_plus(self.db_user)
+            password = quote_plus(self.db_password)
+            host = self.db_host
+            port = self.db_port
+            database = self.db_database
+
+            # 添加连接参数
+            params = []
+            if self.db_charset:
+                params.append(f"charset={self.db_charset}")
+
+            url = f"mysql+aiomysql://{user}:{password}@{host}:{port}/{database}"
+            if params:
+                url += "?" + "&".join(params)
+
+            return url
+
+        # 否则使用默认的 database_url
+        return self.database_url
 
     # ============== S3 配置 ==============
     s3_bucket: str = Field(default="sandbox-workspace")

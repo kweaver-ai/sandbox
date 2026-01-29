@@ -38,7 +38,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  ingressClassName: {{ .Values.web.ingress.className }}
+  ingressClassName: {{ .Values.depServices.class-443.ingressClass | default "nginx" }}
   {{- if .Values.web.ingress.tls }}
   tls:
     {{- range .Values.web.ingress.tls }}

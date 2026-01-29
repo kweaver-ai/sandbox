@@ -40,7 +40,7 @@ class DatabaseManager:
         """初始化数据库引擎"""
         settings = get_settings()
         self._engine = create_async_engine(
-            settings.database_url,
+            settings.effective_database_url,
             echo=settings.log_level == "DEBUG",
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,

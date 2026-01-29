@@ -255,3 +255,22 @@ securityContext:
   readOnlyRootFilesystem: false
 
 
+depServices:
+  class-443:
+    ingressClass: class-443
+  # 数据库连接配置
+  rds:
+    type: MYSQL
+    host: mariadb-mariadb-cluster.resource
+    port: 3330
+    hostRead: mariadb-mariadb-cluster.resource
+    portRead: 3330
+    user: anyshare
+    password: xxx
+    database: adp
+    maxConnections: 30
+    maxReadConnections: 30
+    dbCharset: utf8mb4
+    timeout: 10
+    readTimeout: 10
+    writeTimeout: 10
