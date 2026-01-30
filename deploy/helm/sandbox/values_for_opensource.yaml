@@ -1,9 +1,9 @@
 # Default values for sandbox-platform Helm chart
 
-global:
-  namespace: sandbox-system
-  imageRegistry: ""
-  imagePullPolicy: IfNotPresent
+# Global configuration
+namespace: sandbox-system
+imageRegistry: ""
+imagePullPolicy: IfNotPresent
 
 # Control Plane configuration
 controlPlane:

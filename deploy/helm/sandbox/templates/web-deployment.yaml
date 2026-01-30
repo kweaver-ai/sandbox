@@ -4,7 +4,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.global.namespace }}
+  namespace: {{ .Values.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -29,7 +29,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.global.namespace }}
+  namespace: {{ .Values.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -58,7 +58,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.global.namespace }}
+  namespace: {{ .Values.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -90,7 +90,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -z {{ include "sandbox.controlPlaneName" . }}.{{ .Values.global.namespace }}.svc.cluster.local {{ .Values.controlPlane.service.port }}; do
+              until nc -z {{ include "sandbox.controlPlaneName" . }}.{{ .Values.namespace }}.svc.cluster.local {{ .Values.controlPlane.service.port }}; do
                 echo "Waiting for Control Plane..."
                 sleep 2
               done

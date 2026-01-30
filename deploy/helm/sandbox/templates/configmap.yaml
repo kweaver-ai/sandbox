@@ -4,14 +4,14 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Values.configMap.name }}
-  namespace: {{ .Values.global.namespace }}
+  namespace: {{ .Values.namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
 data:
   ENVIRONMENT: {{ .Values.controlPlane.env.ENVIRONMENT | quote }}
   DEBUG: {{ .Values.controlPlane.env.DEBUG | quote }}
   DATABASE_URL: {{ .Values.controlPlane.env.DATABASE_URL | quote }}
-  KUBERNETES_NAMESPACE: {{ .Values.global.namespace | quote }}
+  KUBERNETES_NAMESPACE: {{ .Values.namespace | quote }}
   DEFAULT_TIMEOUT: {{ .Values.controlPlane.env.DEFAULT_TIMEOUT | quote }}
   MAX_TIMEOUT: {{ .Values.controlPlane.env.MAX_TIMEOUT | quote }}
   DEFAULT_CPU: {{ .Values.controlPlane.env.DEFAULT_CPU | quote }}

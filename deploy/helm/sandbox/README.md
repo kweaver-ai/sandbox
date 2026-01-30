@@ -54,8 +54,8 @@ The following table lists the configurable parameters of the Sandbox chart and t
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `global.namespace` | Namespace for all resources | `sandbox-system` |
-| `global.imagePullPolicy` | Global image pull policy | `IfNotPresent` |
+| `namespace` | Namespace for all resources | `sandbox-system` |
+| `imagePullPolicy` | Global image pull policy | `IfNotPresent` |
 
 ### Control Plane Parameters
 
