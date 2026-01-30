@@ -1,8 +1,7 @@
 # Default values for sandbox-platform Helm chart
 
-# Global configuration
-namespace: sandbox-system
-imageRegistry: ""
+namespace: anyshare
+imageRegistry: "acr.aishu.cn"
 imagePullPolicy: IfNotPresent
 
 # Control Plane configuration
@@ -11,9 +10,9 @@ controlPlane:
   replicaCount: 1
 
   image:
-    registry: ""
-    repository: sandbox-control-plane
-    tag: "latest"
+    registry: "acr.aishu.cn"
+    repository: sandbox/sandbox-control-plane
+    tag: "v1.0.0"
     pullPolicy: IfNotPresent
 
   service:
@@ -22,7 +21,7 @@ controlPlane:
     annotations: {}
 
   ingress:
-    enabled: false
+    enabled: true
     className: "nginx"
     annotations: {}
     paths:
@@ -62,8 +61,8 @@ controlPlane:
   # Default template image configuration
   defaultTemplate:
     image:
-      registry: ""
-      repository: "sandbox-template-python-basic"
+      registry: "acr.aishu.cn"
+      repository: "sandbox/sandbox-template-python-basic"
       tag: "v1.0.0"
       pullPolicy: IfNotPresent
 
@@ -89,7 +88,7 @@ controlPlane:
 
 # Web Console configuration
 web:
-  enabled: true
+  enabled: false
   replicaCount: 1
 
   image:
@@ -126,7 +125,7 @@ web:
 
 # MariaDB configuration
 mariadb:
-  enabled: true
+  enabled: false
   replicaCount: 1
 
   image:
@@ -169,9 +168,9 @@ minio:
   replicaCount: 1
 
   image:
-    registry: ""
-    repository: quay.io/minio/minio
-    tag: "latest"
+    registry: "acr.aishu.cn"
+    repository: sandbox/minio
+    tag: "RELEASE.2025-09-07T16-13-09Z"
     pullPolicy: IfNotPresent
 
   service:
@@ -181,7 +180,7 @@ minio:
     annotations: {}
 
   ingress:
-    enabled: false
+    enabled: true
     className: "class-443"
     annotations: {}
     paths:
@@ -236,10 +235,6 @@ secret:
     secretAccessKey: "minioadmin"
     region: "us-east-1"
 
-# Runtime namespace configuration
-runtimeNamespace:
-  create: true
-  name: "sandbox-runtime"
 
 # Pod security context
 podSecurityContext:
@@ -256,12 +251,13 @@ securityContext:
       - ALL
   readOnlyRootFilesystem: false
 
+
 depServices:
   class-443:
     ingressClass: class-443
   # 数据库连接配置
   rds:
-    type: MYSQL
+    type: MariaDB
     host: mariadb-mariadb-cluster.resource
     port: 3330
     hostRead: mariadb-mariadb-cluster.resource
