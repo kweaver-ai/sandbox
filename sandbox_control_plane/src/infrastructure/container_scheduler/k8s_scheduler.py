@@ -81,6 +81,7 @@ class K8sScheduler(IContainerScheduler):
         namespace: str = "sandbox-system",
         kube_config_path: Optional[str] = None,
         service_account_token: Optional[str] = None,
+        executor_service_account: str = "sandbox-control-plane",
     ):
         """
         初始化 K8s 调度器
@@ -89,8 +90,10 @@ class K8sScheduler(IContainerScheduler):
             namespace: Kubernetes 命名空间
             kube_config_path: kubeconfig 文件路径（可选，用于本地开发）
             service_account_token: ServiceAccount Token（用于 Pod 内运行）
+            executor_service_account: Executor Pod 使用的 ServiceAccount 名称
         """
         self._namespace = namespace
+        self._executor_service_account = executor_service_account
 
         # 加载 Kubernetes 配置
         if service_account_token:
@@ -488,6 +491,7 @@ exec gosu sandbox python -m executor.interfaces.http.rest
                 restart_policy="Never",
                 host_network=False,
                 termination_grace_period_seconds=30,
+                service_account_name=self._executor_service_account,
                 # 使用默认 DNS 策略 (ClusterFirst)，允许 Pod 使用 K8s 集群 DNS
                 # 这对于 executor 与 control plane 通信很重要
             ),
