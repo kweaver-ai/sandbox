@@ -10,8 +10,12 @@ import time
 from decimal import Decimal
 from typing import List
 
+from structlog import get_logger
+
 from src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
 from src.infrastructure.persistence.models.template_model import TemplateModel
+
+logger = get_logger(__name__)
 
 
 def get_default_template_image_url() -> str:
@@ -23,7 +27,12 @@ def get_default_template_image_url() -> str:
     Returns:
         模板镜像 URL
     """
-    return os.getenv("DEFAULT_TEMPLATE_IMAGE", "sandbox-template-python-basic:v1.0.0")
+    image_url = os.getenv("DEFAULT_TEMPLATE_IMAGE", "sandbox-template-python-basic:v1.0.0")
+    logger.info(
+        "Getting default template image URL from environment",
+        DEFAULT_TEMPLATE_IMAGE=image_url
+    )
+    return image_url
 
 
 def get_default_runtime_nodes() -> List[RuntimeNodeModel]:
