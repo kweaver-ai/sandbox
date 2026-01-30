@@ -547,12 +547,19 @@ def get_docker_scheduler_service(
         # K8s 环境：使用 K8sSchedulerService
         from src.infrastructure.schedulers.k8s_scheduler_service import K8sSchedulerService
 
+        # Build CONTROL_PLANE_URL based on kubernetes_namespace
+        control_plane_url = (
+            settings.control_plane_url
+            if settings.control_plane_url is not None
+            else f"http://sandbox-control-plane.{settings.kubernetes_namespace}.svc.cluster.local:8000"
+        )
+
         return K8sSchedulerService(
             container_scheduler=container_scheduler,
             template_repo=template_repo,
             executor_client=executor_client,
             executor_port=8080,
-            control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
+            control_plane_url=control_plane_url,
             disable_bwrap=settings.disable_bwrap,
         )
     else:
@@ -756,12 +763,19 @@ def _create_scheduler_for_state_sync(container_scheduler):
             async def find_by_id(self, template_id: str):
                 return None
 
+        # Build CONTROL_PLANE_URL based on kubernetes_namespace
+        control_plane_url = (
+            settings.control_plane_url
+            if settings.control_plane_url is not None
+            else f"http://sandbox-control-plane.{settings.kubernetes_namespace}.svc.cluster.local:8000"
+        )
+
         return K8sSchedulerService(
             container_scheduler=container_scheduler,
             template_repo=SimpleTemplateRepo(),
             executor_client=None,
             executor_port=8080,
-            control_plane_url="http://sandbox-control-plane.sandbox-system.svc.cluster.local:8000",
+            control_plane_url=control_plane_url,
             disable_bwrap=settings.disable_bwrap,
         )
 

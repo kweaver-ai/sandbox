@@ -252,6 +252,11 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: DEFAULT_TEMPLATE_IMAGE
+            - name: CONTROL_PLANE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.configMap.name }}
+                  key: CONTROL_PLANE_URL
             # From Secret
             - name: S3_ENDPOINT_URL
               valueFrom:

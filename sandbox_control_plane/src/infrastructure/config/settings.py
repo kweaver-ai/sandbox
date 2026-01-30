@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     default_memory: str = Field(default="512Mi")
     default_disk: str = Field(default="1Gi")
     disable_bwrap: bool = Field(default=False)  # 禁用 Bubblewrap（本地开发环境）
-    control_plane_url: str = Field(default="http://control-plane:8000")  # Control Plane URL for executor callback
+    control_plane_url: str | None = Field(default=None)  # Control Plane URL for executor callback (None = auto-generate from namespace)
 
     # ============== 清理配置 ==============
     idle_threshold_minutes: int = Field(default=-1, ge=-1, description="空闲超时时间（分钟），-1 表示无限期（不清理空闲会话）")
