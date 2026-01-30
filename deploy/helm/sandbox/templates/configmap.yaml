@@ -22,6 +22,7 @@ data:
   CLEANUP_INTERVAL_SECONDS: {{ .Values.controlPlane.env.CLEANUP_INTERVAL_SECONDS | quote }}
   DISABLE_BWRAP: {{ .Values.controlPlane.env.DISABLE_BWRAP | quote }}
   PYTHONUNBUFFERED: {{ .Values.controlPlane.env.PYTHONUNBUFFERED | quote }}
+  DEFAULT_TEMPLATE_IMAGE: {{ .Values.controlPlane.env.DEFAULT_TEMPLATE_IMAGE | quote }}
   # Database connection from depServices.rds
   {{- if .Values.depServices.rds }}
   DB_TYPE: {{ .Values.depServices.rds.type | quote }}

@@ -83,3 +83,14 @@ Selector labels
 app.kubernetes.io/name: {{ include "sandbox.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Get the ingress class name from depServices
+*/}}
+{{- define "sandbox.ingressClass" -}}
+{{- if and .Values.depServices (index .Values.depServices "class-443") (index .Values.depServices "class-443").ingressClass -}}
+{{- (index .Values.depServices "class-443").ingressClass -}}
+{{- else -}}
+{{- "nginx" -}}
+{{- end -}}
+{{- end }}

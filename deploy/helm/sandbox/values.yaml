@@ -60,6 +60,14 @@ controlPlane:
                     - sandbox-control-plane
             topologyKey: kubernetes.io/hostname
 
+  # Default template image configuration
+  defaultTemplate:
+    image:
+      registry: ""
+      repository: "sandbox-template-python-basic"
+      tag: "v1.0.0"
+      pullPolicy: IfNotPresent
+
   env:
     ENVIRONMENT: "staging"
     DEBUG: "false"
@@ -75,6 +83,7 @@ controlPlane:
     CLEANUP_INTERVAL_SECONDS: "300"
     DISABLE_BWRAP: "true"
     PYTHONUNBUFFERED: "1"
+    DEFAULT_TEMPLATE_IMAGE: "sandbox-template-python-basic:v1.0.0"
 
   s3:
     endpointUrl: "http://minio.sandbox-system.svc.cluster.local:9000"

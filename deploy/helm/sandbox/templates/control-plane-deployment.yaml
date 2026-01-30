@@ -247,6 +247,11 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.configMap.name }}
                   key: PYTHONUNBUFFERED
+            - name: DEFAULT_TEMPLATE_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.configMap.name }}
+                  key: DEFAULT_TEMPLATE_IMAGE
             # From Secret
             - name: S3_ENDPOINT_URL
               valueFrom:

@@ -97,7 +97,7 @@ CREATE INDEX IF NOT EXISTS t_sandbox_runtime_node_idx_deleted_at ON t_sandbox_ru
 -- 沙箱会话管理表（含依赖安装支持）
 CREATE TABLE IF NOT EXISTS t_sandbox_session
 (
-    f_id                          VARCHAR(40 CHAR)  NOT NULL COMMENT '会话唯一标识符',
+    f_id                          VARCHAR(255 CHAR) NOT NULL COMMENT '会话唯一标识符',
     f_template_id                 VARCHAR(40 CHAR)  NOT NULL COMMENT '模板ID引用',
     f_status                      VARCHAR(20 CHAR)  NOT NULL DEFAULT 'creating' COMMENT '会话状态(creating,running,completed,failed,timeout,terminated)',
     f_runtime_type                VARCHAR(20 CHAR)  NOT NULL COMMENT '运行时类型(python3.11,nodejs20,java17,go1.21)',
@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS t_sandbox_session_idx_created_by ON t_sandbox_session
 CREATE TABLE IF NOT EXISTS t_sandbox_execution
 (
     f_id              VARCHAR(40 CHAR)  NOT NULL COMMENT '执行唯一标识符',
-    f_session_id      VARCHAR(40 CHAR)  NOT NULL COMMENT '会话ID引用',
+    f_session_id      VARCHAR(255 CHAR) NOT NULL COMMENT '会话ID引用',
     f_status          VARCHAR(20 CHAR)  NOT NULL DEFAULT 'pending' COMMENT '执行状态(pending,running,completed,failed,timeout,crashed)',
     f_code            TEXT              NOT NULL COMMENT '源代码',
     f_language        VARCHAR(32 CHAR)  NOT NULL COMMENT '编程语言',

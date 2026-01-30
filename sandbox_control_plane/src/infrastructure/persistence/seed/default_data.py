@@ -5,12 +5,25 @@
 所有默认数据的集中定义，方便维护和修改。
 按照数据表命名规范使用 f_ 前缀字段名。
 """
+import os
 import time
 from decimal import Decimal
 from typing import List
 
 from src.infrastructure.persistence.models.runtime_node_model import RuntimeNodeModel
 from src.infrastructure.persistence.models.template_model import TemplateModel
+
+
+def get_default_template_image_url() -> str:
+    """
+    获取默认模板镜像 URL
+
+    从环境变量 DEFAULT_TEMPLATE_IMAGE 读取，如果未设置则使用默认值。
+
+    Returns:
+        模板镜像 URL
+    """
+    return os.getenv("DEFAULT_TEMPLATE_IMAGE", "sandbox-template-python-basic:v1.0.0")
 
 
 def get_default_runtime_nodes() -> List[RuntimeNodeModel]:
@@ -63,7 +76,7 @@ def get_default_templates() -> List[TemplateModel]:
             f_id="python-basic",
             f_name="Python Basic",
             f_description="基础 Python 执行环境",
-            f_image_url="sandbox-template-python-basic:v1.0.0",
+            f_image_url=get_default_template_image_url(),
             f_base_image="",
             f_runtime_type="python3.11",
             f_default_cpu_cores=Decimal("1.0"),

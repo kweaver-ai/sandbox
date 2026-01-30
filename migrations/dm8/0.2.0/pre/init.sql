@@ -150,7 +150,7 @@ CREATE INDEX t_sandbox_runtime_node_idx_deleted_at ON t_sandbox_runtime_node(f_d
 -- 沙箱会话管理表（含依赖安装支持）
 CREATE TABLE IF NOT EXISTS t_sandbox_session
 (
-    f_id                          VARCHAR(40 CHAR)  NOT NULL,
+    f_id                          VARCHAR(255 CHAR) NOT NULL,
     f_template_id                 VARCHAR(40 CHAR)  NOT NULL,
     f_status                      VARCHAR(20 CHAR)  NOT NULL DEFAULT 'creating',
     f_runtime_type                VARCHAR(20 CHAR)  NOT NULL,
@@ -231,7 +231,7 @@ CREATE INDEX t_sandbox_session_idx_created_by ON t_sandbox_session(f_created_by)
 CREATE TABLE IF NOT EXISTS t_sandbox_execution
 (
     f_id              VARCHAR(40 CHAR)  NOT NULL,
-    f_session_id      VARCHAR(40 CHAR)  NOT NULL,
+    f_session_id      VARCHAR(255 CHAR) NOT NULL,
     f_status          VARCHAR(20 CHAR)  NOT NULL DEFAULT 'pending',
     f_code            CLOB              NOT NULL,
     f_language        VARCHAR(32 CHAR)  NOT NULL,
