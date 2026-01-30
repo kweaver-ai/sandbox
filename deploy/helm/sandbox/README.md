@@ -55,7 +55,6 @@ The following table lists the configurable parameters of the Sandbox chart and t
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `global.namespace` | Namespace for all resources | `sandbox-system` |
-| `global.runtimeNamespace` | Runtime namespace for executor pods | `sandbox-runtime` |
 | `global.imagePullPolicy` | Global image pull policy | `IfNotPresent` |
 
 ### Control Plane Parameters

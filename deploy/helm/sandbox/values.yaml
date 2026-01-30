@@ -2,7 +2,6 @@
 
 global:
   namespace: sandbox-system
-  runtimeNamespace: sandbox-runtime
   imageRegistry: ""
   imagePullPolicy: IfNotPresent
 
@@ -72,7 +71,6 @@ controlPlane:
     ENVIRONMENT: "staging"
     DEBUG: "false"
     DATABASE_URL: "mysql+aiomysql://root:password@mariadb.sandbox-system.svc.cluster.local:3306/sandbox"
-    KUBERNETES_NAMESPACE: "sandbox-runtime"
     DEFAULT_TIMEOUT: "300"
     MAX_TIMEOUT: "3600"
     DEFAULT_CPU: "1"
@@ -258,7 +256,6 @@ securityContext:
     drop:
       - ALL
   readOnlyRootFilesystem: false
-
 
 depServices:
   class-443:
