@@ -62,7 +62,7 @@ class TemplateDTO:
             default_cpu_cores=float(template.default_resources.cpu) if template.default_resources.cpu else 0.5,
             default_memory_mb=parse_resource(template.default_resources.memory, 512, "memory"),
             default_disk_mb=parse_resource(template.default_resources.disk, 1024, "disk"),
-            default_timeout_sec=300,  # Default, not in entity
+            default_timeout_sec=template.default_timeout_sec,
             default_env_vars=None,  # Not in entity
             is_active=True,  # Default, not in entity
             created_at=template.created_at,

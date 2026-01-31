@@ -66,6 +66,7 @@ class SqlTemplateRepository(ITemplateRepository):
             model.f_default_cpu_cores = Decimal(template.default_resources.cpu)
             model.f_default_memory_mb = parse_mb_value(template.default_resources.memory)
             model.f_default_disk_mb = parse_mb_value(template.default_resources.disk)
+            model.f_default_timeout_sec = template.default_timeout_sec
             model.f_security_context = json.dumps(template.security_context, ensure_ascii=False) if template.security_context else "{}"
             model.f_updated_at = now_ms
         else:

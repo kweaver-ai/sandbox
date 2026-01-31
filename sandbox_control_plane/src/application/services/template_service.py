@@ -101,6 +101,10 @@ class TemplateService:
             if existing and existing.id != template.id:
                 raise ValidationError(f"Template name already exists: {command.name}")
 
+        # 更新名称
+        if command.name is not None:
+            template.update_name(command.name)
+
         # 更新镜像
         if command.image_url is not None:
             template.update_image(command.image_url)

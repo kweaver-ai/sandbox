@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     idle_threshold_minutes: int = Field(default=-1, ge=-1, description="空闲超时时间（分钟），-1 表示无限期（不清理空闲会话）")
     max_lifetime_hours: int = Field(default=-1, ge=-1, description="最大生命周期（小时），-1 表示无限期")
     cleanup_interval_seconds: int = Field(default=300, ge=1)
+    creating_timeout_seconds: int = Field(default=300, ge=30, description="会话创建超时时间（秒），超过此时间的 creating 状态会话将被标记为 failed")
 
     # ============== 重试配置 ==============
     max_retry_attempts: int = Field(default=3)

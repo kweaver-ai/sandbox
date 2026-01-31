@@ -154,6 +154,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         initial_delay_seconds=60,  # 首次执行延迟 1 分钟
     )
 
+    # 注册会话创建超时检测任务（每 5 分钟）
+    from src.application.services.session_stuck_creating_service import SessionStuckCreatingService
+
+    async def stuck_creating_check_task():
+        """会话创建超时检测任务（每次执行时创建新的 repository）"""
+        async with db_manager.get_session() as session:
+            session_repo = SqlSessionRepository(session)
+            stuck_creating_svc = SessionStuckCreatingService(
+                session_repo=session_repo,
+                creating_timeout_seconds=settings.creating_timeout_seconds,
+            )
+            return await stuck_creating_svc.check_and_mark_stuck_sessions()
+
+    background_task_manager.register_task(
+        name="stuck_creating_check",
+        func=stuck_creating_check_task,
+        interval_seconds=300,  # 5 分钟，与清理任务一致
+        initial_delay_seconds=60,  # 首次执行延迟 1 分钟
+    )
+
     # 启动所有后台任务
     await background_task_manager.start_all()
     logger.info(f"Background tasks started: {background_task_manager.task_count} tasks")

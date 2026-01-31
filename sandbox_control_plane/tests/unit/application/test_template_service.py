@@ -234,3 +234,60 @@ class TestTemplateService:
 
         result = await service.update_template(command)
         assert result.id == "python-basic"
+
+    @pytest.mark.asyncio
+    async def test_update_template_name_to_new_value(self, service, template_repo):
+        """测试成功更新模板名称为新值"""
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
+        template_repo.find_by_id.return_value = template
+        template_repo.find_by_name.return_value = None  # No collision with new name
+
+        new_name = "Python Advanced"
+        command = UpdateTemplateCommand(
+            template_id="python-basic",
+            name=new_name
+        )
+
+        result = await service.update_template(command)
+
+        # Verify name was updated on the template entity
+        assert template.name == new_name
+        assert result.name == new_name
+        template_repo.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_template_timeout_to_new_value(self, service, template_repo):
+        """测试成功更新模板超时时间为新值"""
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
+        template_repo.find_by_id.return_value = template
+
+        new_timeout = 60
+        command = UpdateTemplateCommand(
+            template_id="python-basic",
+            default_timeout_sec=new_timeout
+        )
+
+        result = await service.update_template(command)
+
+        # Verify timeout was updated on the template entity
+        assert template.default_timeout_sec == new_timeout
+        assert result.default_timeout_sec == new_timeout
+        template_repo.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_template_timeout_to_zero(self, service, template_repo):
+        """测试更新模板超时时间为0（边界情况）"""
+        template = create_mock_template("python-basic", "Python Basic", "python:3.11")
+        template_repo.find_by_id.return_value = template
+
+        new_timeout = 0
+        command = UpdateTemplateCommand(
+            template_id="python-basic",
+            default_timeout_sec=new_timeout
+        )
+
+        result = await service.update_template(command)
+
+        # Verify timeout was updated to 0 (allowed)
+        assert template.default_timeout_sec == 0
+        assert result.default_timeout_sec == 0

@@ -91,6 +91,7 @@ class TemplateModel(Base):
                 disk=format_resource(self.f_default_disk_mb),
                 max_processes=128,  # Default value
             ),
+            default_timeout_sec=self.f_default_timeout_sec,
             security_context=self._parse_json(self.f_security_context) or {},
             created_at=self._millis_to_datetime(self.f_created_at) or datetime.now(),
             updated_at=self._millis_to_datetime(self.f_updated_at) or datetime.now(),
@@ -138,7 +139,7 @@ class TemplateModel(Base):
             f_default_cpu_cores=Decimal(template.default_resources.cpu),
             f_default_memory_mb=parse_mb_value(template.default_resources.memory),
             f_default_disk_mb=parse_mb_value(template.default_resources.disk),
-            f_default_timeout_sec=300,  # Default
+            f_default_timeout_sec=template.default_timeout_sec,
             f_default_env_vars="",
             f_security_context=json.dumps(template.security_context, ensure_ascii=False),
             f_is_active=1,

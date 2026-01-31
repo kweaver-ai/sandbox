@@ -17,7 +17,8 @@ from src.domain.services.scheduler import RuntimeNode
 def create_mock_template(
     template_id: str = "python-test",
     name: str = "Python Test",
-    image: str = "python:3.11"
+    image: str = "python:3.11",
+    default_timeout_sec: int = 300
 ) -> Template:
     """
     创建测试用模板实体
@@ -26,6 +27,7 @@ def create_mock_template(
         template_id: 模板 ID
         name: 模板名称
         image: 镜像名称
+        default_timeout_sec: 默认超时时间（秒）
 
     Returns:
         Template 实体
@@ -42,6 +44,7 @@ def create_mock_template(
             disk="1Gi",
             max_processes=128,
         ),
+        default_timeout_sec=default_timeout_sec,
         security_context={},
     )
 
