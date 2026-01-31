@@ -17,19 +17,22 @@ router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 @router.get("")
 async def list_files(
     session_id: str,
+    path: Optional[str] = Query(None, description="指定目录路径（相对于 workspace 根目录），不指定则列出所有文件"),
     limit: int = Query(1000, ge=1, le=10000, description="最大返回文件数"),
     service: FileService = Depends(get_file_service_db)
 ):
     """
-    列出 session 下的所有文件
+    列出 session 下的文件
 
-    返回该 session workspace 中的所有文件列表
+    返回该 session workspace 中的文件列表，支持指定目录路径
 
+    - **path**: 可选，指定目录路径（如 "src/" 或 "src/utils"），不指定则列出所有文件
     - **limit**: 最大返回文件数 (1-10000)
     """
     try:
         files = await service.list_files(
             session_id=session_id,
+            path=path,
             limit=limit
         )
 

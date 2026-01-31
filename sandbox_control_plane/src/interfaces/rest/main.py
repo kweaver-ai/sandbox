@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from src.infrastructure.persistence.database import db_manager
     from src.infrastructure.config.settings import get_settings
 
-    db_manager.initialize()
+    await db_manager.initialize()
     logger.info("Database initialized")
 
     # 根据环境决定是否自动创建表和初始化数据

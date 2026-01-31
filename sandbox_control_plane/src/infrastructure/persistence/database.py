@@ -5,16 +5,23 @@
 """
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from urllib.parse import urlparse
+
+import aiomysql
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 
 from src.infrastructure.config.settings import get_settings
+from src.infrastructure.logging import get_logger
 
 
 class Base(DeclarativeBase):
     """SQLAlchemy 基类"""
     pass
+
+
+logger = get_logger(__name__)
 
 
 # Import all models so they're registered with Base.metadata
@@ -36,8 +43,65 @@ class DatabaseManager:
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
-    def initialize(self) -> None:
-        """初始化数据库引擎"""
+    async def ensure_database_exists(self) -> None:
+        """
+        确保数据库存在，如果不存在则创建
+
+        使用原始连接（不通过 SQLAlchemy）来创建数据库，
+        因为 SQLAlchemy 需要数据库已存在才能创建引擎。
+        """
+        settings = get_settings()
+
+        # 解析数据库连接信息
+        # 从 mysql+aiomysql://user:pass@host:port/db 中提取信息
+        parsed = urlparse(settings.effective_database_url)
+
+        db_user = parsed.username
+        db_password = parsed.password
+        db_host = parsed.hostname
+        db_port = parsed.port or 3306
+        db_name = parsed.path.lstrip('/')
+
+        # 使用连接池方式连接（更稳定）
+        pool = await aiomysql.create_pool(
+            host=db_host,
+            port=db_port,
+            user=db_user,
+            password=db_password,
+            db=None,  # 不指定数据库，连接到 MySQL 服务器
+            autocommit=True,
+            minsize=1,
+            maxsize=1,
+        )
+
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # 检查数据库是否存在
+                    await cursor.execute(
+                        f"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA "
+                        f"WHERE SCHEMA_NAME = '{db_name}'"
+                    )
+                    result = await cursor.fetchone()
+
+                    if result is None:
+                        # 数据库不存在，创建它
+                        await cursor.execute(
+                            f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                        )
+                        logger.info(f"Database '{db_name}' created successfully")
+                    else:
+                        logger.debug(f"Database '{db_name}' already exists")
+        finally:
+            pool.close()
+            await pool.wait_closed()
+
+    async def initialize(self) -> None:
+        """初始化数据库引擎（确保数据库存在）"""
+        # 先确保数据库存在
+        await self.ensure_database_exists()
+
+        # 然后创建引擎
         settings = get_settings()
         self._engine = create_async_engine(
             settings.effective_database_url,

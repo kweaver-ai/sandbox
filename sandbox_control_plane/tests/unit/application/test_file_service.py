@@ -34,6 +34,7 @@ class TestFileService:
         service.file_exists = AsyncMock()
         service.get_file_info = AsyncMock()
         service.generate_presigned_url = AsyncMock()
+        service.list_files = AsyncMock()
         return service
 
     @pytest.fixture
@@ -305,3 +306,120 @@ class TestFileService:
 
         # 应使用默认 content_type
         assert result["content_type"] == "application/octet-stream"
+
+    @pytest.mark.asyncio
+    async def test_list_files_all(self, service, session_repo, storage_service, active_session):
+        """测试列出所有文件"""
+        session_repo.find_by_id.return_value = active_session
+        storage_service.list_files.return_value = [
+            {
+                "key": "sessions/sess_123/file1.txt",
+                "size": 1024,
+                "last_modified": "2024-01-01T00:00:00Z",
+                "etag": "\"abc123\""
+            },
+            {
+                "key": "sessions/sess_123/src/main.py",
+                "size": 2048,
+                "last_modified": "2024-01-02T00:00:00Z",
+                "etag": "\"def456\""
+            }
+        ]
+
+        result = await service.list_files(session_id="sess_123")
+
+        assert len(result) == 2
+        assert result[0]["name"] == "file1.txt"
+        assert result[0]["container_path"] == "/workspace/file1.txt"
+        assert result[0]["size"] == 1024
+        assert result[1]["name"] == "src/main.py"
+        assert result[1]["container_path"] == "/workspace/src/main.py"
+        assert result[1]["size"] == 2048
+        # 验证调用时使用了正确的 workspace 前缀
+        call_prefix = storage_service.list_files.call_args[0][0]
+        assert "sessions/sess_123" in call_prefix
+
+    @pytest.mark.asyncio
+    async def test_list_files_with_path(self, service, session_repo, storage_service, active_session):
+        """测试列出指定目录下的文件"""
+        session_repo.find_by_id.return_value = active_session
+        storage_service.list_files.return_value = [
+            {
+                "key": "sessions/sess_123/src/utils/helper.py",
+                "size": 512,
+                "last_modified": "2024-01-01T00:00:00Z",
+                "etag": "\"xyz789\""
+            }
+        ]
+
+        result = await service.list_files(session_id="sess_123", path="src/utils")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "src/utils/helper.py"
+        assert result[0]["container_path"] == "/workspace/src/utils/helper.py"
+        assert result[0]["size"] == 512
+        # 验证调用时使用了正确的前缀（包含子目录）
+        call_prefix = storage_service.list_files.call_args[0][0]
+        assert "sessions/sess_123/src/utils" in call_prefix
+
+    @pytest.mark.asyncio
+    async def test_list_files_with_trailing_slash_path(self, service, session_repo, storage_service, active_session):
+        """测试列出指定目录下的文件（带尾部斜杠）"""
+        session_repo.find_by_id.return_value = active_session
+        storage_service.list_files.return_value = [
+            {
+                "key": "sessions/sess_123/src/app.py",
+                "size": 1024,
+                "last_modified": "2024-01-01T00:00:00Z",
+                "etag": "\"abc\""
+            }
+        ]
+
+        result = await service.list_files(session_id="sess_123", path="src/")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "src/app.py"
+        assert result[0]["container_path"] == "/workspace/src/app.py"
+        # 验证路径被正确规范化
+        call_prefix = storage_service.list_files.call_args[0][0]
+        assert "sessions/sess_123/src" in call_prefix
+
+    @pytest.mark.asyncio
+    async def test_list_files_session_not_found(self, service, session_repo):
+        """测试列出不存在会话的文件"""
+        session_repo.find_by_id.return_value = None
+
+        with pytest.raises(NotFoundError, match="Session not found"):
+            await service.list_files(session_id="non-existent")
+
+    @pytest.mark.asyncio
+    async def test_list_files_with_limit(self, service, session_repo, storage_service, active_session):
+        """测试列出文件（带限制）"""
+        session_repo.find_by_id.return_value = active_session
+        storage_service.list_files.return_value = []
+
+        await service.list_files(session_id="sess_123", limit=100)
+
+        # 验证 limit 参数被正确传递（通过位置参数）
+        call_args = storage_service.list_files.call_args[0]
+        assert call_args[1] == 100
+
+    @pytest.mark.asyncio
+    async def test_list_files_empty_directory(self, service, session_repo, storage_service, active_session):
+        """测试列出空目录（S3 返回目录本身作为 0 大小对象）"""
+        session_repo.find_by_id.return_value = active_session
+        # S3 返回目录标记本身（以 / 结尾，size=0）
+        storage_service.list_files.return_value = [
+            {
+                "key": "s3://sandbox-workspace/sessions/sess_123/",
+                "size": 0,
+                "last_modified": "2024-01-01T00:00:00Z",
+                "etag": "\"d41d8cd98f00b204e9800998ecf8427e\""
+            }
+        ]
+
+        result = await service.list_files(session_id="sess_123")
+
+        # 应该过滤掉目录标记，返回空数组
+        assert len(result) == 0
+        assert result == []

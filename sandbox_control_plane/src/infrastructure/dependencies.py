@@ -343,8 +343,8 @@ _scheduler_singleton = None
 def initialize_dependencies(app: FastAPI):
     """初始化所有依赖项并存储到应用状态中"""
 
-    # Initialize database manager
-    db_manager.initialize()
+    # 注意：数据库管理器的初始化现在是异步的，需要在 lifespan 中调用
+    # 这里不再同步调用 initialize()
 
     # 创建仓储实例（根据配置选择 Mock 或 SQL）
     if USE_SQL_REPOSITORIES:

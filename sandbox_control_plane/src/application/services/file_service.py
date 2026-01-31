@@ -4,6 +4,7 @@
 编排文件上传下载相关的用例。
 """
 from typing import Dict, List, Any
+from urllib.parse import urlparse
 
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.services.storage import IStorageService
@@ -101,35 +102,67 @@ class FileService:
     async def list_files(
         self,
         session_id: str,
+        path: str = None,
         limit: int = 1000
     ) -> List[Dict[str, Any]]:
         """
-        列出 session 下的所有文件
+        列出 session 下的文件
 
         Args:
             session_id: Session ID
+            path: 可选，指定目录路径（相对于 workspace 根目录）
             limit: 最大返回文件数
 
         Returns:
-            文件列表，每个文件包含 name, size, modified_time 等
+            文件列表，每个文件包含 name, size, modified_time, container_path 等
         """
         session = await self._session_repo.find_by_id(session_id)
         if not session:
             raise NotFoundError(f"Session not found: {session_id}")
 
-        prefix = session.workspace_path.rstrip("/")
+        # 解析 workspace_path，提取 S3 key 前缀
+        # workspace_path 格式: s3://bucket/sessions/{session_id}/
+        # S3 key 格式: sessions/{session_id}/...
+        parsed = urlparse(session.workspace_path)
+        s3_key_prefix = parsed.path.lstrip("/")  # 去掉开头的 /，得到 "sessions/{session_id}/"
+
+        # 构建 S3 查询前缀
+        if path:
+            normalized_path = path.strip().strip("/")
+            if normalized_path:
+                # 确保 s3_key_prefix 以 / 结尾
+                base = s3_key_prefix.rstrip("/")
+                prefix = f"{base}/{normalized_path}"
+            else:
+                prefix = s3_key_prefix.rstrip("/")
+        else:
+            prefix = s3_key_prefix.rstrip("/")
+
         files = await self._storage_service.list_files(prefix, limit)
 
-        prefix_len = len(prefix) + 1
         result = []
 
         for file in files:
             key = file["key"]
-            # 提取相对于 workspace 的文件名
-            relative_name = key[prefix_len:].lstrip("/") if key.startswith(prefix) else key
+
+            # 提取相对于 session workspace 的路径
+            # key 格式: sessions/{session_id}/conversation-1231/uploads/temparea/test.csv
+            # s3_key_prefix 格式: sessions/{session_id}/
+            if key.startswith(s3_key_prefix):
+                relative_path = key[len(s3_key_prefix):].lstrip("/")
+            else:
+                relative_path = key.lstrip("/")
+
+            # 过滤掉空路径（目录本身）和以斜杠结尾的目录标记
+            if not relative_path or relative_path.endswith("/"):
+                continue
+
+            # 容器内挂载路径: /workspace/{relative_path}
+            container_path = f"/workspace/{relative_path}"
 
             result.append({
-                "name": relative_name,
+                "name": relative_path,
+                "container_path": container_path,
                 "size": file["size"],
                 "modified_time": file.get("last_modified"),
                 "etag": file.get("etag")
