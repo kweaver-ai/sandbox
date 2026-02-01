@@ -194,3 +194,9 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
 ]
+
+[tool.uv]
+# 使用清华大学 PyPI 镜像源加速依赖下载
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+# 备用源：阿里云镜像（如需要可取消注释）
+# extra-index-url = ["https://mirrors.aliyun.com/pypi/simple/"]

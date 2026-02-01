@@ -213,23 +213,27 @@ After starting the system with docker-compose, the following services are availa
 ### Control Plane
 
 ```bash
-# Local development with docker-compose
 cd sandbox_control_plane
+
+# 使用 uv 同步依赖
+uv sync
+
+# Local development with docker-compose
 docker-compose up -d
 
-# Run tests
-pytest tests/
-pytest tests/contract/
-pytest tests/integration/
-pytest tests/unit/
+# Run tests (使用 uv)
+uv run pytest tests/
+uv run pytest tests/contract/
+uv run pytest tests/integration/
+uv run pytest tests/unit/
 
 # Run with coverage
-pytest --cov=sandbox_control_plane --cov-report=html
+uv run pytest --cov=sandbox_control_plane --cov-report=html
 
 # Code quality
-black sandbox_control_plane/ tests/
-flake8 sandbox_control_plane/ tests/
-mypy sandbox_control_plane/
+uv run black sandbox_control_plane/ tests/
+uv run ruff check sandbox_control_plane/ tests/
+uv run mypy sandbox_control_plane/
 ```
 
 ### Web Console

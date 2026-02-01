@@ -26,13 +26,17 @@ Interfaces → Application → Domain ← Infrastructure
 git clone https://github.com/sandbox/sandbox-control-plane
 cd sandbox-control-plane
 
-# 创建虚拟环境
-python -m venv .venv
+# 使用 uv 管理项目
+# 安装 uv（如果尚未安装）
+# curl -LsSf https://astral.sh/uv/install.sh | sh  # Linux/macOS
+# powershell -c "irm https://astral.sh/uv/install.ps1"  # Windows
+
+# 同步依赖
+uv sync
+
+# 激活虚拟环境
 source .venv/bin/activate  # Linux/macOS
 .venv\Scripts\activate     # Windows
-
-# 安装依赖
-pip install -e ".[dev]"
 ```
 
 ### 配置
@@ -84,30 +88,30 @@ src/
 ## 测试
 
 ```bash
-# 运行所有测试
-pytest
+# 使用 uv 运行所有测试
+uv run pytest
 
 # 运行单元测试
-pytest tests/unit
+uv run pytest tests/unit
 
 # 运行集成测试
-pytest tests/integration
+uv run pytest tests/integration
 
 # 生成覆盖率报告
-pytest --cov=src --cov-report=html
+uv run pytest --cov=src --cov-report=html
 ```
 
 ## 开发
 
 ```bash
-# 代码格式化
-black src tests
+# 使用 uv 运行代码格式化
+uv run black src tests
 
 # 代码检查
-ruff check src tests
+uv run ruff check src tests
 
 # 类型检查
-mypy src
+uv run mypy src
 ```
 
 ## License
