@@ -32,10 +32,17 @@ class TemplateService:
         创建模板用例
 
         流程：
-        1. 验证模板名称唯一性
-        2. 创建模板实体
-        3. 保存到仓储
+        1. 验证模板ID唯一性
+        2. 验证模板名称唯一性
+        3. 创建模板实体
+        4. 保存到仓储
         """
+        # 检查 ID 唯一性
+        existing_by_id = await self._template_repo.find_by_id(command.template_id)
+        if existing_by_id:
+            raise ValidationError(f"Template ID already exists: {command.template_id}")
+
+        # 检查名称唯一性
         existing = await self._template_repo.find_by_name(command.name)
         if existing:
             raise ValidationError(f"Template name already exists: {command.name}")
@@ -54,6 +61,7 @@ class TemplateService:
                 disk=f"{command.default_disk_mb}Mi",
                 max_processes=128,
             ),
+            default_timeout_sec=command.default_timeout_sec or 300,
             security_context={},
         )
 
@@ -123,6 +131,10 @@ class TemplateService:
                 disk=disk,
                 max_processes=template.default_resources.max_processes,
             )
+
+        # 更新超时时间
+        if command.default_timeout_sec is not None:
+            template.update_timeout(command.default_timeout_sec)
 
         await self._template_repo.save(template)
         return TemplateDTO.from_entity(template)

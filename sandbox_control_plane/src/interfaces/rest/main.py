@@ -239,7 +239,7 @@ def create_app() -> FastAPI:
 
 def _register_exception_handlers(app: FastAPI) -> None:
     """注册异常处理器"""
-    from src.shared.errors.domain import NotFoundError
+    from src.shared.errors.domain import NotFoundError, ValidationError
 
     @app.exception_handler(NotFoundError)
     async def not_found_exception_handler(
@@ -257,6 +257,27 @@ def _register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             content={
                 "error": "Not Found",
+                "message": exc.message,
+                "detail": str(exc),
+            },
+        )
+
+    @app.exception_handler(ValidationError)
+    async def validation_exception_handler(
+        request: Request,
+        exc: ValidationError
+    ) -> JSONResponse:
+        """409 Conflict 异常处理"""
+        logger.warning(
+            "Validation error (conflict)",
+            path=request.url.path,
+            method=request.method,
+            error=str(exc),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "error": "Conflict",
                 "message": exc.message,
                 "detail": str(exc),
             },
