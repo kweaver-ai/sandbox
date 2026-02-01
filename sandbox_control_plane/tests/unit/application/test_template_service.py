@@ -38,6 +38,7 @@ class TestTemplateService:
     @pytest.mark.asyncio
     async def test_create_template_success(self, service, template_repo):
         """测试成功创建模板"""
+        template_repo.find_by_id.return_value = None
         template_repo.find_by_name.return_value = None
 
         command = CreateTemplateCommand(
@@ -64,6 +65,7 @@ class TestTemplateService:
             template_id="existing-id",
             name="Python Data Science"
         )
+        template_repo.find_by_id.return_value = None
         template_repo.find_by_name.return_value = existing_template
 
         command = CreateTemplateCommand(
