@@ -40,20 +40,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /tmp/* /var/tmp/*
 
+# Install uv (fast Python package installer)
+RUN pip install --no-cache-dir uv
+
 WORKDIR /app
 
 # Copy dependency files first (better layer caching)
-COPY pyproject.toml  README.md ./
+COPY pyproject.toml uv.lock README.md ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    if [ "$USE_MIRROR" = "true" ]; then \
-      pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
-      pip config set global.trusted-host $PIP_MIRROR; \
+# Install Python dependencies using uv (faster, uses lock file)
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      export UV_INDEX_URL=https://$PIP_MIRROR/pypi/web/simple; \
     fi && \
-    pip install --no-cache-dir . && \
-    # Clean up pip cache
-    rm -rf /root/.cache/pip
+    uv sync --frozen --no-dev
 
 # Copy source code (dockerignore will exclude unnecessary files)
 COPY src/ ./src/
@@ -61,8 +60,9 @@ COPY src/ ./src/
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/.venv/lib/python3.11/site-packages:/app/src
 ENV PYTHONHASHSEED=0
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Expose API port
 EXPOSE 8000
@@ -71,5 +71,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# Start the control plane
-CMD ["uvicorn", "src.interfaces.rest.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start the control plane (use uv's venv python)
+CMD [".venv/bin/python", "-m", "uvicorn", "src.interfaces.rest.main:app", "--host", "0.0.0.0", "--port", "8000"]

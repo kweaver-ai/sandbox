@@ -216,6 +216,7 @@ After starting the system with docker-compose, the following services are availa
 cd sandbox_control_plane
 
 # 使用 uv 同步依赖
+# uv.lock is committed for reproducible builds across all environments
 uv sync
 
 # Local development with docker-compose
