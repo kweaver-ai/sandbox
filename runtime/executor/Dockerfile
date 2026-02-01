@@ -42,21 +42,27 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Install uv (fast Python package installer)
+RUN pip install --no-cache-dir uv
+
 # Create non-privileged user
 # The executor runs as UID:GID 1000:1000 for security
 RUN groupadd -g 1000 sandbox && \
     useradd -m -u 1000 -g sandbox sandbox
 
-# Copy executor code
-COPY runtime/executor/ /app/executor/
+WORKDIR /app
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    if [ "$USE_MIRROR" = "true" ]; then \
-      pip config set global.index-url https://$PIP_MIRROR/pypi/web/simple && \
-      pip config set global.trusted-host $PIP_MIRROR; \
+# Copy dependency files first (better layer caching)
+COPY runtime/executor/pyproject.toml runtime/executor/uv.lock ./
+
+# Install Python dependencies using uv (faster, uses lock file)
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      export UV_INDEX_URL=https://$PIP_MIRROR/pypi/web/simple; \
     fi && \
-    pip install --no-cache-dir -r /app/executor/requirements.txt
+    uv sync --frozen --no-dev
+
+# Copy executor code
+COPY runtime/executor/ ./executor/
 
 # Create workspace and venv directories
 # /workspace will be mounted as a volume for S3/ephemeral storage
@@ -71,7 +77,8 @@ USER sandbox
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV WORKSPACE_PATH=/workspace
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/.venv/lib/python3.11/site-packages:/app
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Expose executor API port
 EXPOSE 8080
@@ -84,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 # The executor runs as PID 1 and manages its lifecycle
 # Note: When dependencies are specified, control plane will inject
 # a custom entrypoint script to install them before starting the executor
-CMD ["python", "-m", "executor.interfaces.http.rest"]
+CMD [".venv/bin/python", "-m", "executor.interfaces.http.rest"]
