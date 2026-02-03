@@ -23,7 +23,7 @@ class SessionModel(Base):
     __tablename__ = "t_sandbox_session"
 
     # Primary fields
-    f_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    f_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     f_template_id: Mapped[str] = mapped_column(String(40), nullable=False)
 
     # Status

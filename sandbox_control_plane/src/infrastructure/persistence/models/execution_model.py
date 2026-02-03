@@ -23,8 +23,8 @@ class ExecutionModel(Base):
     __tablename__ = "t_sandbox_execution"
 
     # Primary fields
-    f_id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    f_session_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    f_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    f_session_id: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Status
     f_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
