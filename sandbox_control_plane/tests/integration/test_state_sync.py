@@ -166,7 +166,7 @@ class TestStateSyncService:
             pytest.fail("Session did not reach running state")
 
         # Terminate session
-        response = await http_client.delete(f"/sessions/{session_id}")
+        response = await http_client.post(f"/sessions/{session_id}/terminate")
         assert response.status_code == 200
 
         # Verify session status is terminated

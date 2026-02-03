@@ -79,7 +79,7 @@ def handler(event):
         assert "Full workflow test" in result["stdout"]
 
         # Step 4: Terminate session
-        terminate_response = await http_client.delete(f"/sessions/{session_id}")
+        terminate_response = await http_client.post(f"/sessions/{session_id}/terminate")
         assert terminate_response.status_code == 200
         terminated_session = terminate_response.json()
         assert terminated_session["status"] in ("terminated", "terminating")
