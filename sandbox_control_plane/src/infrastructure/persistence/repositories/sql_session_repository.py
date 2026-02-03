@@ -22,8 +22,9 @@ class SqlSessionRepository(ISessionRepository):
     这是基础设施层的 Adapter，实现领域层定义的 Port。
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, execution_repo=None):
         self._session = session
+        self._execution_repo = execution_repo
 
     async def save(self, session: Session) -> None:
         """保存会话"""
@@ -125,7 +126,15 @@ class SqlSessionRepository(ISessionRepository):
         return [model.to_entity() for model in result.scalars().all()]
 
     async def delete(self, session_id: str) -> None:
-        """删除会话"""
+        """
+        删除会话及其所有执行记录（级联删除）
+
+        先删除关联的 execution 记录，再删除 session 记录。
+        """
+        # 1. 先删除关联的 execution 记录（级联删除）
+        if self._execution_repo:
+            await self._execution_repo.delete_by_session_id(session_id)
+        # 2. 再删除 session 记录
         stmt = delete(SessionModel).where(SessionModel.f_id == session_id)
         await self._session.execute(stmt)
         await self._session.flush()

@@ -184,3 +184,38 @@ class TestSessionService:
         assert result.status == SessionStatus.TERMINATED.value
         # 不应该再次调用 save
         session_repo.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_session_success(self, service, session_repo, execution_repo):
+        """测试成功删除会话（硬删除，级联删除执行记录）"""
+        session = Session(
+            id="sess_20240115_abc123",
+            template_id="python-datascience",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_20240115_abc123",
+            runtime_type="docker"
+        )
+        session_repo.find_by_id.return_value = session
+
+        # Mock execution repo's delete_by_session_id method
+        execution_repo.delete_by_session_id = AsyncMock()
+        session_repo.delete = AsyncMock()
+
+        # Delete should not return anything
+        result = await service.delete_session("sess_20240115_abc123")
+
+        assert result is None
+        # Verify session_repo.delete was called
+        session_repo.delete.assert_called_once_with("sess_20240115_abc123")
+
+    @pytest.mark.asyncio
+    async def test_delete_session_not_found(self, service, session_repo):
+        """测试删除不存在的会话"""
+        session_repo.find_by_id.return_value = None
+
+        with pytest.raises(NotFoundError, match="Session not found"):
+            await service.delete_session("non-existent")
+
+        # Verify delete was not called
+        session_repo.delete.assert_not_called()

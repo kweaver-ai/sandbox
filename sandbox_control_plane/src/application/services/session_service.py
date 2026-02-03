@@ -353,7 +353,7 @@ class SessionService:
 
     async def terminate_session(self, session_id: str) -> SessionDTO:
         """
-        终止会话用例
+        终止会话用例（软终止，保留记录）
 
         流程：
         1. 查找会话
@@ -393,6 +393,40 @@ class SessionService:
         logger.info("Session terminated successfully", session_id=session_id, final_status=session.status.value)
 
         return SessionDTO.from_entity(session)
+
+    async def delete_session(self, session_id: str) -> None:
+        """
+        删除会话用例（硬删除，级联删除执行记录）
+
+        流程：
+        1. 查找会话
+        2. 执行清理（销毁容器 + 删除 S3）
+        3. 级联删除数据库记录
+        """
+        logger.info("Deleting session", session_id=session_id)
+
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            logger.warning("Session not found for deletion", session_id=session_id)
+            raise NotFoundError(f"Session not found: {session_id}")
+
+        logger.debug(
+            "Deleting session",
+            session_id=session_id,
+            container_id=session.container_id,
+            status=session.status.value,
+        )
+
+        # 销毁容器
+        await self._destroy_container(session)
+
+        # 清理 S3 文件
+        await self._cleanup_storage(session)
+
+        # 级联删除数据库记录（session + executions）
+        await self._session_repo.delete(session_id)
+
+        logger.info("Session deleted successfully", session_id=session_id)
 
     async def _destroy_container(self, session: Session) -> None:
         """销毁会话的容器"""

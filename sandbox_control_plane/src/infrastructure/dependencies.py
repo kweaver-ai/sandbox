@@ -467,16 +467,6 @@ async def get_db_session():
         yield session
 
 
-def get_session_repository(
-    session = Depends(get_db_session)
-) -> ISessionRepository:
-    """获取会话仓储（SQL 或 Mock）"""
-    if USE_SQL_REPOSITORIES:
-        from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
-        return SqlSessionRepository(session)
-    return MockSessionRepository()
-
-
 def get_execution_repository(
     session = Depends(get_db_session)
 ) -> IExecutionRepository:
@@ -485,6 +475,17 @@ def get_execution_repository(
         from src.infrastructure.persistence.repositories.sql_execution_repository import SqlExecutionRepository
         return SqlExecutionRepository(session)
     return MockExecutionRepository()
+
+
+def get_session_repository(
+    session = Depends(get_db_session),
+    execution_repo: IExecutionRepository = Depends(get_execution_repository)
+) -> ISessionRepository:
+    """获取会话仓储（SQL 或 Mock）"""
+    if USE_SQL_REPOSITORIES:
+        from src.infrastructure.persistence.repositories.sql_session_repository import SqlSessionRepository
+        return SqlSessionRepository(session, execution_repo)
+    return MockSessionRepository()
 
 
 def get_template_repository(

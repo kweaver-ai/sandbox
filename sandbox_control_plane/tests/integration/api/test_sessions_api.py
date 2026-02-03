@@ -42,9 +42,9 @@ class TestSessionsAPI:
         # Session may be in any of these states depending on creation speed
         assert data["status"] in ("creating", "starting", "initializing", "running", "ready")
 
-        # Cleanup
+        # Cleanup - terminate session
         session_id = data["id"]
-        await http_client.delete(f"/sessions/{session_id}")
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_create_session_with_defaults(self, http_client: AsyncClient, test_template_id: str):
         """Test creating a session with default resource values."""
@@ -61,9 +61,9 @@ class TestSessionsAPI:
         assert "id" in data
         assert data["template_id"] == test_template_id
 
-        # Cleanup
+        # Cleanup - terminate session
         session_id = data["id"]
-        await http_client.delete(f"/sessions/{session_id}")
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_create_session_invalid_template(self, http_client: AsyncClient):
         """Test using non-existent template to create session."""
@@ -198,12 +198,23 @@ class TestSessionsAPI:
                     break
             await asyncio.sleep(1)
 
-        # Terminate the session
-        terminate_response = await http_client.delete(f"/sessions/{session_id}")
+        # Terminate the session using POST /terminate endpoint
+        terminate_response = await http_client.post(f"/sessions/{session_id}/terminate")
 
         assert terminate_response.status_code == 200
         data = terminate_response.json()
         assert data["status"] in ("terminated", "terminating")
+
+        # Verify session record still exists after terminate
+        get_response = await http_client.get(f"/sessions/{session_id}")
+        assert get_response.status_code == 200
+
+        # Clean up - delete the session permanently
+        await http_client.delete(f"/sessions/{session_id}")
+
+        # Verify session is now deleted (returns 404)
+        get_response_after_delete = await http_client.get(f"/sessions/{session_id}")
+        assert get_response_after_delete.status_code == 404
 
     async def test_session_container_created(
         self,
@@ -252,8 +263,8 @@ class TestSessionsAPI:
                     break
             await asyncio.sleep(1)
 
-        # Terminate the session
-        await http_client.delete(f"/sessions/{session_id}")
+        # Terminate the session using POST /terminate endpoint
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
         # Wait for termination
         for _ in range(10):
@@ -269,6 +280,9 @@ class TestSessionsAPI:
         if response.status_code == 200:
             session_data = response.json()
             assert session_data["status"] == "terminated"
+
+        # Clean up - delete the session permanently
+        await http_client.delete(f"/sessions/{session_id}")
 
     async def test_session_with_custom_env_vars(
         self,
@@ -294,9 +308,9 @@ class TestSessionsAPI:
         data = response.json()
         assert data["id"]
 
-        # Cleanup
+        # Cleanup - terminate session
         session_id = data["id"]
-        await http_client.delete(f"/sessions/{session_id}")
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_session_with_custom_resources(
         self,
@@ -319,9 +333,9 @@ class TestSessionsAPI:
         data = response.json()
         assert data["id"]
 
-        # Cleanup
+        # Cleanup - terminate session
         session_id = data["id"]
-        await http_client.delete(f"/sessions/{session_id}")
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_health_check(self, http_client: AsyncClient):
         """Test health check API."""
@@ -354,9 +368,9 @@ class TestSessionsAPI:
         # Persistent sessions should have mode field or be distinguishable
         # (implementation may vary)
 
-        # Cleanup
+        # Cleanup - terminate session
         session_id = data["id"]
-        await http_client.delete(f"/sessions/{session_id}")
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
 
 @pytest.mark.asyncio
@@ -403,8 +417,8 @@ class TestSessionsAPIWithExecution:
         )
         assert execution_response.status_code in (201, 200)
 
-        # Cleanup
-        await http_client.delete(f"/sessions/{session_id}")
+        # Cleanup - terminate session
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
 
 @pytest.mark.asyncio
@@ -437,8 +451,8 @@ class TestSessionStatusTransitions:
         # Session status should be 'creating' when just starting
         assert session_data["status"] == "creating", f"Expected 'creating' status, got '{session_data['status']}'"
 
-        # Cleanup
-        await http_client.delete(f"/sessions/{session_id}")
+        # Cleanup - terminate session
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_session_status_running_when_startup_succeeds(
         self,
@@ -474,8 +488,8 @@ class TestSessionStatusTransitions:
         else:
             pytest.fail("Session did not reach 'running' status within timeout")
 
-        # Cleanup
-        await http_client.delete(f"/sessions/{session_id}")
+        # Cleanup - terminate session
+        await http_client.post(f"/sessions/{session_id}/terminate")
 
     async def test_session_status_failed_when_dependency_install_fails(
         self,
@@ -544,5 +558,5 @@ class TestSessionStatusTransitions:
                 else:
                     pytest.fail(f"Session did not reach 'failed' status. Final status: {final_data['status']}")
 
-        # Cleanup
-        await http_client.delete(f"/sessions/{session_id}")
+        # Cleanup - terminate session
+        await http_client.post(f"/sessions/{session_id}/terminate")

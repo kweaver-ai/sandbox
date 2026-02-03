@@ -3,7 +3,7 @@
 
 定义会话相关的 HTTP 端点。
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from typing import List, Optional
 
 from src.application.services.session_service import SessionService
@@ -127,14 +127,39 @@ async def get_session(
     return _map_dto_to_response(session_dto)
 
 
-@router.delete("/{session_id}", response_model=SessionResponse)
+@router.post("/{session_id}/terminate", response_model=SessionResponse)
 async def terminate_session(
     session_id: str,
     service: SessionService = Depends(get_session_service_db)
 ):
-    """终止会话"""
+    """
+    终止会话（软终止，保留记录）
+
+    行为：
+    1. 销毁容器
+    2. 删除 S3 工作区文件
+    3. 更新会话状态为 terminated
+    4. 保留数据库记录
+    """
     session_dto = await service.terminate_session(session_id)
     return _map_dto_to_response(session_dto)
+
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: str,
+    service: SessionService = Depends(get_session_service_db)
+):
+    """
+    删除会话（硬删除，级联删除执行记录）
+
+    行为：
+    1. 执行清理（销毁容器 + 删除 S3 文件）
+    2. 硬删除 session 记录
+    3. 级联删除所有关联的 execution 记录
+    """
+    await service.delete_session(session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _map_dto_to_response(dto: SessionDTO) -> SessionResponse:
