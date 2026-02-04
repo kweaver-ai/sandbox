@@ -293,7 +293,7 @@
         }
     ],
     "images": [
-        "acr.aishu.cn/sandbox/minio:RELEASE-2025-09-07T16-13-09Z",
+        "acr.aishu.cn/sandbox/minio:RELEASE.2025-09-07T16-13-09Z",
         "acr.aishu.cn/dip/sandbox-template-python-basic:latest"
     ]
 }
