@@ -13,8 +13,9 @@ import httpx
 import asyncio
 import json
 import os
+import math
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 
 from executor.domain.ports import ICallbackPort
@@ -89,6 +90,31 @@ class CallbackClient(ICallbackPort):
             await self._client.aclose()
             self._client = None
 
+    def _sanitize_for_json(self, data: Any) -> Any:
+        """
+        Sanitize data for JSON serialization.
+
+        Converts non-JSON-compliant float values (NaN, Infinity, -Infinity) to None.
+        Recursively handles nested dictionaries and lists.
+
+        Args:
+            data: Data to sanitize
+
+        Returns:
+            Sanitized data with JSON-compliant values
+        """
+        if isinstance(data, float):
+            # Check for non-JSON-compliant float values
+            if math.isnan(data) or math.isinf(data):
+                return None
+            return data
+        elif isinstance(data, dict):
+            return {k: self._sanitize_for_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._sanitize_for_json(item) for item in data]
+        else:
+            return data
+
     async def report_result(
         self,
         execution_id: str,
@@ -131,14 +157,18 @@ class CallbackClient(ICallbackPort):
         }
         api_status = status_mapping.get(result.status.value, result.status.value)
 
+        # Sanitize return_value and metrics for JSON serialization
+        sanitized_return_value = self._sanitize_for_json(result.return_value) if result.return_value else None
+        sanitized_metrics = self._sanitize_for_json(result.metrics.to_dict()) if result.metrics else None
+
         payload = {
             "status": api_status,
             "stdout": result.stdout,
             "stderr": result.stderr,
             "exit_code": result.exit_code,
             "execution_time": execution_time,
-            "return_value": result.return_value,
-            "metrics": result.metrics.to_dict() if result.metrics else None,
+            "return_value": sanitized_return_value,
+            "metrics": sanitized_metrics,
             # Send file paths (strings) instead of full artifact objects
             "artifacts": [str(a.path) for a in result.artifacts],
         }
@@ -405,10 +435,10 @@ class CallbackClient(ICallbackPort):
         try:
             file_path = self.results_dir / f"{execution_id}.json"
 
-            # Build persistence payload
+            # Build persistence payload with sanitization
             payload = {
                 "execution_id": execution_id,
-                "result": result.to_dict(),
+                "result": self._sanitize_for_json(result.to_dict()),
                 "persisted_at": datetime.now().isoformat(),
                 "control_plane_url": self.control_plane_url,
             }
