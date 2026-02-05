@@ -97,7 +97,7 @@ spec:
               echo "Control Plane is ready!"
       containers:
         - name: web
-          image: "{{- if .Values.web.image.registry }}{{ .Values.web.image.registry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          image: "{{- if .Values.web.image.registry }}{{ .Values.web.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
           # NOTE: DO NOT add VITE_API_BASE_URL environment variable here.
           # The frontend uses runtime URL detection via getApiBaseUrl()

@@ -59,7 +59,7 @@ spec:
     spec:
       containers:
         - name: mariadb
-          image: "{{- if .Values.mariadb.image.registry }}{{ .Values.mariadb.image.registry }}/{{ end }}{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          image: "{{- if .Values.mariadb.image.registry }}{{ .Values.mariadb.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
           imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
           ports:
             - name: mysql

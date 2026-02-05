@@ -98,7 +98,7 @@ spec:
       #         echo "MariaDB is ready!"
       containers:
         - name: control-plane
-          image: "{{- if .Values.controlPlane.image.registry }}{{ .Values.controlPlane.image.registry }}/{{ end }}{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          image: "{{- if .Values.controlPlane.image.registry }}{{ .Values.controlPlane.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           ports:
             - name: http
