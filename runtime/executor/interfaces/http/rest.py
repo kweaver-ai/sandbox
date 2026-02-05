@@ -5,6 +5,7 @@ FastAPI application serving as the HTTP interface for the executor.
 Runs inside the container and receives execution requests from Control Plane.
 """
 
+import asyncio
 import os
 import platform
 import time
@@ -611,13 +612,14 @@ def create_app() -> FastAPI:
             env_vars=request.env_vars,
         )
 
-        # Execute
-        result = await command.execute(domain_request)
+        # Execute in background - return immediately
+        # The command will execute asynchronously and report results via callback
+        asyncio.create_task(command.execute(domain_request))
 
         return {
             "execution_id": request.execution_id,
-            "status": result.status.value,
-            "message": "Execution completed",
+            "status": "PENDING",
+            "message": "Execution submitted",
         }
 
     return app
