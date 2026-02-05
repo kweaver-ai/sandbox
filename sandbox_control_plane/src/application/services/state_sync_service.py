@@ -31,10 +31,12 @@ class StateSyncService:
         session_repo: ISessionRepository,
         container_scheduler: IContainerScheduler,
         scheduler=None,
+        control_plane_url: str = "http://control-plane:8000",
     ):
         self._session_repo = session_repo
         self._container_scheduler = container_scheduler
         self._scheduler = scheduler
+        self._control_plane_url = control_plane_url
 
     async def sync_on_startup(self) -> Dict[str, int]:
         """
@@ -178,7 +180,7 @@ class StateSyncService:
                     **(session.env_vars or {}),
                     "SESSION_ID": session.id,
                     "WORKSPACE_PATH": session.workspace_path,
-                    "CONTROL_PLANE_URL": "http://control-plane:8000",
+                    "CONTROL_PLANE_URL": self._control_plane_url,
                     "DISABLE_BWRAP": "true",
                 },
                 cpu_limit=session.resource_limit.cpu if session.resource_limit else "1",

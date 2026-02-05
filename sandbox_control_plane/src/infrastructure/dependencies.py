@@ -808,8 +808,19 @@ def get_state_sync_service():
         scheduler = _create_scheduler_for_state_sync(container_scheduler)
         _scheduler_singleton = scheduler
 
+    # Build CONTROL_PLANE_URL based on environment
+    if IS_IN_KUBERNETES:
+        control_plane_url = (
+            settings.control_plane_url
+            if settings.control_plane_url is not None
+            else f"http://sandbox-control-plane.{settings.kubernetes_namespace}.svc.cluster.local:8000"
+        )
+    else:
+        control_plane_url = settings.control_plane_url
+
     return StateSyncService(
         session_repo=session_repo,
         container_scheduler=container_scheduler,
         scheduler=scheduler,
+        control_plane_url=control_plane_url,
     )
