@@ -339,7 +339,7 @@ pip3 install \\
     --no-cache-dir \\
     --no-warn-script-location \\
     --disable-pip-version-check \\
-    --index-url https://pypi.org/simple/ \\
+    --index-url https://mirrors.aliyun.com/pypi/web/simple/ \\
     {deps_list}
 
 echo "✅ Dependencies installed"
