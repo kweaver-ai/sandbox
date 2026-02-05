@@ -2,7 +2,7 @@
 
 All new features and capabilities added in this branch (`feature/803264`) are documented below.
 
-## [Unreleased]
+## [0.2.0]
 
 ### 🚀 New Features
 
@@ -168,4 +168,4 @@ DISABLE_BWRAP=true
 
 ---
 
-*This changelog covers new features from `main` to `feature/803264`.*
+*Released on 2025-02-05*
