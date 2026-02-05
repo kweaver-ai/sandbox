@@ -794,6 +794,7 @@ def get_state_sync_service():
     global _scheduler_singleton
     from src.application.services.state_sync_service import StateSyncService
 
+    settings = get_settings()
     container_scheduler = _container_scheduler_singleton
 
     # 创建会话仓储
