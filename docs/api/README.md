@@ -1,114 +1,107 @@
 # Sandbox API 文档
 
-本目录包含沙箱平台的 OpenAPI 3.0.2 规范文档。
+本目录包含沙箱平台的 OpenAPI 3.1.0 规范文档。
 
 ## 文档列表
 
-### 1. [control-plane-api.yaml](./control-plane-api.yaml)
-**控制平面 API** - 由 AI Agent 或上层服务调用的公开接口
+### [sandbox-openapi.json](./sandbox-openapi.json)
+**完整的 OpenAPI 3.1.0 规范** - 包含所有公开和内部 API
+
+**API 版本**: 2.1.0
 
 **主要功能**:
-- 会话管理：创建、查询、终止会话
-- 代码执行：提交执行任务并获取结果
-- 文件操作：上传/下载会话工作目录中的文件
+- 健康检查：服务状态和依赖项健康检查
+- 会话管理：创建、查询、终止会话（支持软终止和硬删除）
+- 代码执行：提交异步/同步执行任务并获取结果
+- 文件操作：列出、上传、下载会话工作区文件
 - 模板管理：管理沙箱环境模板
-- 容器管理：监控容器状态和资源使用
+- 内部回调：Executor 回调接口（结果上报、心跳、容器生命周期）
 
 **调用方**:
 - AI Agent 应用
 - Data Agent 系统
-- Operator Platform
-- 其他上层服务
+- 上层业务服务
+- sandbox-executor (内部回调)
 
-**基础路径**: `/api/v1`
-
-### 2. [internal-api.yaml](./internal-api.yaml)
-**内部回调 API** - 由 Executor (容器内 sandbox-executor) 调用的内部接口
-
-**主要功能**:
-- 执行结果上报：上报执行结果到控制平面
-- 状态变更上报：上报执行状态变化
-- 心跳上报：定时上报心跳以防止被误判为崩溃
-- 容器生命周期事件：上报容器就绪、退出等事件
-
-**调用方**:
-- sandbox-executor (容器内守护进程)
-
-**基础路径**: `/internal`
-
-**安全要求**:
-- 仅限内网访问
-- 使用 INTERNAL_API_TOKEN 认证
-- 建议配置 NetworkPolicy 限制访问
+**基础路径**:
+- 公开 API: `/api/v1`
+- 内部 API: `/api/v1/internal`
 
 ## 架构说明
 
 ### 容器调度架构
 
-沙箱平台采用 **Container Scheduler** 作为 Control Plane 的内部模块，直接调用 Docker/K8s API 管理容器生命周期：
+沙箱平台采用 **Control Plane + Container Scheduler** 架构：
 
 ```
-Control Plane
-  └─ Container Scheduler (模块)
-      ├─ K8s Scheduler (kubernetes python client)
-      └─ Docker Scheduler (aiodocker SDK)
-          ↓ 直接调用
-      Container Runtime (K8s Pod / Docker Container)
-          ↓
-      Executor (sandbox-executor 守护进程)
-          ↓ HTTP
-      Control Plane (结果上报)
+┌─────────────────────────────────────────────────────────────┐
+│                     Control Plane (FastAPI)                  │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │           Container Scheduler (内部模块)                │ │
+│  │   ├─ K8s Scheduler (kubernetes python client)          │ │
+│  │   └─ Docker Scheduler (aiodocker SDK)                  │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                          ↓                                  │
+│              Container Runtime (K8s/Docker)                 │
+│                          ↓                                  │
+│              Executor (sandbox-executor 守护进程)           │
+│                          ↓ HTTP 回调                        │
+│                   Control Plane                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### 关键组件
 
-- **Container Scheduler**: 容器调度器模块，负责根据模板选择运行时类型并构造容器配置
-- **Container Runtime**: 真正的运行时环境（K8s Pod 或 Docker Container）
-- **Executor**: 运行在容器内的 HTTP 守护进程，接收执行请求并调用 Bubblewrap 隔离用户代码
+- **Control Plane**: FastAPI 管理服务，处理 API 请求、调度、会话管理
+- **Container Scheduler**: 容器调度器，直接调用 Docker/K8s API 管理容器生命周期
+- **Executor**: 容器内 HTTP 守护进程，接收执行请求并使用 Bubblewrap 隔离用户代码
 
 ## 接口分类
 
-### 按调用方分类
-
-| 接口分类 | 文档 | 调用方 | 用途 |
-|---------|------|--------|------|
-| 控制平面 API | control-plane-api.yaml | AI Agent / 上层服务 | 提交执行任务、管理会话 |
-| 内部 API | internal-api.yaml | Executor | 上报执行结果和状态 |
-
 ### 按功能分类
 
+#### 健康检查
+- `GET /api/v1/health` - 基础健康检查
+- `GET /api/v1/health/detailed` - 详细健康检查（含依赖项状态）
+- `POST /api/v1/health/sync` - 手动触发状态同步
+
 #### 会话管理
-- `POST /api/v1/sessions` - 创建会话
-- `GET /api/v1/sessions/{id}` - 获取会话详情
-- `DELETE /api/v1/sessions/{id}` - 终止会话
-- `GET /api/v1/sessions` - 列出会话
+- `POST /api/v1/sessions` - 创建会话（支持依赖安装）
+- `GET /api/v1/sessions` - 列出会话（支持 status/template_id 筛选、分页）
+- `GET /api/v1/sessions/{session_id}` - 获取会话详情
+- `POST /api/v1/sessions/{session_id}/terminate` - 软终止会话（保留记录）
+- `DELETE /api/v1/sessions/{session_id}` - 硬删除会话（级联删除执行记录）
 
 #### 代码执行
-- `POST /api/v1/sessions/{session_id}/execute` - 提交执行任务
+- `POST /api/v1/executions/sessions/{session_id}/execute` - 提交异步执行任务
+- `POST /api/v1/executions/sessions/{session_id}/execute-sync` - 同步执行代码（轮询等待结果）
 - `GET /api/v1/executions/{execution_id}/status` - 获取执行状态
 - `GET /api/v1/executions/{execution_id}/result` - 获取执行结果
+- `GET /api/v1/executions/sessions/{session_id}/executions` - 列出会话的所有执行
 
 #### 文件操作
-- `POST /api/v1/sessions/{id}/files/upload` - 上传文件
-- `GET /api/v1/sessions/{id}/files/{name}` - 下载文件
+- `GET /api/v1/sessions/{session_id}/files` - 列出工作区文件（支持指定目录路径）
+- `POST /api/v1/sessions/{session_id}/files/upload` - 上传文件到工作区
+- `GET /api/v1/sessions/{session_id}/files/{file_path}` - 下载工作区文件
 
 #### 模板管理
 - `POST /api/v1/templates` - 创建模板
-- `GET /api/v1/templates` - 列出模板
-- `GET /api/v1/templates/{id}` - 获取模板详情
-- `PUT /api/v1/templates/{id}` - 更新模板
-- `DELETE /api/v1/templates/{id}` - 删除模板
+- `GET /api/v1/templates` - 列出所有模板（支持分页）
+- `GET /api/v1/templates/{template_id}` - 获取模板详情
+- `PUT /api/v1/templates/{template_id}` - 更新模板
+- `DELETE /api/v1/templates/{template_id}` - 删除模板
 
-#### 容器监控
-- `GET /api/v1/containers` - 列出容器
-- `GET /api/v1/containers/{id}/status` - 获取容器状态
-- `GET /api/v1/containers/{id}/logs` - 获取容器日志
+#### 内部回调 API (由 Executor 调用)
+- `POST /api/v1/internal/containers/ready` - 容器就绪通知
+- `POST /api/v1/internal/containers/exited` - 容器退出通知
+- `POST /api/v1/internal/executions/{execution_id}/heartbeat` - 执行心跳上报
+- `POST /api/v1/internal/executions/{execution_id}/result` - 执行结果上报
 
 ## 公共规范
 
 ### 认证方式
 
-#### 控制平面 API
+#### 公开 API
 ```
 Authorization: Bearer ACCESS_TOKEN
 ```
@@ -118,43 +111,17 @@ Authorization: Bearer ACCESS_TOKEN
 Authorization: Bearer INTERNAL_API_TOKEN
 ```
 
+**安全要求**:
+- 内部 API 仅限内网访问
+- 建议配置 NetworkPolicy 限制访问来源
+
 ### 公共请求头
 
 | Header | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | Authorization | string | 是 | Bearer Token 认证 |
-| x-business-domain | string | 否 | 业务域标识 |
-| Content-Type | string | 是 | application/json |
-| x-request-id | string | 否 | 请求追踪 ID |
-
-### 错误码规范
-
-所有 API 使用统一的错误响应格式：
-
-```json
-{
-  "error_code": "Sandbox.InvalidParameter",
-  "description": "Invalid parameter",
-  "error_detail": "Field 'timeout' must be between 1 and 3600",
-  "error_link": "https://docs.example.com/errors/invalid-parameter",
-  "solution": "Please check your request parameters"
-}
-```
-
-#### 控制平面 API 错误码
-- `Sandbox.InvalidParameter` - 请求参数错误
-- `Sandbox.SessionNotFound` - 会话不存在
-- `Sandbox.ExecutionNotFound` - 执行记录不存在
-- `Sandbox.ExecException` - handler 执行异常
-- `Sandbox.TooManyRequestsExection` - 无可用沙箱
-- `Sandbox.ExecTimeout` - 执行超时
-- `Sandbox.InternalError` - 内部错误
-
-#### 内部 API 错误码
-- `Internal.Unauthorized` - 认证失败
-- `Internal.InvalidExecution` - 执行记录不存在
-- `Internal.StateConflict` - 状态冲突
-- `Internal.InternalError` - 内部错误
+| Content-Type | string | 是 | application/json 或 multipart/form-data |
+| X-Request-ID | string | 否 | 请求追踪 ID |
 
 ### HTTP 状态码
 
@@ -163,71 +130,90 @@ Authorization: Bearer INTERNAL_API_TOKEN
 | 200 | 成功 |
 | 201 | 创建成功 |
 | 204 | 删除成功（无返回内容） |
-| 307 | 临时重定向（如文件下载） |
 | 400 | 请求参数错误 |
 | 401 | 认证失败 |
-| 403 | 禁止访问（如生产环境禁用调试接口） |
 | 404 | 资源不存在 |
-| 409 | 状态冲突 |
+| 422 | 请求参数验证失败 |
 | 500 | 服务器内部错误 |
-| 503 | 服务暂时不可用（如容量不足） |
+
+### 错误响应格式
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "timeout"],
+      "msg": "ensure this value is greater than 0",
+      "type": "greater_than"
+    }
+  ]
+}
+```
 
 ## 使用示例
 
 ### 查看文档
 
-建议使用以下工具查看 OpenAPI 文档：
-
-1. **Swagger Editor**: https://editor.swagger.io/
-2. **Redoc**: https://redocly.github.io/redoc/
-3. **Swagger UI**: 本地部署或在线使用
+1. **Swagger UI**: http://localhost:8000/docs (本地运行时)
+2. **在线工具**: https://editor.nextapis.com/
+3. **Redoc**: https://redocly.github.io/redoc/
 
 ### 使用 curl 示例
 
 #### 创建会话
 ```bash
-curl -X POST https://api.sandbox.example.com/api/v1/sessions \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+curl -X POST http://localhost:8000/api/v1/sessions \
   -H "Content-Type: application/json" \
   -d '{
-    "template_id": "python-datascience",
-    "mode": "ephemeral",
+    "template_id": "python3.11-datascience",
     "timeout": 300,
-    "resources": {
-      "cpu": "2",
-      "memory": "2Gi",
-      "disk": "5Gi"
-    }
+    "cpu": "1",
+    "memory": "512Mi",
+    "dependencies": [
+      {"name": "pandas", "version": "==2.0.0"},
+      {"name": "numpy"}
+    ]
   }'
 ```
 
-#### 提交执行任务
+#### 同步执行代码
 ```bash
-curl -X POST https://api.sandbox.example.com/api/v1/sessions/sess_abc123def4567890/execute \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+curl -X POST "http://localhost:8000/api/v1/executions/sessions/{session_id}/execute-sync?sync_timeout=60" \
   -H "Content-Type: application/json" \
   -d '{
-    "code": "def handler(event):\n    return {\"status\": \"ok\", \"data\": event}",
+    "code": "def handler(event):\n    name = event.get(\"name\", \"World\")\n    return {\"message\": f\"Hello, {name}!\"}",
     "language": "python",
     "timeout": 30,
     "event": {"name": "Alice"}
   }'
 ```
 
-#### 获取执行结果
+#### 列出工作区文件
 ```bash
-curl -X GET https://api.sandbox.example.com/api/v1/executions/exec_20240115_abc12345/result \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+curl -X GET "http://localhost:8000/api/v1/sessions/{session_id}/files?path=src/&limit=100"
+```
+
+#### 上传文件
+```bash
+curl -X POST "http://localhost:8000/api/v1/sessions/{session_id}/files/upload?path=src/main.py" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@main.py"
+```
+
+#### 软终止会话
+```bash
+curl -X POST http://localhost:8000/api/v1/sessions/{session_id}/terminate
 ```
 
 ## 相关文档
 
 - [技术设计文档](../sandbox-design-v2.1.md) - 完整的系统设计文档
 - [产品需求文档](../sandbox-prd-v2.md) - 产品需求和目标
-- [CLI 工具文档](../sandbox-cli-design.md) - 本地执行工具说明
 
 ## 版本历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| 1.0.0 | 2025-01-05 | 初始版本，基于 sandbox-design-v2.1.md 创建 |
+| 2.1.0 | 2025-02-10 | 添加同步执行端点、依赖安装支持、状态同步服务 |
+| 2.0.0 | 2025-01-15 | 重构为 Control Plane + Container Scheduler 架构 |
+| 1.0.0 | 2025-01-05 | 初始版本 |
