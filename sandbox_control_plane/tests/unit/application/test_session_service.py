@@ -11,7 +11,7 @@ from src.application.commands.create_session import CreateSessionCommand
 from src.domain.entities.session import Session
 from src.domain.entities.template import Template
 from src.domain.value_objects.resource_limit import ResourceLimit
-from src.domain.value_objects.execution_status import SessionStatus
+from src.domain.value_objects.execution_status import SessionStatus, ExecutionStatus
 from src.domain.services.scheduler import RuntimeNode
 from src.shared.errors.domain import NotFoundError
 from src.domain.repositories.execution_repository import IExecutionRepository
@@ -219,3 +219,228 @@ class TestSessionService:
 
         # Verify delete was not called
         session_repo.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_session_with_manual_id(self, service, template_repo, scheduler, session_repo):
+        """测试使用手动指定 ID 创建会话"""
+        template = Template(
+            id="python-test",
+            name="Python Test",
+            image="python:3.11",
+            base_image="python:3.11-slim"
+        )
+        template_repo.find_by_id.return_value = template
+
+        runtime_node = RuntimeNode(
+            id="node-1",
+            type="docker",
+            url="http://node-1:2375",
+            status="healthy",
+            cpu_usage=0.5,
+            mem_usage=0.6,
+            session_count=5,
+            max_sessions=100,
+            cached_templates=["python-test"]
+        )
+        scheduler.schedule.return_value = runtime_node
+
+        # 第一个调用返回 None（检查 ID 是否存在），后续调用返回会话
+        session_repo.find_by_id.side_effect = [None, None]
+
+        command = CreateSessionCommand(
+            id="custom-session-id",
+            template_id="python-test",
+            timeout=300,
+            resource_limit=ResourceLimit.default()
+        )
+
+        result = await service.create_session(command)
+
+        assert result.id == "custom-session-id"
+
+    @pytest.mark.asyncio
+    async def test_create_session_with_duplicate_id(self, service, template_repo, scheduler, session_repo):
+        """测试使用重复 ID 创建会话"""
+        template = Template(
+            id="python-test",
+            name="Python Test",
+            image="python:3.11",
+            base_image="python:3.11-slim"
+        )
+        template_repo.find_by_id.return_value = template
+
+        existing_session = Session(
+            id="existing-session-id",
+            template_id="python-test",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://bucket/sessions/existing",
+            runtime_type="docker"
+        )
+        session_repo.find_by_id.return_value = existing_session
+
+        command = CreateSessionCommand(
+            id="existing-session-id",
+            template_id="python-test",
+            timeout=300
+        )
+
+        from src.shared.errors.domain import ConflictError
+        with pytest.raises(ConflictError, match="already exists"):
+            await service.create_session(command)
+
+    @pytest.mark.asyncio
+    async def test_create_session_with_dependencies(self, service, template_repo, scheduler, session_repo):
+        """测试创建带依赖的会话"""
+        template = Template(
+            id="python-test",
+            name="Python Test",
+            image="python:3.11",
+            base_image="python:3.11-slim"
+        )
+        template_repo.find_by_id.return_value = template
+
+        runtime_node = RuntimeNode(
+            id="node-1",
+            type="docker",
+            url="http://node-1:2375",
+            status="healthy",
+            cpu_usage=0.5,
+            mem_usage=0.6,
+            session_count=5,
+            max_sessions=100,
+            cached_templates=["python-test"]
+        )
+        scheduler.schedule.return_value = runtime_node
+
+        command = CreateSessionCommand(
+            template_id="python-test",
+            timeout=300,
+            resource_limit=ResourceLimit.default(),
+            dependencies=[{"name": "requests", "version": ">=2.28.0"}]
+        )
+
+        result = await service.create_session(command)
+
+        assert result.template_id == "python-test"
+
+    @pytest.mark.asyncio
+    async def test_list_sessions(self, service, session_repo):
+        """测试列出会话"""
+        sessions = [
+            Session(
+                id="sess_1",
+                template_id="python-test",
+                status=SessionStatus.RUNNING,
+                resource_limit=ResourceLimit.default(),
+                workspace_path="s3://bucket/sessions/sess_1",
+                runtime_type="docker"
+            ),
+            Session(
+                id="sess_2",
+                template_id="python-test",
+                status=SessionStatus.TERMINATED,
+                resource_limit=ResourceLimit.default(),
+                workspace_path="s3://bucket/sessions/sess_2",
+                runtime_type="docker"
+            )
+        ]
+        session_repo.find_sessions = AsyncMock(return_value=sessions)
+        session_repo.count_sessions = AsyncMock(return_value=2)
+
+        result = await service.list_sessions()
+
+        assert "items" in result
+        session_repo.find_sessions.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_by_status(self, service, session_repo):
+        """测试按状态列出会话"""
+        sessions = [
+            Session(
+                id="sess_1",
+                template_id="python-test",
+                status=SessionStatus.RUNNING,
+                resource_limit=ResourceLimit.default(),
+                workspace_path="s3://bucket/sessions/sess_1",
+                runtime_type="docker"
+            )
+        ]
+        session_repo.find_sessions = AsyncMock(return_value=sessions)
+        session_repo.count_sessions = AsyncMock(return_value=1)
+
+        result = await service.list_sessions(status=SessionStatus.RUNNING)
+
+        assert "items" in result
+        session_repo.find_sessions.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_terminate_session_not_found(self, service, session_repo):
+        """测试终止不存在的会话"""
+        session_repo.find_by_id.return_value = None
+
+        with pytest.raises(NotFoundError, match="Session not found"):
+            await service.terminate_session("non-existent")
+
+    @pytest.mark.asyncio
+    async def test_terminate_session_with_container(self, service, session_repo, scheduler):
+        """测试终止带容器的会话"""
+        session = Session(
+            id="sess_123",
+            template_id="python-test",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://bucket/sessions/sess_123",
+            runtime_type="docker",
+            container_id="container-123"
+        )
+        session_repo.find_by_id.return_value = session
+
+        result = await service.terminate_session("sess_123")
+
+        assert result.status == SessionStatus.TERMINATED.value
+        scheduler.destroy_container.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_session_executions(self, service, session_repo, execution_repo):
+        """测试获取会话的执行记录"""
+        session = Session(
+            id="sess_123",
+            template_id="python-test",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://bucket/sessions/sess_123",
+            runtime_type="docker"
+        )
+        session_repo.find_by_id.return_value = session
+
+        from src.domain.entities.execution import Execution
+        from src.domain.value_objects.execution_status import ExecutionState
+
+        execution_state = ExecutionState(status=ExecutionStatus.COMPLETED)
+        executions = [
+            Execution(
+                id="exec_1",
+                session_id="sess_123",
+                state=execution_state,
+                code="print('hello')",
+                language="python"
+            )
+        ]
+        execution_repo.find_by_session_id.return_value = executions
+
+        result = await service.list_executions("sess_123")
+
+        assert len(result) == 1
+        execution_repo.find_by_session_id.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_session_executions_session_not_found(self, service, session_repo, execution_repo):
+        """测试获取不存在会话的执行记录"""
+        # list_executions 不检查会话是否存在，直接查询执行记录
+        execution_repo.find_by_session_id.return_value = []
+
+        result = await service.list_executions("non-existent")
+
+        # 应该返回空列表
+        assert result == []

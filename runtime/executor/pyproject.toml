@@ -61,9 +61,53 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+[tool.coverage.run]
+source = ["executor"]
+omit = [
+    # HTTP endpoints - better suited for integration tests
+    "*/interfaces/*",
+    # macOS specific isolation
+    "*/macseatbelt.py",
+    # Subprocess management - hard to unit test
+    "*/subprocess.py",
+    # Linux specific bubblewrap isolation
+    "*/bwrap.py",
+    # File system operations
+    "*/persistence/*",
+    # Metrics collection
+    "*/monitoring/*",
+    # Logging configuration
+    "*/logging/*",
+    # Result reporter - simple wrapper
+    "*/result_reporter.py",
+    # DTO modules - simple data structures
+    "*/dto/*",
+    # Test files
+    "tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+fail_under = 90
 
 [tool.uv]
 # 使用清华大学 PyPI 镜像源加速依赖下载
 index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+]
 # 备用源：阿里云镜像（如需要可取消注释）
 # extra-index-url = ["https://mirrors.aliyun.com/pypi/simple/"]

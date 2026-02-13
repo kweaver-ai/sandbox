@@ -297,3 +297,188 @@ class TestS3Storage:
         assert len(files) == 1
         # key 应该是相对于 bucket 的路径，包含 sessions/sess_123/file.txt
         assert 'sessions/' in files[0]['key']
+
+    @pytest.mark.asyncio
+    async def test_initialize_success(self, storage, mock_boto_client):
+        """测试初始化成功"""
+        mock_boto_client.head_bucket.return_value = {}
+
+        await storage.initialize()
+
+        mock_boto_client.head_bucket.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_creates_bucket(self, storage, mock_boto_client):
+        """测试初始化时创建 bucket"""
+        from botocore.exceptions import ClientError
+
+        # head_bucket 抛出 404 错误
+        error_response = {'Error': {'Code': '404'}}
+        mock_boto_client.head_bucket.side_effect = ClientError(error_response, 'HeadBucket')
+        mock_boto_client.meta.region_name = 'us-west-2'
+        mock_boto_client.create_bucket.return_value = {}
+
+        await storage.initialize()
+
+        mock_boto_client.create_bucket.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_creates_bucket_us_east_1(self, storage, mock_boto_client):
+        """测试初始化时创建 bucket（us-east-1 区域）"""
+        from botocore.exceptions import ClientError
+
+        error_response = {'Error': {'Code': '404'}}
+        mock_boto_client.head_bucket.side_effect = ClientError(error_response, 'HeadBucket')
+        mock_boto_client.meta.region_name = 'us-east-1'
+        mock_boto_client.create_bucket.return_value = {}
+
+        await storage.initialize()
+
+        # us-east-1 不需要 LocationConstraint
+        call_args = mock_boto_client.create_bucket.call_args
+        assert 'CreateBucketConfiguration' not in call_args[1]
+
+    @pytest.mark.asyncio
+    async def test_initialize_bucket_create_error(self, storage, mock_boto_client):
+        """测试初始化时创建 bucket 失败"""
+        from botocore.exceptions import ClientError
+
+        error_response = {'Error': {'Code': '404'}}
+        mock_boto_client.head_bucket.side_effect = ClientError(error_response, 'HeadBucket')
+        mock_boto_client.meta.region_name = 'us-west-2'
+
+        create_error = ClientError({'Error': {'Code': '403'}}, 'CreateBucket')
+        mock_boto_client.create_bucket.side_effect = create_error
+
+        # 不应该抛出异常，只是记录错误
+        await storage.initialize()
+
+    @pytest.mark.asyncio
+    async def test_upload_large_file(self, storage, mock_boto_client):
+        """测试上传大文件（分片上传）"""
+        mock_boto_client.head_bucket.return_value = {}
+        mock_boto_client.head_object.side_effect = Exception("Not Found")
+        mock_boto_client.upload_file = Mock()
+
+        # 创建大于 5MB 的内容
+        large_content = b"x" * (6 * 1024 * 1024)  # 6MB
+
+        await storage.upload_file("s3://test-bucket/large.bin", large_content)
+
+        # 大文件应该使用 upload_file
+        mock_boto_client.upload_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upload_file_removes_directory_marker(self, storage, mock_boto_client):
+        """测试上传文件时删除目录标记"""
+        mock_boto_client.head_bucket.return_value = {}
+        mock_boto_client.put_object.return_value = {}
+
+        # 目录标记存在
+        mock_boto_client.head_object.return_value = {}
+        mock_boto_client.delete_object.return_value = {}
+
+        await storage.upload_file("s3://test-bucket/dir/file.txt", b"content")
+
+        # 应该删除目录标记
+        mock_boto_client.delete_object.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_file_directory_marker_not_exists(self, storage, mock_boto_client):
+        """测试上传文件时目录标记不存在"""
+        from botocore.exceptions import ClientError
+
+        mock_boto_client.head_bucket.return_value = {}
+        mock_boto_client.put_object.return_value = {}
+
+        # 目录标记不存在
+        error_response = {'Error': {'Code': '404'}}
+        mock_boto_client.head_object.side_effect = ClientError(error_response, 'HeadObject')
+
+        await storage.upload_file("s3://test-bucket/dir/file.txt", b"content")
+
+        # 不应该删除目录标记
+        mock_boto_client.delete_object.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_prefix_empty(self, storage, mock_boto_client):
+        """测试删除空前缀"""
+        mock_paginator = Mock()
+        mock_paginator.paginate.return_value = [{}]  # 没有 Contents
+        mock_boto_client.get_paginator.return_value = mock_paginator
+
+        deleted_count = await storage.delete_prefix("sessions/empty/")
+
+        assert deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_prefix_error(self, storage, mock_boto_client):
+        """测试删除前缀时出错"""
+        from botocore.exceptions import ClientError
+
+        mock_paginator = Mock()
+        mock_paginator.paginate.side_effect = ClientError(
+            {'Error': {'Code': '403'}}, 'ListObjectsV2'
+        )
+        mock_boto_client.get_paginator.return_value = mock_paginator
+
+        deleted_count = await storage.delete_prefix("sessions/test/")
+
+        assert deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_list_files_empty(self, storage, mock_boto_client):
+        """测试列出空目录"""
+        mock_paginator = Mock()
+        mock_paginator.paginate.return_value = [{}]  # 没有 Contents
+        mock_boto_client.get_paginator.return_value = mock_paginator
+
+        files = await storage.list_files("empty/")
+
+        assert files == []
+
+    @pytest.mark.asyncio
+    async def test_list_files_error(self, storage, mock_boto_client):
+        """测试列出文件时出错"""
+        from botocore.exceptions import ClientError
+
+        mock_paginator = Mock()
+        mock_paginator.paginate.side_effect = ClientError(
+            {'Error': {'Code': '403'}}, 'ListObjectsV2'
+        )
+        mock_boto_client.get_paginator.return_value = mock_paginator
+
+        files = await storage.list_files("test/")
+
+        assert files == []
+
+    @pytest.mark.asyncio
+    async def test_delete_prefix_relative_path(self, storage, mock_boto_client):
+        """测试删除相对路径前缀"""
+        mock_paginator = Mock()
+        mock_paginator.paginate.return_value = [{
+            'Contents': [
+                {'Key': 'sessions/sess_123/file.txt'}
+            ]
+        }]
+        mock_boto_client.get_paginator.return_value = mock_paginator
+        mock_boto_client.delete_objects.return_value = {}
+
+        deleted_count = await storage.delete_prefix("sessions/sess_123/")
+
+        assert deleted_count == 1
+
+    @pytest.mark.asyncio
+    async def test_list_files_relative_path(self, storage, mock_boto_client):
+        """测试列出相对路径文件"""
+        mock_paginator = Mock()
+        mock_paginator.paginate.return_value = [{
+            'Contents': [
+                {'Key': 'sessions/sess_123/file.txt', 'Size': 1024, 'LastModified': datetime.now(), 'ETag': '"abc"'}
+            ]
+        }]
+        mock_boto_client.get_paginator.return_value = mock_paginator
+
+        files = await storage.list_files("sessions/sess_123/")
+
+        assert len(files) == 1

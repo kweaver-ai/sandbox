@@ -1,4 +1,4 @@
-.PHONY: build push test shell help
+.PHONY: build push test test-unit test-cov shell help
 
 # Image configuration
 IMAGE_NAME = sandbox-executor-base
@@ -44,6 +44,18 @@ test: ## Run basic tests
 	docker run --rm $(IMAGE_NAME):$(VERSION) \
 		python -c "from executor.interfaces.http.rest import create_app; print('OK')"
 	@echo "Test passed!"
+
+test-unit: ## Run unit tests using uv
+	@echo "Running unit tests..."
+	uv run pytest tests/unit/ -v --tb=short
+
+test-cov: ## Run unit tests with coverage report
+	@echo "Running unit tests with coverage..."
+	rm -f .coverage
+	uv run coverage run -m pytest tests/unit/ -m "not slow"
+	uv run coverage report --fail-under=90
+	uv run coverage html
+	@echo "Coverage report generated in htmlcov/"
 
 shell: ## Open a shell in the container
 	docker run --rm -it $(IMAGE_NAME):$(VERSION) /bin/bash
