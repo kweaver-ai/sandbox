@@ -488,7 +488,7 @@ exec gosu sandbox python -m executor.interfaces.http.rest
             spec=V1PodSpec(
                 containers=containers,
                 volumes=volumes,
-                restart_policy="Never",
+                restart_policy="Always",  # 确保容器退出后自动重启，保持 runtime 可用
                 host_network=False,
                 termination_grace_period_seconds=30,
                 service_account_name=self._executor_service_account,
