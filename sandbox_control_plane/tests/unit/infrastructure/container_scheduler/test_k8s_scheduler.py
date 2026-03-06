@@ -424,3 +424,213 @@ class TestS3PrefixHelper:
         session_id = s3_prefix_from_path("sessions/test-001/")
         assert session_id == "test-001"
 
+
+class TestK8sSchedulerExtended:
+    """K8s 调度器扩展测试"""
+
+    @pytest.fixture
+    def mock_core_v1(self):
+        """模拟 Kubernetes CoreV1Api"""
+        api = Mock()
+        return api
+
+    @pytest.fixture
+    def scheduler(self, mock_core_v1):
+        """创建 K8s 调度器"""
+        sched = K8sScheduler(namespace="test-namespace")
+        sched._core_v1 = mock_core_v1
+        sched._initialized = True
+        return sched
+
+    def test_parse_s3_workspace_empty(self, scheduler):
+        """测试解析空 S3 workspace 路径"""
+        result = scheduler._parse_s3_workspace("")
+
+        assert result is None
+
+    def test_parse_s3_workspace_none(self, scheduler):
+        """测试解析 None S3 workspace 路径"""
+        result = scheduler._parse_s3_workspace(None)
+
+        assert result is None
+
+    def test_parse_memory_to_bytes_ki(self, scheduler):
+        """测试解析内存限制（Ki）"""
+        result = scheduler._parse_memory_to_bytes("256Ki")
+
+        assert result == 256 * 1024
+
+    def test_parse_memory_to_bytes_plain_number(self, scheduler):
+        """测试解析内存限制（纯数字）"""
+        result = scheduler._parse_memory_to_bytes("1024")
+
+        # 默认单位为 MB
+        assert result == 1024 * 1024 * 1024
+
+    def test_parse_disk_to_bytes_mb(self, scheduler):
+        """测试解析磁盘限制（MB）"""
+        result = scheduler._parse_disk_to_bytes("512Mi")
+
+        assert result == 512 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_pending(self, scheduler, mock_core_v1):
+        """测试获取等待中 Pod 状态"""
+        mock_pod = Mock()
+        mock_pod.metadata = Mock()
+        mock_pod.metadata.name = "test-pod"
+        mock_pod.metadata.creation_timestamp = datetime.now(timezone.utc)
+        mock_pod.status.phase = "Pending"
+        mock_pod.status.pod_ip = None
+        mock_pod.status.container_statuses = []
+        mock_pod.spec = Mock()
+        mock_pod.spec.containers = [Mock(name="executor", image="python:3.11")]
+
+        mock_core_v1.read_namespaced_pod.return_value = mock_pod
+
+        status = await scheduler.get_container_status("test-pod")
+
+        assert status.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_failed(self, scheduler, mock_core_v1):
+        """测试获取失败 Pod 状态"""
+        mock_pod = Mock()
+        mock_pod.metadata = Mock()
+        mock_pod.metadata.name = "test-pod"
+        mock_pod.metadata.creation_timestamp = datetime.now(timezone.utc)
+        mock_pod.status.phase = "Failed"
+        mock_pod.status.pod_ip = None
+        mock_pod.status.container_statuses = [
+            Mock(
+                name="executor",
+                state=Mock(
+                    running=None,
+                    terminated=Mock(exit_code=1),
+                    waiting=None,
+                )
+            )
+        ]
+        mock_pod.spec = Mock()
+        mock_pod.spec.containers = [Mock(name="executor", image="python:3.11")]
+
+        mock_core_v1.read_namespaced_pod.return_value = mock_pod
+
+        status = await scheduler.get_container_status("test-pod")
+
+        assert status.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_wait_container_failure(self, scheduler, mock_core_v1):
+        """测试等待 Pod 完成（失败）"""
+        failed_pod = Mock()
+        failed_pod.status.phase = "Failed"
+        failed_pod.status.container_statuses = [
+            Mock(
+                name="executor",
+                state=Mock(
+                    running=None,
+                    terminated=Mock(exit_code=1),
+                )
+            )
+        ]
+
+        mock_core_v1.read_namespaced_pod.return_value = failed_pod
+        mock_core_v1.read_namespaced_pod_log.return_value = "error\n"
+
+        result = await scheduler.wait_container("test-pod")
+
+        assert result.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_start_container(self, scheduler, mock_core_v1):
+        """测试启动 Pod（K8s 中 Pod 创建即启动）"""
+        # K8s 中 start_container 通常不需要额外操作
+        await scheduler.start_container("test-pod")
+        # 不应该有异常
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs_with_tail(self, scheduler, mock_core_v1):
+        """测试获取 Pod 日志（带 tail 参数）"""
+        mock_core_v1.read_namespaced_pod_log.return_value = "log output"
+
+        logs = await scheduler.get_container_logs("test-pod", tail=50)
+
+        assert logs == "log output"
+        call_args = mock_core_v1.read_namespaced_pod_log.call_args
+        assert call_args[1]["tail_lines"] == 50
+
+    @pytest.mark.asyncio
+    async def test_remove_container_no_force(self, scheduler, mock_core_v1):
+        """测试删除 Pod（不强制）"""
+        mock_core_v1.delete_namespaced_pod.return_value = None
+
+        await scheduler.remove_container("test-pod", force=False)
+
+        call_args = mock_core_v1.delete_namespaced_pod.call_args
+        assert call_args[1]["grace_period_seconds"] == 30
+
+    def test_build_pod_name_long_id(self, scheduler):
+        """测试生成 Pod 名称（长 ID）"""
+        long_id = "a" * 300
+        pod_name = scheduler._build_pod_name(long_id)
+
+        assert len(pod_name) <= 253
+
+    def test_build_pod_name_special_chars(self, scheduler):
+        """测试生成 Pod 名称（特殊字符）"""
+        session_id = "session_ABC-123.test"
+        pod_name = scheduler._build_pod_name(session_id)
+
+        # 应该只包含小写字母、数字和连字符
+        assert pod_name == pod_name.lower()
+        assert "_" not in pod_name or "." not in pod_name
+
+    def test_build_executor_container_with_resources(self, scheduler):
+        """测试构建带资源限制的 executor 容器"""
+        config = ContainerConfig(
+            image="python:3.11",
+            name="test-session",
+            cpu_limit="2",
+            memory_limit="1Gi",
+            disk_limit="10Gi",
+            env_vars={"TEST": "value"},
+            labels={},
+            network_name="sandbox_network",
+            workspace_path="/workspace"
+        )
+
+        container = scheduler._build_executor_container(
+            config=config,
+            use_s3_mount=False,
+            has_dependencies=False,
+        )
+
+        assert container.resources is not None
+        assert container.resources.requests is not None
+        assert container.resources.limits is not None
+
+    def test_build_executor_container_with_dependencies(self, scheduler):
+        """测试构建带依赖安装的 executor 容器"""
+        config = ContainerConfig(
+            image="python:3.11",
+            name="test-session",
+            cpu_limit="1",
+            memory_limit="512Mi",
+            disk_limit="1Gi",
+            env_vars={},
+            labels={"dependencies": '[{"name": "requests", "version": ">=2.28.0"}]'},
+            network_name="sandbox_network",
+            workspace_path="/workspace"
+        )
+
+        container = scheduler._build_executor_container(
+            config=config,
+            use_s3_mount=False,
+            has_dependencies=True,
+        )
+
+        # 应该有启动命令
+        assert container.command is not None
+        assert "pip3 install" in container.command[2]
+

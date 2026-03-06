@@ -2,6 +2,61 @@
 
 All new features and capabilities added in this branch (`feature/803264`) are documented below.
 
+## [0.2.1]
+
+### 🐛 Bug Fixes
+
+- **K8s Scheduler Container Resilience**
+  - Changed Pod `restartPolicy` from `Never` to `Always`
+  - Ensures containers automatically restart after exit (including exit code 0)
+  - Fixes issue where runtime becomes unavailable when s3fs mount disconnects
+
+### 🚀 New Features
+
+- **Heartbeat Service Reliability**
+  - Improved heartbeat service with better error handling
+  - Added comprehensive test coverage for heartbeat functionality
+
+- **State Sync Service**
+  - Made control plane URL configurable via environment variable
+  - Added settings initialization in state sync service
+
+- **Callback Client**
+  - Added JSON sanitization for non-compliant float values (NaN, Infinity)
+  - Ensures proper JSON serialization for callback responses
+
+- **Runtime Executor**
+  - Made command execution asynchronous for better performance
+  - Switched to uv for faster dependency installation in Dockerfile
+
+- **Helm Chart Improvements**
+  - Added fallback image registry support for template images
+  - Added CONTROL_PLANE_URL to ConfigMap and deployment
+  - Switched to Aliyun PyPI mirror for faster dependency installation
+
+- **Session Management**
+  - Added hard delete functionality with cascade removal
+  - Increased string field length for ID columns
+  - Set idle sessions to never be cleaned up (configurable)
+
+- **Template Management**
+  - Added template ID validation
+  - Added default timeout configuration
+  - Added template name update functionality
+
+- **MCP Server**
+  - Added MCP server implementation for synchronous code execution
+
+### 🔧 Improvements
+
+- Updated MariaDB schema definitions for sandbox tables
+- Updated API documentation for OpenAPI 3.1.0 spec
+- Added uv.lock for reproducible dependency management
+
+---
+
+*Released on 2025-03-05*
+
 ## [0.2.0]
 
 ### 🚀 New Features

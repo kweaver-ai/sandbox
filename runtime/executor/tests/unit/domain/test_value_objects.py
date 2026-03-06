@@ -10,6 +10,7 @@ Tests value objects that follow hexagonal architecture principles:
 import pytest
 from datetime import datetime
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 from executor.domain.value_objects import (
     ExecutionRequest,
@@ -22,6 +23,7 @@ from executor.domain.value_objects import (
     HeartbeatSignal,
     ContainerLifecycleEvent,
     ExitReason,
+    ExecutionContext,
 )
 
 
@@ -36,42 +38,84 @@ class TestExecutionRequest:
             code="print('hello')",
             language="python",
             timeout=10,
-            stdin="",
-            env_vars={},
+            event={"key": "value"},
+            env_vars={"ENV": "test"},
         )
 
         assert request.execution_id == "exec_12345678_abc12345"
         assert request.code == "print('hello')"
         assert request.language == "python"
         assert request.timeout == 10
+        assert request.event == {"key": "value"}
+        assert request.env_vars == {"ENV": "test"}
+
+    def test_create_request_with_defaults(self):
+        """Test creating a request with default values."""
+        request = ExecutionRequest(
+            execution_id="exec_001",
+            code="test",
+            language="python",
+            timeout=10,
+        )
+
+        assert request.session_id is None
+        assert request.event == {}
+        assert request.env_vars == {}
 
     def test_request_is_immutable(self):
         """Test that ExecutionRequest is immutable (frozen)."""
         request = ExecutionRequest(
             execution_id="exec_001",
-            session_id="session_001",
             code="test",
             language="python",
             timeout=10,
-            stdin="",
-            env_vars={},
         )
 
         # Should raise FrozenInstanceError when trying to modify
         with pytest.raises(FrozenInstanceError):
             request.code = "modified"
 
+    def test_request_rejects_large_code(self):
+        """Test that ExecutionRequest rejects code larger than 1MB."""
+        large_code = "x" * (1048576 + 1)  # 1MB + 1 byte
+
+        with pytest.raises(ValueError, match="Code size exceeds 1MB limit"):
+            ExecutionRequest(
+                execution_id="exec_001",
+                code=large_code,
+                language="python",
+                timeout=10,
+            )
+
+    def test_request_rejects_invalid_timeout(self):
+        """Test that ExecutionRequest rejects invalid timeout values."""
+        # Timeout too small
+        with pytest.raises(ValueError, match="Timeout must be between 1 and 3600"):
+            ExecutionRequest(
+                execution_id="exec_001",
+                code="test",
+                language="python",
+                timeout=0,
+            )
+
+        # Timeout too large
+        with pytest.raises(ValueError, match="Timeout must be between 1 and 3600"):
+            ExecutionRequest(
+                execution_id="exec_001",
+                code="test",
+                language="python",
+                timeout=3601,
+            )
+
     def test_to_context_creates_valid_context(self):
         """Test that to_context() creates a valid ExecutionContext."""
-        from pathlib import Path
-
         request = ExecutionRequest(
             execution_id="exec_001",
             session_id="session_001",
             code="test",
             language="python",
             timeout=10,
-            stdin="input",
+            event={"input": "data"},
             env_vars={"KEY": "VALUE"},
         )
 
@@ -82,8 +126,70 @@ class TestExecutionRequest:
 
         assert context.execution_id == "exec_001"
         assert context.session_id == "session_001"
-        assert context.stdin == "input"
+        assert context.event == {"input": "data"}
         assert context.env_vars == {"KEY": "VALUE"}
+
+    def test_to_context_uses_execution_id_as_session_id(self):
+        """Test that to_context uses execution_id as session_id when not provided."""
+        request = ExecutionRequest(
+            execution_id="exec_001",
+            code="test",
+            language="python",
+            timeout=10,
+        )
+
+        context = request.to_context(
+            workspace_path=Path("/workspace"),
+            control_plane_url="http://localhost:8000",
+        )
+
+        assert context.session_id == "exec_001"
+
+
+class TestExecutionContext:
+    """Tests for ExecutionContext value object."""
+
+    def test_create_context(self):
+        """Test creating an execution context."""
+        context = ExecutionContext(
+            workspace_path=Path("/workspace"),
+            session_id="session_001",
+            execution_id="exec_001",
+            control_plane_url="http://localhost:8000",
+            env_vars={"KEY": "VALUE"},
+            event={"input": "data"},
+        )
+
+        assert context.session_id == "session_001"
+        assert context.execution_id == "exec_001"
+        assert context.env_vars == {"KEY": "VALUE"}
+        assert context.event == {"input": "data"}
+
+    def test_context_with_defaults(self):
+        """Test context with default values."""
+        context = ExecutionContext(
+            workspace_path=Path("/workspace"),
+            session_id="session_001",
+            execution_id="exec_001",
+            control_plane_url="http://localhost:8000",
+        )
+
+        assert context.session_id == "session_001"
+        assert context.execution_id == "exec_001"
+        assert context.env_vars == {}
+        assert context.event == {}
+
+    def test_context_is_immutable(self):
+        """Test that ExecutionContext is immutable (frozen)."""
+        context = ExecutionContext(
+            workspace_path=Path("/workspace"),
+            session_id="session_001",
+            execution_id="exec_001",
+            control_plane_url="http://localhost:8000",
+        )
+
+        with pytest.raises(FrozenInstanceError):
+            context.session_id = "modified"
 
 
 class TestExecutionResult:
@@ -144,7 +250,7 @@ class TestExecutionResult:
         assert len(result.artifacts) == 1
         assert result.artifacts[0].path == "output.txt"
 
-    def test_result_is_immutable(self):
+    def test_result_is_mutable(self):
         """Test that ExecutionResult is mutable (not frozen)."""
         result = ExecutionResult(
             status=ExecutionStatus.SUCCESS,
@@ -157,6 +263,21 @@ class TestExecutionResult:
         # ExecutionResult is NOT frozen, so we can modify it
         result.status = ExecutionStatus.FAILED
         assert result.status == ExecutionStatus.FAILED
+
+    def test_result_to_dict(self):
+        """Test that ExecutionResult can be converted to dict."""
+        result = ExecutionResult(
+            status=ExecutionStatus.SUCCESS,
+            stdout="output",
+            stderr="",
+            exit_code=0,
+            execution_time_ms=100,
+        )
+
+        result_dict = result.to_dict()
+        assert result_dict["status"] == "success"
+        assert result_dict["stdout"] == "output"
+        assert result_dict["exit_code"] == 0
 
 
 class TestArtifact:
@@ -213,6 +334,20 @@ class TestArtifact:
         assert artifact.checksum == "abc123"
         assert artifact.download_url == "http://storage/result.pdf"
 
+    def test_artifact_to_dict(self):
+        """Test that Artifact can be converted to dict."""
+        artifact = Artifact(
+            path="output.txt",
+            size=100,
+            mime_type="text/plain",
+            type=ArtifactType.OUTPUT,
+            created_at=datetime.now(),
+        )
+
+        result = artifact.to_dict()
+        assert result["path"] == "output.txt"
+        assert result["type"] == "output"
+
 
 class TestExecutionMetrics:
     """Tests for ExecutionMetrics value object."""
@@ -243,6 +378,17 @@ class TestExecutionMetrics:
         assert metrics.duration_ms == 100
         assert metrics.peak_memory_mb is None
 
+    def test_metrics_to_dict(self):
+        """Test that ExecutionMetrics can be converted to dict."""
+        metrics = ExecutionMetrics(
+            duration_ms=100,
+            cpu_time_ms=80,
+        )
+
+        result = metrics.to_dict()
+        assert result["duration_ms"] == 100
+        assert result["cpu_time_ms"] == 80
+
 
 class TestHeartbeatSignal:
     """Tests for HeartbeatSignal value object."""
@@ -266,6 +412,17 @@ class TestHeartbeatSignal:
 
         with pytest.raises(FrozenInstanceError):
             signal.progress = {"modified": True}
+
+    def test_heartbeat_to_dict(self):
+        """Test that HeartbeatSignal can be converted to dict."""
+        signal = HeartbeatSignal(
+            timestamp=datetime.now(),
+            progress={"status": "running"},
+        )
+
+        result = signal.to_dict()
+        assert "timestamp" in result
+        assert result["progress"]["status"] == "running"
 
 
 class TestContainerLifecycleEvent:
@@ -300,6 +457,20 @@ class TestContainerLifecycleEvent:
         assert event.exit_reason == ExitReason.SIGTERM
         assert event.exit_code == 143
 
+    def test_event_to_dict(self):
+        """Test that ContainerLifecycleEvent can be converted to dict."""
+        event = ContainerLifecycleEvent(
+            event_type="ready",
+            container_id="container-123",
+            pod_name="pod-456",
+            executor_port=8080,
+            ready_at=datetime.now(),
+        )
+
+        result = event.to_dict()
+        assert result["event_type"] == "ready"
+        assert result["container_id"] == "container-123"
+
 
 class TestResourceLimit:
     """Tests for ResourceLimit value object."""
@@ -317,3 +488,66 @@ class TestResourceLimit:
         assert limits.max_memory_mb == 512
         assert limits.max_processes == 128
         assert limits.max_file_size_mb == 100
+
+    def test_default_resource_limits(self):
+        """Test default resource limits."""
+        limits = ResourceLimit()
+
+        assert limits.timeout_seconds == 300
+        assert limits.max_memory_mb == 512
+
+    def test_validate_positive_timeout(self):
+        """Test that timeout must be positive."""
+        with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+            limits = ResourceLimit(timeout_seconds=0)
+            limits.validate()
+
+    def test_validate_max_timeout(self):
+        """Test that timeout cannot exceed 3600."""
+        with pytest.raises(ValueError, match="timeout_seconds cannot exceed 3600"):
+            limits = ResourceLimit(timeout_seconds=3601)
+            limits.validate()
+
+    def test_validate_positive_memory(self):
+        """Test that memory must be positive."""
+        with pytest.raises(ValueError, match="max_memory_mb must be positive"):
+            limits = ResourceLimit(max_memory_mb=0)
+            limits.validate()
+
+
+class TestExitReason:
+    """Tests for ExitReason enum."""
+
+    def test_exit_reason_values(self):
+        """Test ExitReason enum values."""
+        assert ExitReason.NORMAL.value == "normal"
+        assert ExitReason.SIGTERM.value == "sigterm"
+        assert ExitReason.SIGKILL.value == "sigkill"
+        assert ExitReason.OOM_KILLED.value == "oom_killed"
+        assert ExitReason.ERROR.value == "error"
+
+
+class TestExecutionStatus:
+    """Tests for ExecutionStatus enum."""
+
+    def test_status_values(self):
+        """Test ExecutionStatus enum values."""
+        assert ExecutionStatus.PENDING.value == "pending"
+        assert ExecutionStatus.RUNNING.value == "running"
+        assert ExecutionStatus.COMPLETED.value == "completed"
+        assert ExecutionStatus.FAILED.value == "failed"
+        assert ExecutionStatus.TIMEOUT.value == "timeout"
+        assert ExecutionStatus.CRASHED.value == "crashed"
+        assert ExecutionStatus.SUCCESS.value == "success"
+        assert ExecutionStatus.ERROR.value == "error"
+
+
+class TestArtifactType:
+    """Tests for ArtifactType enum."""
+
+    def test_artifact_type_values(self):
+        """Test ArtifactType enum values."""
+        assert ArtifactType.OUTPUT.value == "output"
+        assert ArtifactType.LOG.value == "log"
+        assert ArtifactType.ARTIFACT.value == "artifact"
+        assert ArtifactType.TEMP.value == "temp"

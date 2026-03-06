@@ -355,3 +355,281 @@ class TestDockerScheduler:
 
         # 应不包含 pip install
         assert "pip3 install" not in script
+
+    @pytest.mark.asyncio
+    async def test_is_container_running_false(self, scheduler, mock_docker):
+        """测试检查容器是否运行中（未运行）"""
+        mock_container = Mock()
+        mock_container.show = AsyncMock(return_value={
+            "Id": "container-123",
+            "Name": "/test-container",
+            "State": {
+                "Status": "exited",
+                "Running": False,
+                "Paused": False,
+                "ExitCode": 0,
+                "StartedAt": "2024-01-15T10:00:01Z",
+                "FinishedAt": "2024-01-15T10:05:00Z"
+            },
+            "Config": {
+                "Image": "python:3.11"
+            },
+            "NetworkSettings": {
+                "IPAddress": ""
+            },
+            "Created": "2024-01-15T10:00:00Z"
+        })
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        is_running = await scheduler.is_container_running("container-123")
+
+        assert is_running is False
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_stopped(self, scheduler, mock_docker):
+        """测试获取已停止容器状态"""
+        mock_container = Mock()
+        mock_container.show = AsyncMock(return_value={
+            "Id": "container-123",
+            "Name": "/test-container",
+            "State": {
+                "Status": "exited",
+                "Paused": False,
+                "ExitCode": 1,
+                "Running": False,
+                "StartedAt": "2024-01-15T10:00:01Z",
+                "FinishedAt": "2024-01-15T10:05:00Z"
+            },
+            "Config": {
+                "Image": "python:3.11"
+            },
+            "NetworkSettings": {
+                "IPAddress": ""
+            },
+            "Created": "2024-01-15T10:00:00Z"
+        })
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        status = await scheduler.get_container_status("container-123")
+
+        assert status.status == "exited"
+        assert status.exit_code == 1
+
+    @pytest.mark.asyncio
+    async def test_wait_container_failure(self, scheduler, mock_docker):
+        """测试等待容器完成（失败）"""
+        mock_container = Mock()
+        mock_container.wait = AsyncMock(return_value={"StatusCode": 1})
+        mock_container.log = AsyncMock(return_value=["error output\n"])
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        result = await scheduler.wait_container("container-123")
+
+        assert result.status == "failed"
+        assert result.exit_code == 1
+
+    @pytest.mark.asyncio
+    async def test_ping_failure(self, scheduler, mock_docker):
+        """测试 ping 失败"""
+        mock_docker.version = AsyncMock(side_effect=Exception("Connection failed"))
+        result = await scheduler.ping()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_docker_initialization(self, mock_docker):
+        """测试 Docker 客户端初始化"""
+        scheduler = DockerScheduler()
+        scheduler._initialized = False
+
+        with patch('src.infrastructure.container_scheduler.docker_scheduler.Docker', return_value=mock_docker):
+            mock_docker.version = AsyncMock(return_value={"Version": "20.10.0"})
+
+            await scheduler._ensure_docker()
+
+            assert scheduler._initialized is True
+
+    @pytest.mark.asyncio
+    async def test_ensure_docker_already_initialized(self, scheduler, mock_docker):
+        """测试 Docker 客户端已初始化"""
+        result = await scheduler._ensure_docker()
+
+        assert result is mock_docker
+
+    def test_parse_s3_workspace_empty(self, scheduler):
+        """测试解析空 S3 workspace 路径"""
+        result = scheduler._parse_s3_workspace("")
+
+        assert result is None
+
+    def test_parse_s3_workspace_none(self, scheduler):
+        """测试解析 None S3 workspace 路径"""
+        result = scheduler._parse_s3_workspace(None)
+
+        assert result is None
+
+    def test_parse_disk_to_bytes_mb(self, scheduler):
+        """测试解析磁盘限制（MB）"""
+        result = scheduler._parse_disk_to_bytes("512Mi")
+
+        assert result == 512 * 1024 * 1024
+
+    def test_parse_memory_to_bytes_gib(self, scheduler):
+        """测试解析内存限制（GiB）"""
+        result = scheduler._parse_memory_to_bytes("2Gi")
+
+        assert result == 2 * 1024 * 1024 * 1024
+
+    def test_parse_memory_to_bytes_plain_number(self, scheduler):
+        """测试解析内存限制（纯数字）"""
+        result = scheduler._parse_memory_to_bytes("2048")
+
+        # 默认单位为 MB
+        assert result == 2048 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    async def test_create_container_with_labels(self, scheduler, mock_docker):
+        """测试创建带标签的容器"""
+        config = ContainerConfig(
+            image="python:3.11",
+            name="test-container",
+            cpu_limit="1",
+            memory_limit="512Mi",
+            disk_limit="1Gi",
+            env_vars={},
+            labels={"session_id": "sess-123", "template_id": "python-test"},
+            network_name="sandbox_network",
+            workspace_path="/workspace"
+        )
+
+        mock_container = Mock()
+        mock_container.id = "container-123"
+
+        containers_mock = Mock()
+        containers_mock.create = AsyncMock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        container_id = await scheduler.create_container(config)
+
+        assert container_id == "container-123"
+
+        # 验证标签被传递
+        call_args = containers_mock.create.call_args
+        container_config = call_args[0][0]
+        assert container_config["Labels"]["session_id"] == "sess-123"
+        assert container_config["Labels"]["template_id"] == "python-test"
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_with_name(self, scheduler, mock_docker):
+        """测试获取容器状态（带名称）"""
+        mock_container = Mock()
+        mock_container.show = AsyncMock(return_value={
+            "Id": "container-123",
+            "Name": "/sandbox-sess-123",
+            "State": {
+                "Status": "running",
+                "Paused": False,
+                "ExitCode": 0,
+                "Running": True,
+                "StartedAt": "2024-01-15T10:00:01Z",
+                "FinishedAt": "0001-01-01T00:00:00Z"
+            },
+            "Config": {
+                "Image": "python:3.11"
+            },
+            "NetworkSettings": {
+                "IPAddress": "172.17.0.2"
+            },
+            "Created": "2024-01-15T10:00:00Z"
+        })
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        status = await scheduler.get_container_status("container-123")
+
+        assert status.name == "sandbox-sess-123"
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs_with_stderr(self, scheduler, mock_docker):
+        """测试获取容器日志（包含 stderr）"""
+        mock_container = Mock()
+        mock_container.log = AsyncMock(return_value=["stdout\n", "stderr\n"])
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        logs = await scheduler.get_container_logs("container-123", tail=100)
+
+        assert "stdout" in logs
+        assert "stderr" in logs
+
+    @pytest.mark.asyncio
+    async def test_stop_container_default_timeout(self, scheduler, mock_docker):
+        """测试停止容器（默认超时）"""
+        mock_container = Mock()
+        mock_container.stop = AsyncMock()
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        await scheduler.stop_container("container-123")
+
+        mock_container.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_remove_container_no_force(self, scheduler, mock_docker):
+        """测试删除容器（不强制）"""
+        mock_container = Mock()
+        mock_container.delete = AsyncMock()
+
+        containers_mock = Mock()
+        containers_mock.container = Mock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        await scheduler.remove_container("container-123", force=False)
+
+        mock_container.delete.assert_called_once_with(force=False)
+
+    @pytest.mark.asyncio
+    async def test_create_container_with_env_vars(self, scheduler, mock_docker):
+        """测试创建带环境变量的容器"""
+        config = ContainerConfig(
+            image="python:3.11",
+            name="test-container",
+            cpu_limit="1",
+            memory_limit="512Mi",
+            disk_limit="1Gi",
+            env_vars={"DEBUG": "true", "API_KEY": "secret"},
+            labels={},
+            network_name="sandbox_network",
+            workspace_path="/workspace"
+        )
+
+        mock_container = Mock()
+        mock_container.id = "container-123"
+
+        containers_mock = Mock()
+        containers_mock.create = AsyncMock(return_value=mock_container)
+        mock_docker.containers = containers_mock
+
+        container_id = await scheduler.create_container(config)
+
+        assert container_id == "container-123"
+
+        # 验证环境变量被传递
+        call_args = containers_mock.create.call_args
+        container_config = call_args[0][0]
+        assert "DEBUG=true" in container_config["Env"]
+        assert "API_KEY=secret" in container_config["Env"]

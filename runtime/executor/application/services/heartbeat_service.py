@@ -64,14 +64,15 @@ class HeartbeatService(IHeartbeatPort):
 
             logger.debug("Heartbeat started", execution_id=execution_id)
 
-    async def stop_heartbeat(self, execution_id: str) -> None:
+    async def stop_heartbeat(self, execution_id: str, hold_lock: bool = True) -> None:
         """
         Stop heartbeat for an execution.
 
         Args:
             execution_id: Unique execution identifier
+            hold_lock: Whether to acquire the lock (internal use)
         """
-        async with self._lock:
+        async def _stop():
             if execution_id not in self._tasks:
                 logger.debug("Heartbeat not running", execution_id=execution_id)
                 return
@@ -94,6 +95,12 @@ class HeartbeatService(IHeartbeatPort):
             self._stop_events.pop(execution_id, None)
 
             logger.debug("Heartbeat stopped", execution_id=execution_id)
+
+        if hold_lock:
+            async with self._lock:
+                await _stop()
+        else:
+            await _stop()
 
     async def send_heartbeat(
         self,
@@ -182,7 +189,7 @@ class HeartbeatService(IHeartbeatPort):
             execution_ids = list(self._tasks.keys())
 
             for execution_id in execution_ids:
-                await self.stop_heartbeat(execution_id)
+                await self.stop_heartbeat(execution_id, hold_lock=False)
 
             logger.info("All heartbeats stopped", count=len(execution_ids))
 
