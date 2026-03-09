@@ -1,7 +1,7 @@
 # 2.1 管理中心 (Control Plane)
 
 
-> **文档导航**: [返回首页](index.md)
+> **文档导航**: [返回架构总览](../architecture/overview.md)
 
 
 ## 2. 关键组件设计

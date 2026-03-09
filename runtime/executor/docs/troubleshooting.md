@@ -191,7 +191,7 @@ ModuleNotFoundError: No module named 'executor'
 
 ```bash
 # 设置 PYTHONPATH
-export PYTHONPATH=/Users/guochenguang/project/sandbox-v2/sandbox/runtime
+export PYTHONPATH="$(cd .. && pwd)"
 
 # 或在启动时指定
 PYTHONPATH=/path/to/runtime python3 -m executor.interfaces.http.rest

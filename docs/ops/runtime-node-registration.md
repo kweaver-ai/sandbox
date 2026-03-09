@@ -85,7 +85,7 @@ INSERT INTO runtime_nodes (
     'localhost',
     'docker',
     '127.0.0.1',
-    'unix:///Users/guochenguang/.docker/run/docker.sock',
+    'unix:///.docker/run/docker.sock',
     'online',
     8.0,
     16384,

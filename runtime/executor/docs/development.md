@@ -22,7 +22,7 @@
 cd runtime/executor
 
 # 设置 PYTHONPATH
-export PYTHONPATH=/Users/guochenguang/project/sandbox-v2/sandbox/runtime
+export PYTHONPATH="$(cd .. && pwd)"
 
 # 安装依赖
 uv sync

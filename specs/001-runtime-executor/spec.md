@@ -3,7 +3,7 @@
 **Feature Branch**: `001-runtime-executor`
 **Created**: 2025-01-06
 **Status**: Draft
-**Input**: User description: "runtime/executor 构建 具体文档请参考 @docs/sandbox-design-v2.1.md 2.3 执行器 章节，api 文档参考 @docs/api/"
+**Input**: User description: "runtime/executor 构建 具体文档请参考 @docs/design/modules/executor.md，api 文档参考 @docs/api/"
 
 ## User Scenarios & Testing *(mandatory)*
 

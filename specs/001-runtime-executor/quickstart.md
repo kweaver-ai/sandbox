@@ -364,9 +364,9 @@ docker exec sandbox-executor ls -la /tmp/results/
 ## Next Steps
 
 - **Integration**: See [Internal API Reference](../api/internal-api.yaml) for callback endpoints
-- **Architecture**: Read [Architecture Design](../../docs/sandbox-design-v2.1.md#23-执行器-executor) for details
+- **Architecture**: Read [Executor Design](../../docs/design/modules/executor.md) for details
 - **Testing**: Review [Test Strategy](plan.md#testing-requirements) for comprehensive testing
-- **Security**: Consult [Security Design](../../docs/sandbox-design-v2.1.md#6-安全设计) for isolation details
+- **Security**: Consult [Security Design](../../docs/design/architecture/security-and-performance.md) for isolation details
 
 ## Getting Help
 

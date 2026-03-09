@@ -360,7 +360,7 @@ sandbox/
 - [API Contracts](specs/001-control-plane/contracts/)
 - [Quickstart Guide](specs/001-control-plane/quickstart.md)
 - [Research Decisions](specs/001-control-plane/research.md)
-- [Technical Design](docs/sandbox-design-v2.1.md)
+- [Documentation Index](docs/README.md)
 
 ## License
 

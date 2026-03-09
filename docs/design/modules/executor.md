@@ -1,7 +1,7 @@
 # 2.3 执行器
 
 
-> **文档导航**: [返回首页](index.md)
+> **文档导航**: [返回架构总览](../architecture/overview.md)
 
 
 ### 2.3 执行器 (Executor)
@@ -433,4 +433,3 @@ bwrap \
 | 用户     | 非特权用户       | 进一步限制 capabilities      |
 | 系统调用 | Seccomp 过滤     | 额外的 seccomp 过滤          |
 | 资源     | cgroup 限制      | ulimit 限制                  |
-
