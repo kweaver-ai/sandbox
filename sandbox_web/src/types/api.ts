@@ -13,6 +13,9 @@ export type RuntimeType = 'python3.11' | 'nodejs20' | 'java17' | 'go1.21';
 /** 会话状态 */
 export type SessionStatus = 'PENDING' | 'CREATING' | 'STARTING' | 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED' | 'TIMEOUT';
 
+/** 依赖安装状态 */
+export type DependencyInstallStatus = 'pending' | 'installing' | 'completed' | 'failed';
+
 /** 执行状态 */
 export type ExecutionStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'TIMEOUT' | 'CRASHED';
 
@@ -88,6 +91,13 @@ export interface SessionResponse {
   pod_name?: string;
   env_vars: Record<string, string>;
   timeout: number;
+  python_package_index_url?: string;
+  requested_dependencies?: DependencySpec[];
+  installed_dependencies?: InstalledDependencyResponse[];
+  dependency_install_status?: DependencyInstallStatus;
+  dependency_install_error?: string | null;
+  dependency_install_started_at?: string | null;
+  dependency_install_completed_at?: string | null;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -100,6 +110,15 @@ export interface DependencySpec {
   version?: string;
 }
 
+/** 已安装依赖 */
+export interface InstalledDependencyResponse {
+  name: string;
+  version: string;
+  install_location: string;
+  install_time: string;
+  is_from_template?: boolean;
+}
+
 /** 创建会话请求 */
 export interface CreateSessionRequest {
   template_id: string;
@@ -109,10 +128,17 @@ export interface CreateSessionRequest {
   disk?: string;
   env_vars?: Record<string, string>;
   event?: Record<string, unknown>;
+  python_package_index_url?: string;
   dependencies?: DependencySpec[];
   install_timeout?: number;
   fail_on_dependency_error?: boolean;
   allow_version_conflicts?: boolean;
+}
+
+/** 安装会话依赖请求 */
+export interface InstallSessionDependenciesRequest {
+  python_package_index_url?: string;
+  dependencies: DependencySpec[];
 }
 
 /** 会话列表响应 */

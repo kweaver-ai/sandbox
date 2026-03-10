@@ -8,6 +8,7 @@ runtime by performing a full install into the target dependency directory.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import importlib.metadata
 import os
 import shutil
@@ -122,14 +123,22 @@ class SessionConfigSyncService:
             raise SessionConfigValidationError("python_package_index_url is required")
 
     def _reset_install_directory(self) -> None:
-        if self._install_path.exists():
-            shutil.rmtree(self._install_path)
         self._install_path.mkdir(parents=True, exist_ok=True)
+        self._clear_directory(self._install_path)
         self._pip_cache_path.mkdir(parents=True, exist_ok=True)
+        self._clear_directory(self._pip_cache_path)
+
+    def _clear_directory(self, path: Path) -> None:
+        """Clear directory contents without removing the directory itself."""
+        for child in path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
 
     async def _install_dependencies(self, request: SessionConfigSyncRequest) -> None:
         command = [
-            sys.executable,
+            self._get_pip_python_executable(),
             "-m",
             "pip",
             "install",
@@ -166,6 +175,19 @@ class SessionConfigSyncService:
                 error=error,
             )
             raise SessionDependencyInstallError(error)
+
+    def _get_pip_python_executable(self) -> str:
+        """
+        Return a Python executable that can run `-m pip`.
+
+        The executor process runs inside a uv-managed virtualenv where `pip`
+        may be intentionally absent. In that case fall back to the base
+        interpreter used to create the virtualenv.
+        """
+        if importlib.util.find_spec("pip") is not None:
+            return sys.executable
+
+        return os.path.join(sys.base_prefix, "bin", "python3")
 
     def _scan_installed_dependencies(self) -> list[InstalledDependency]:
         installed_at = datetime.now(timezone.utc)

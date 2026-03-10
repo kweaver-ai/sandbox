@@ -46,6 +46,22 @@ class TestSessionConfigSyncService:
         assert result.installed_dependencies == []
         assert service._install_path.exists()
 
+    def test_reset_install_directory_preserves_root_directory(self, service):
+        service._install_path.mkdir(parents=True, exist_ok=True)
+        service._pip_cache_path.mkdir(parents=True, exist_ok=True)
+        (service._install_path / "obsolete.txt").write_text("old")
+        nested_dir = service._install_path / "nested"
+        nested_dir.mkdir()
+        (nested_dir / "package.py").write_text("print('stale')")
+        (service._pip_cache_path / "cache.bin").write_text("cache")
+
+        service._reset_install_directory()
+
+        assert service._install_path.exists()
+        assert service._pip_cache_path.exists()
+        assert list(service._install_path.iterdir()) == []
+        assert list(service._pip_cache_path.iterdir()) == []
+
     @pytest.mark.asyncio
     async def test_sync_invokes_pip_and_scans_installed_distributions(self, service):
         request = SessionConfigSyncRequest(
@@ -84,6 +100,16 @@ class TestSessionConfigSyncService:
         assert len(result.installed_dependencies) == 1
         assert result.installed_dependencies[0].name == "requests"
         assert result.installed_dependencies[0].version == "2.31.0"
+
+    def test_get_pip_python_executable_falls_back_to_base_python(self, service):
+        with patch(
+            "executor.application.services.session_config_sync_service.importlib.util.find_spec",
+            return_value=None,
+        ), patch(
+            "executor.application.services.session_config_sync_service.sys.base_prefix",
+            "/usr/local",
+        ):
+            assert service._get_pip_python_executable() == "/usr/local/bin/python3"
 
     @pytest.mark.asyncio
     async def test_sync_rejects_non_python_runtime(self, service):

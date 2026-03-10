@@ -17,6 +17,8 @@ export const API_ENDPOINTS = {
   // Sessions
   SESSIONS: '/api/v1/sessions',
   SESSION: (id: string) => `/api/v1/sessions/${id}`,
+  INSTALL_SESSION_DEPENDENCIES: (id: string) =>
+    `/api/v1/sessions/${id}/dependencies/install`,
 
   // Executions
   EXECUTE: (sessionId: string) => `/api/v1/executions/sessions/${sessionId}/execute`,
@@ -39,3 +41,6 @@ export const DEFAULT_PAGINATION = {
 
 /** HTTP 超时时间（毫秒） */
 export const HTTP_TIMEOUT = 30000;
+
+/** 长耗时 HTTP 超时时间（毫秒） */
+export const LONG_TASK_HTTP_TIMEOUT = 180000;

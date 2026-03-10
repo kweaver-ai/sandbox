@@ -7,6 +7,7 @@ import * as sessionsApi from '@apis/sessions';
 import type {
   SessionResponse,
   CreateSessionRequest,
+  InstallSessionDependenciesRequest,
   SessionStatus,
 } from '@apis/sessions';
 
@@ -91,12 +92,32 @@ export function useSessions() {
     }
   }, []);
 
+  const installSessionDependencies = useCallback(
+    async (id: string, data: InstallSessionDependenciesRequest) => {
+      setLoading(true);
+      try {
+        const updatedSession = await sessionsApi.installSessionDependencies(id, data);
+        setSessions((prev) => prev.map((s) => (s.id === id ? updatedSession : s)));
+        message.success('依赖安装任务已提交');
+        return updatedSession;
+      } catch (error) {
+        message.error('安装依赖失败');
+        console.error(error);
+        throw error;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
   return {
     sessions,
     stats,
     loading,
     fetchSessions,
     createSession,
+    installSessionDependencies,
     terminateSession,
   };
 }

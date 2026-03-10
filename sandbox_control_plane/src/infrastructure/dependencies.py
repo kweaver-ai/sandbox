@@ -3,7 +3,9 @@
 
 配置和提供应用所需的所有依赖项。
 """
+import asyncio
 import os
+import time
 from functools import lru_cache
 
 from fastapi import FastAPI, Depends
@@ -19,6 +21,7 @@ from src.domain.repositories.template_repository import ITemplateRepository
 from src.domain.services.scheduler import IScheduler, RuntimeNode
 from src.domain.services.storage import IStorageService
 from src.domain.value_objects.execution_request import ExecutionRequest
+from src.domain.value_objects.execution_status import SessionStatus
 
 from src.infrastructure.persistence.database import db_manager
 from src.infrastructure.executors import ExecutorClient
@@ -531,6 +534,18 @@ def get_docker_scheduler_service(
     template_repo = Depends(get_template_repository),
 ) -> IScheduler:
     """获取调度服务（Docker 或 K8s）"""
+    return _create_scheduler_service(
+        runtime_node_repo=runtime_node_repo,
+        template_repo=template_repo,
+    )
+
+
+def _create_scheduler_service(
+    runtime_node_repo,
+    template_repo,
+    executor_timeout: float = 30.0,
+) -> IScheduler:
+    """创建调度服务实例。"""
     if USE_MOCK_SCHEDULER:
         return MockScheduler()
 
@@ -539,7 +554,7 @@ def get_docker_scheduler_service(
 
     # 创建 ExecutorClient 实例
     executor_client = ExecutorClient(
-        timeout=30.0,
+        timeout=executor_timeout,
         max_retries=3,
         retry_delay=0.5,
     )
@@ -638,7 +653,159 @@ def get_session_service_db(
         scheduler=scheduler,
         storage_service=storage_service,
         executor_client=executor_client,
+        initial_dependency_sync_scheduler=get_initial_dependency_sync_scheduler(),
     )
+
+
+def get_initial_dependency_sync_scheduler():
+    """获取首次依赖同步后台调度器。"""
+
+    def schedule(session_id: str, install_timeout: int) -> None:
+        async def _run() -> None:
+            try:
+                await _run_initial_dependency_sync(session_id, install_timeout)
+            except Exception as exc:
+                logger.exception(
+                    "Initial dependency sync task failed unexpectedly",
+                    session_id=session_id,
+                )
+                await _mark_initial_dependency_sync_failed(
+                    session_id=session_id,
+                    error=f"Initial dependency sync failed unexpectedly: {exc}",
+                )
+
+        asyncio.create_task(_run())
+
+    return schedule
+
+
+async def _run_initial_dependency_sync(session_id: str, install_timeout: int) -> None:
+    """执行首次依赖同步后台任务。"""
+    deadline = time.monotonic() + install_timeout
+    poll_interval = 1.0
+    last_status = "unknown"
+    session_seen = False
+
+    while time.monotonic() < deadline:
+        async with db_manager.get_session() as session:
+            from src.infrastructure.persistence.repositories.sql_execution_repository import (
+                SqlExecutionRepository,
+            )
+            from src.infrastructure.persistence.repositories.sql_runtime_node_repository import (
+                SqlRuntimeNodeRepository,
+            )
+            from src.infrastructure.persistence.repositories.sql_session_repository import (
+                SqlSessionRepository,
+            )
+            from src.infrastructure.persistence.repositories.sql_template_repository import (
+                SqlTemplateRepository,
+            )
+
+            execution_repo = SqlExecutionRepository(session)
+            session_repo = SqlSessionRepository(session, execution_repo)
+            current_session = await session_repo.find_by_id(session_id)
+
+            if current_session is None:
+                if session_seen:
+                    logger.warning(
+                        "Initial dependency sync skipped because session was deleted",
+                        session_id=session_id,
+                    )
+                    return
+            else:
+                session_seen = True
+
+                last_status = current_session.status.value
+
+                if current_session.status in {
+                    SessionStatus.FAILED,
+                    SessionStatus.TERMINATED,
+                    SessionStatus.COMPLETED,
+                    SessionStatus.TIMEOUT,
+                }:
+                    current_session.mark_dependency_install_failed(
+                        f"Session became {current_session.status.value} before initial dependency sync"
+                    )
+                    await session_repo.save(current_session)
+                    return
+
+                if (
+                    current_session.status == SessionStatus.RUNNING
+                    and current_session.container_id
+                    and current_session.requested_dependencies
+                ):
+                    template_repo = SqlTemplateRepository(session)
+                    runtime_node_repo = SqlRuntimeNodeRepository(session)
+                    scheduler = _create_scheduler_service(
+                        runtime_node_repo=runtime_node_repo,
+                        template_repo=template_repo,
+                        executor_timeout=float(install_timeout),
+                    )
+                    service = SessionService(
+                        session_repo=session_repo,
+                        execution_repo=execution_repo,
+                        template_repo=template_repo,
+                        scheduler=scheduler,
+                        storage_service=get_storage_service(),
+                        executor_client=ExecutorClient(timeout=float(install_timeout)),
+                    )
+                    await service.sync_session_dependencies_for_session(
+                        session_id=session_id,
+                        sync_mode="replace",
+                    )
+                    return
+
+        await asyncio.sleep(poll_interval)
+
+    async with db_manager.get_session() as session:
+        from src.infrastructure.persistence.repositories.sql_execution_repository import (
+            SqlExecutionRepository,
+        )
+        from src.infrastructure.persistence.repositories.sql_session_repository import (
+            SqlSessionRepository,
+        )
+
+        execution_repo = SqlExecutionRepository(session)
+        session_repo = SqlSessionRepository(session, execution_repo)
+        current_session = await session_repo.find_by_id(session_id)
+        if current_session is None:
+            return
+
+        current_session.mark_dependency_install_failed(
+            "Timed out waiting for session to become ready for initial dependency sync"
+        )
+        await session_repo.save(current_session)
+
+    logger.error(
+        "Initial dependency sync timed out waiting for running session",
+        session_id=session_id,
+        install_timeout=install_timeout,
+        last_status=last_status,
+    )
+
+
+async def _mark_initial_dependency_sync_failed(session_id: str, error: str) -> None:
+    """兜底回写首次依赖同步失败状态。"""
+    async with db_manager.get_session() as session:
+        from src.infrastructure.persistence.repositories.sql_execution_repository import (
+            SqlExecutionRepository,
+        )
+        from src.infrastructure.persistence.repositories.sql_session_repository import (
+            SqlSessionRepository,
+        )
+
+        execution_repo = SqlExecutionRepository(session)
+        session_repo = SqlSessionRepository(session, execution_repo)
+        current_session = await session_repo.find_by_id(session_id)
+        if current_session is None:
+            logger.warning(
+                "Skipping initial dependency sync failure persistence because session was not found",
+                session_id=session_id,
+            )
+            return
+
+        current_session.mark_dependency_install_failed(error)
+        await session_repo.save(current_session)
 
 
 def get_template_service_db(

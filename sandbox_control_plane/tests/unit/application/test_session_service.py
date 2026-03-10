@@ -68,7 +68,19 @@ class TestSessionService:
         return client
 
     @pytest.fixture
-    def service(self, session_repo, template_repo, scheduler, execution_repo, executor_client):
+    def initial_dependency_sync_scheduler(self):
+        return Mock()
+
+    @pytest.fixture
+    def service(
+        self,
+        session_repo,
+        template_repo,
+        scheduler,
+        execution_repo,
+        executor_client,
+        initial_dependency_sync_scheduler,
+    ):
         """创建会话服务"""
         return SessionService(
             session_repo=session_repo,
@@ -76,6 +88,7 @@ class TestSessionService:
             template_repo=template_repo,
             scheduler=scheduler,
             executor_client=executor_client,
+            initial_dependency_sync_scheduler=initial_dependency_sync_scheduler,
         )
 
     @pytest.mark.asyncio
@@ -367,7 +380,14 @@ class TestSessionService:
             await service.create_session(command)
 
     @pytest.mark.asyncio
-    async def test_create_session_with_dependencies(self, service, template_repo, scheduler, session_repo):
+    async def test_create_session_with_dependencies(
+        self,
+        service,
+        template_repo,
+        scheduler,
+        session_repo,
+        initial_dependency_sync_scheduler,
+    ):
         """测试创建带依赖的会话"""
         template = Template(
             id="python-test",
@@ -394,12 +414,15 @@ class TestSessionService:
             template_id="python-test",
             timeout=300,
             resource_limit=ResourceLimit.default(),
-            dependencies=[{"name": "requests", "version": ">=2.28.0"}]
+            dependencies=["requests>=2.28.0"],
         )
 
         result = await service.create_session(command)
 
         assert result.template_id == "python-test"
+        assert result.dependency_install_status == "installing"
+        assert result.dependency_install_started_at is not None
+        initial_dependency_sync_scheduler.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_list_sessions(self, service, session_repo):

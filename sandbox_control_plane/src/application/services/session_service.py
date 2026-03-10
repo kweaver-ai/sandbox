@@ -3,7 +3,7 @@
 
 编排会话相关的用例。
 """
-from typing import List, Optional
+from typing import Callable, List, Optional
 from datetime import datetime, timedelta
 import uuid
 
@@ -61,6 +61,7 @@ class SessionService:
         scheduler: IScheduler,
         storage_service: Optional[IStorageService] = None,
         executor_client: Optional[ExecutorClient] = None,
+        initial_dependency_sync_scheduler: Optional[Callable[[str, int], None]] = None,
     ):
         self._session_repo = session_repo
         self._execution_repo = execution_repo
@@ -68,6 +69,7 @@ class SessionService:
         self._scheduler = scheduler
         self._storage_service = storage_service
         self._executor_client = executor_client or ExecutorClient()
+        self._initial_dependency_sync_scheduler = initial_dependency_sync_scheduler
 
     async def create_session(self, command: CreateSessionCommand) -> SessionDTO:
         """
@@ -138,6 +140,15 @@ class SessionService:
             container_id=container_id,
             status=session.status.value,
         )
+
+        if dependencies := (command.dependencies or []):
+            session.mark_dependency_installing()
+            await self._session_repo.save(session)
+            self._schedule_initial_dependency_sync(
+                session_id=session.id,
+                install_timeout=command.install_timeout,
+                dependency_count=len(dependencies),
+            )
 
         return SessionDTO.from_entity(session)
 
@@ -214,7 +225,7 @@ class SessionService:
         from src.domain.entities.template import Template
 
         container_id = None
-        dependencies = command.dependencies or []
+        dependencies: list[str] = []
 
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
@@ -339,6 +350,17 @@ class SessionService:
             command.dependencies,
         )
         return await self._sync_session_dependencies(session, sync_mode="merge")
+
+    async def sync_session_dependencies_for_session(
+        self,
+        session_id: str,
+        sync_mode: str = "replace",
+    ) -> SessionDTO:
+        """同步指定 session 的依赖配置。"""
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {session_id}")
+        return await self._sync_session_dependencies(session, sync_mode=sync_mode)
 
     async def list_sessions(
         self,
@@ -756,6 +778,29 @@ class SessionService:
             )
         await self._session_repo.save(session)
         return SessionDTO.from_entity(session)
+
+    def _schedule_initial_dependency_sync(
+        self,
+        session_id: str,
+        install_timeout: int,
+        dependency_count: int,
+    ) -> None:
+        """调度首次依赖安装后台任务。"""
+        if self._initial_dependency_sync_scheduler is None:
+            logger.warning(
+                "Initial dependency sync scheduler is not configured",
+                session_id=session_id,
+                dependency_count=dependency_count,
+            )
+            return
+
+        logger.info(
+            "Scheduling initial dependency sync",
+            session_id=session_id,
+            dependency_count=dependency_count,
+            install_timeout=install_timeout,
+        )
+        self._initial_dependency_sync_scheduler(session_id, install_timeout)
 
     def _generate_session_id(self) -> str:
         """生成会话 ID"""
