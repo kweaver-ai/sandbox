@@ -16,6 +16,23 @@ class ResourceLimitResponse(BaseModel):
     max_processes: Optional[int] = 128
 
 
+class DependencyResponse(BaseModel):
+    """依赖响应。"""
+
+    name: str
+    version: Optional[str] = None
+
+
+class InstalledDependencyResponse(BaseModel):
+    """已安装依赖响应。"""
+
+    name: str
+    version: str
+    install_location: str
+    install_time: datetime
+    is_from_template: bool = False
+
+
 class SessionResponse(BaseModel):
     """会话响应"""
     id: str
@@ -23,12 +40,20 @@ class SessionResponse(BaseModel):
     status: str
     resource_limit: Optional[ResourceLimitResponse] = None
     workspace_path: Optional[str] = None
+    language_runtime: str
     runtime_type: str
     runtime_node: Optional[str] = None
     container_id: Optional[str] = None
     pod_name: Optional[str] = None
     env_vars: Dict[str, str] = {}
     timeout: int
+    python_package_index_url: str = "https://pypi.org/simple/"
+    requested_dependencies: List[DependencyResponse] = []
+    installed_dependencies: List[InstalledDependencyResponse] = []
+    dependency_install_status: str = "pending"
+    dependency_install_error: Optional[str] = None
+    dependency_install_started_at: Optional[datetime] = None
+    dependency_install_completed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
@@ -130,4 +155,3 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     version: str = "2.1.0"
     uptime: float
-

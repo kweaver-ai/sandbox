@@ -111,6 +111,11 @@ class CreateSessionRequest(BaseModel):
         False,
         description="是否允许版本冲突（Template 预装包 vs 用户请求包）"
     )
+    python_package_index_url: Optional[str] = Field(
+        None,
+        max_length=512,
+        description="Python 软件包仓库地址，默认 https://pypi.org/simple/"
+    )
 
     @field_validator("cpu")
     @classmethod
@@ -156,6 +161,22 @@ class TerminateSessionRequest(BaseModel):
     reason: Optional[str] = Field(None, description="终止原因")
 
 
+class InstallSessionDependenciesRequest(BaseModel):
+    """增量安装 Python 依赖请求。"""
+
+    python_package_index_url: Optional[str] = Field(
+        None,
+        max_length=512,
+        description="Python 软件包仓库地址；未传则沿用当前 session 配置",
+    )
+    dependencies: List[DependencySpec] = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="本次增量安装的依赖列表",
+    )
+
+
 class CreateTemplateRequest(BaseModel):
     """创建模板请求"""
     id: str = Field(..., min_length=1, max_length=64, description="模板 ID")
@@ -180,4 +201,3 @@ class UpdateTemplateRequest(BaseModel):
     default_disk_mb: Optional[int] = Field(None, ge=256, le=51200, description="默认磁盘（MB）")
     default_timeout: Optional[int] = Field(None, ge=60, le=3600, description="默认超时（秒）")
     default_env_vars: Optional[Dict[str, str]] = Field(None, description="默认环境变量")
-

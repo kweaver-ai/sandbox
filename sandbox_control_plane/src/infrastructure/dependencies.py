@@ -234,6 +234,9 @@ class MockScheduler(IScheduler):
         """Mock 执行方法"""
         return execution_request.execution_id or "mock_execution_id"
 
+    async def get_executor_url(self, container_id: str) -> str:
+        return "http://localhost:8080"
+
 
 class MockRuntimeNodeRepository:
     """Mock 运行时节点仓储（用于开发测试）"""
@@ -610,12 +613,22 @@ def get_storage_service():
     return _storage_service_singleton
 
 
+def get_executor_client() -> ExecutorClient:
+    """获取 ExecutorClient。"""
+    return ExecutorClient(
+        timeout=30.0,
+        max_retries=3,
+        retry_delay=0.5,
+    )
+
+
 def get_session_service_db(
     session_repo: ISessionRepository = Depends(get_session_repository),
     execution_repo: IExecutionRepository = Depends(get_execution_repository),
     template_repo: ITemplateRepository = Depends(get_template_repository),
     scheduler: IScheduler = Depends(get_docker_scheduler_service),
     storage_service = Depends(get_storage_service),
+    executor_client: ExecutorClient = Depends(get_executor_client),
 ) -> SessionService:
     """获取会话服务（使用数据库仓储和 Docker 调度器）"""
     return SessionService(
@@ -624,6 +637,7 @@ def get_session_service_db(
         template_repo=template_repo,
         scheduler=scheduler,
         storage_service=storage_service,
+        executor_client=executor_client,
     )
 
 

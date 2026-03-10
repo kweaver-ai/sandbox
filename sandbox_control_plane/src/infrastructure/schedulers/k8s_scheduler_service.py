@@ -198,29 +198,10 @@ class K8sSchedulerService(IScheduler):
             execution_id: 执行任务 ID
         """
         # 从 K8s API 获取 Pod IP
-        import asyncio
-        from kubernetes import client as k8s_client
-
-        pod_name = container_id
-        namespace = self._container_scheduler._namespace
-
-        try:
-            # 获取 Pod 信息以获得 Pod IP
-            pod_info = await asyncio.to_thread(
-                self._container_scheduler._core_v1.read_namespaced_pod,
-                name=pod_name,
-                namespace=namespace,
-            )
-            pod_ip = pod_info.status.pod_ip
-            if not pod_ip:
-                raise RuntimeError(f"Pod {pod_name} does not have an IP address yet")
-
-            executor_url = f"http://{pod_ip}:{self._executor_port}"
-            logger.info(f"Submitting execution to executor: {executor_url}, session_id={session_id}, pod_name={container_id}")
-
-        except Exception as e:
-            logger.error(f"Failed to get pod IP for {pod_name}: {e}")
-            raise
+        executor_url = await self.get_executor_url(container_id)
+        logger.info(
+            f"Submitting execution to executor: {executor_url}, session_id={session_id}, pod_name={container_id}"
+        )
 
         # 使用执行器客户端提交请求
         try:
@@ -241,4 +222,26 @@ class K8sSchedulerService(IScheduler):
 
         except Exception as e:
             logger.error(f"Failed to submit execution to executor: {executor_url}, error={e}")
+            raise
+
+    async def get_executor_url(self, container_id: str) -> str:
+        """根据 Pod 名称获取 executor URL。"""
+        import asyncio
+
+        pod_name = container_id
+        namespace = self._container_scheduler._namespace
+
+        try:
+            pod_info = await asyncio.to_thread(
+                self._container_scheduler._core_v1.read_namespaced_pod,
+                name=pod_name,
+                namespace=namespace,
+            )
+            pod_ip = pod_info.status.pod_ip
+            if not pod_ip:
+                raise RuntimeError(f"Pod {pod_name} does not have an IP address yet")
+
+            return f"http://{pod_ip}:{self._executor_port}"
+        except Exception as e:
+            logger.error(f"Failed to get pod IP for {pod_name}: {e}")
             raise

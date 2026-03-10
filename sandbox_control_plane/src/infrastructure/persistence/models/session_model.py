@@ -11,6 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
 from src.infrastructure.persistence.database import Base
+from src.shared.utils.dependencies import DEFAULT_PYTHON_PACKAGE_INDEX_URL
 
 
 class SessionModel(Base):
@@ -46,6 +47,11 @@ class SessionModel(Base):
     # Environment and timeout
     f_env_vars = Column(Text, nullable=False, default="")
     f_timeout = Column(Integer, nullable=False, default=300)
+    f_python_package_index_url: Mapped[str] = mapped_column(
+        String(512),
+        nullable=False,
+        default=DEFAULT_PYTHON_PACKAGE_INDEX_URL,
+    )
 
     # Timestamps (BIGINT - millisecond timestamps)
     f_last_activity_at = Column(BigInteger, nullable=False, default=0)
@@ -107,9 +113,16 @@ class SessionModel(Base):
             completed_at=self._millis_to_datetime(self.f_completed_at),
             last_activity_at=self._millis_to_datetime(self.f_last_activity_at) or datetime.now(),
             # 依赖安装字段
+            python_package_index_url=self.f_python_package_index_url or DEFAULT_PYTHON_PACKAGE_INDEX_URL,
             requested_dependencies=self._parse_json(self.f_requested_dependencies) or [],
             dependency_install_status=self.f_dependency_install_status or "pending",
             dependency_install_error=self.f_dependency_install_error or None,
+            dependency_install_started_at=self._millis_to_datetime(
+                self.f_dependency_install_started_at
+            ),
+            dependency_install_completed_at=self._millis_to_datetime(
+                self.f_dependency_install_completed_at
+            ),
         )
 
         # 转换 installed_dependencies JSON 为 InstalledDependency 对象列表
@@ -171,6 +184,7 @@ class SessionModel(Base):
             f_resources_disk=session.resource_limit.disk,
             f_env_vars=json.dumps(session.env_vars, ensure_ascii=False) if session.env_vars else "",
             f_timeout=session.timeout,
+            f_python_package_index_url=session.python_package_index_url,
             f_completed_at=int(session.completed_at.timestamp() * 1000) if session.completed_at else 0,
             f_last_activity_at=int(session.last_activity_at.timestamp() * 1000) if session.last_activity_at else now_ms,
             # 依赖安装字段
@@ -178,8 +192,10 @@ class SessionModel(Base):
             f_installed_dependencies=installed_dependencies_json,
             f_dependency_install_status=session.dependency_install_status,
             f_dependency_install_error=session.dependency_install_error or "",
-            f_dependency_install_started_at=0,
-            f_dependency_install_completed_at=0,
+            f_dependency_install_started_at=int(session.dependency_install_started_at.timestamp() * 1000)
+            if session.dependency_install_started_at else 0,
+            f_dependency_install_completed_at=int(session.dependency_install_completed_at.timestamp() * 1000)
+            if session.dependency_install_completed_at else 0,
             # 审计字段
             f_created_at=int(session.created_at.timestamp() * 1000) if session.created_at else now_ms,
             f_created_by="",

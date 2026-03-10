@@ -55,8 +55,7 @@ docs/
 ### API
 
 - [API 总览](./api/README.md)
-- [REST OpenAPI v0.2.0](./api/rest/sandbox-openapi-v0.2.0.json)
-- [REST OpenAPI v0.3.0](./api/rest/sandbox-openapi-v0.3.0.json)
+- [REST OpenAPI](./api/rest/sandbox-openapi.json)
 - [Execute Sync OpenAPI](./api/rest/execute-sync-openapi.yaml)
 
 ### Dev

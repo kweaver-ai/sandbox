@@ -4,10 +4,7 @@
 
 ## 文档列表
 
-### [sandbox-openapi-v0.2.0.json](./rest/sandbox-openapi-v0.2.0.json)
-历史版本 OpenAPI 规范。
-
-### [sandbox-openapi-v0.3.0.json](./rest/sandbox-openapi-v0.3.0.json)
+### [sandbox-openapi.json](./rest/sandbox-openapi.json)
 当前 REST OpenAPI 规范。
 
 ### [execute-sync-openapi.yaml](./rest/execute-sync-openapi.yaml)

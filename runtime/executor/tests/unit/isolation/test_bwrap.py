@@ -107,3 +107,22 @@ class TestBubblewrapRunnerInit:
 
         # Check for common isolation flags
         assert "--unshare-pid" in args or "--unshare-all" in args
+
+    def test_inject_env_args_adds_setenv_before_separator(self):
+        """Test environment variables are injected into bwrap command."""
+        from pathlib import Path
+        from executor.infrastructure.isolation.bwrap import BubblewrapRunner
+
+        runner = BubblewrapRunner(Path("/tmp/workspace"))
+        cmd = ["bwrap", "--clearenv", "--", "python3", "-c", "print('hi')"]
+
+        updated = runner._inject_env_args(
+            cmd,
+            {"EVENT_JSON": "{}", "PYTHONPATH": "/opt/sandbox-venv"},
+        )
+
+        separator_index = updated.index("--")
+        prefix = updated[:separator_index]
+        assert "--setenv" in prefix
+        assert "EVENT_JSON" in prefix
+        assert "PYTHONPATH" in prefix

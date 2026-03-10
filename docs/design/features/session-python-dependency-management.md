@@ -18,7 +18,7 @@
 
 基线参考：
 
-- OpenAPI：`docs/api/rest/sandbox-openapi-v0.2.0.json`
+- OpenAPI：`docs/api/rest/sandbox-openapi.json`
 - 数据库：`migrations/mariadb/0.2.0/pre/init.sql`
 
 ## 2. 设计结论
@@ -774,7 +774,7 @@ pip3 install \
 
 需要更新或新增以下内容：
 
-- `docs/api/rest/sandbox-openapi-v0.2.0.json`
+- `docs/api/rest/sandbox-openapi.json`
   - 更新 `CreateSessionRequest`
   - 新增 `UpdateSessionRequest`
   - 新增 `InstallSessionDependenciesRequest`

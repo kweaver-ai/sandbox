@@ -357,7 +357,7 @@ class DockerSchedulerService(IScheduler):
         # 使用容器名称在 Docker 内部网络中进行通信
         # 容器名称格式: sandbox-{session_id}
         container_name = container_info.name
-        executor_url = f"http://{container_name}:{self._executor_port}"
+        executor_url = self._build_executor_url(container_name)
 
         logger.info(
             "Submitting execution to executor",
@@ -394,3 +394,10 @@ class DockerSchedulerService(IScheduler):
                 error=str(e),
             )
             raise
+
+    async def get_executor_url(self, container_id: str) -> str:
+        """根据容器 ID 获取 executor URL。"""
+        return self._build_executor_url(container_id)
+
+    def _build_executor_url(self, container_name: str) -> str:
+        return f"http://{container_name}:{self._executor_port}"

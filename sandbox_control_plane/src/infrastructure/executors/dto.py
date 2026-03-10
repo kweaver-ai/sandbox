@@ -64,6 +64,36 @@ class ExecutorHealthResponse(BaseModel):
     active_executions: Optional[int] = Field(None, description="Number of active executions")
 
 
+class ExecutorSyncSessionConfigRequest(BaseModel):
+    """Executor 依赖同步请求。"""
+
+    session_id: str = Field(..., description="Session identifier")
+    language_runtime: str = Field(..., description="Language runtime type")
+    python_package_index_url: str = Field(..., description="Python package index url")
+    dependencies: list[str] = Field(default_factory=list, description="Final pip spec list")
+    sync_mode: str = Field(..., description="replace or merge")
+
+
+class ExecutorInstalledDependency(BaseModel):
+    """Executor 返回的已安装依赖。"""
+
+    name: str
+    version: str
+    install_location: str
+    install_time: str
+    is_from_template: bool = False
+
+
+class ExecutorSyncSessionConfigResponse(BaseModel):
+    """Executor 依赖同步响应。"""
+
+    status: str
+    installed_dependencies: list[ExecutorInstalledDependency] = Field(default_factory=list)
+    error: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
 @dataclass
 class ExecutorContainerInfo:
     """

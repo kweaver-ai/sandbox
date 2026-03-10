@@ -22,6 +22,15 @@ from executor.application.commands.execute_code import ExecuteCodeCommand
 from executor.application.dto.execute_request import ExecuteRequestDTO
 from executor.application.services.heartbeat_service import HeartbeatService
 from executor.application.services.lifecycle_service import LifecycleService, register_lifecycle_service
+from executor.application.services.session_config_sync_service import (
+    InstalledDependency,
+    SessionConfigSyncRequest,
+    SessionConfigSyncResult,
+    SessionConfigSyncService,
+    SessionConfigSyncError,
+    SessionConfigValidationError,
+    SessionDependencyInstallError,
+)
 from executor.domain.value_objects import (
     ExecutionRequest as DomainExecutionRequest,
     ExecutionResult,
@@ -103,12 +112,43 @@ class HealthResponse(BaseModel):
     active_executions: Optional[int] = None
 
 
+class SessionConfigSyncRequestModel(BaseModel):
+    """Internal request model for syncing session dependency configuration."""
+
+    session_id: str = Field(..., description="Session identifier")
+    language_runtime: str = Field(..., description="Language runtime, e.g. python3.11")
+    python_package_index_url: str = Field(..., description="Python package index URL")
+    dependencies: list[str] = Field(default_factory=list, description="Final pip spec list")
+    sync_mode: str = Field(..., description="replace or merge", pattern="^(replace|merge)$")
+
+
+class InstalledDependencyModel(BaseModel):
+    """Installed dependency response model."""
+
+    name: str
+    version: str
+    install_location: str
+    install_time: str
+    is_from_template: bool = False
+
+
+class SessionConfigSyncResponseModel(BaseModel):
+    """Internal response model for session dependency sync."""
+
+    status: str
+    installed_dependencies: list[InstalledDependencyModel] = Field(default_factory=list)
+    error: str = ""
+    started_at: str
+    completed_at: str
+
+
 # Global service instances
 _execute_command: Optional[ExecuteCodeCommand] = None
 _heartbeat_service: Optional[HeartbeatService] = None
 _lifecycle_service: Optional[LifecycleService] = None
 _callback_client: Optional[CallbackClient] = None
 _metrics_collector: Optional[MetricsCollector] = None
+_session_config_sync_service: Optional[SessionConfigSyncService] = None
 
 
 def get_execute_command() -> ExecuteCodeCommand:
@@ -119,6 +159,16 @@ def get_execute_command() -> ExecuteCodeCommand:
             detail="Executor service not initialized",
         )
     return _execute_command
+
+
+def get_session_config_sync_service() -> SessionConfigSyncService:
+    """Get the session config sync service instance."""
+    if _session_config_sync_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session config sync service not initialized",
+        )
+    return _session_config_sync_service
 
 
 @asynccontextmanager
@@ -141,7 +191,7 @@ async def lifespan(app: FastAPI):
 
     Note: Uvicorn handles SIGINT/SIGTERM and triggers this shutdown automatically.
     """
-    global _execute_command, _heartbeat_service, _lifecycle_service, _callback_client, _metrics_collector
+    global _execute_command, _heartbeat_service, _lifecycle_service, _callback_client, _metrics_collector, _session_config_sync_service
 
     # Environment variables
     workspace_path = Path(os.environ.get("WORKSPACE_PATH", str(settings.workspace_path)))
@@ -279,6 +329,10 @@ async def lifespan(app: FastAPI):
         control_plane_url=control_plane_url,
     )
     _execute_command = execute_command
+    _session_config_sync_service = SessionConfigSyncService(
+        install_path=Path(settings.dependency_install_path),
+        pip_cache_path=Path(settings.pip_cache_path),
+    )
 
     logger.info("Executor startup complete")
 
@@ -622,6 +676,65 @@ def create_app() -> FastAPI:
             "message": "Execution submitted",
         }
 
+    @app.post(
+        "/internal/session-config/sync",
+        response_model=SessionConfigSyncResponseModel,
+        responses={
+            200: {"description": "Session config synchronized"},
+            400: {"model": ErrorResponse, "description": "Invalid sync request"},
+            422: {"model": ErrorResponse, "description": "Dependency installation failed"},
+            500: {"model": ErrorResponse, "description": "Internal error"},
+        },
+        summary="Sync session dependency configuration",
+        description="Internal endpoint used by control plane to synchronize Python dependencies",
+        tags=["internal"],
+    )
+    async def sync_session_config_endpoint(
+        request: SessionConfigSyncRequestModel,
+    ) -> SessionConfigSyncResponseModel:
+        """Synchronize session-level Python dependency configuration."""
+        service = get_session_config_sync_service()
+
+        try:
+            result = await service.sync(
+                SessionConfigSyncRequest(
+                    session_id=request.session_id,
+                    language_runtime=request.language_runtime,
+                    python_package_index_url=request.python_package_index_url,
+                    dependencies=request.dependencies,
+                    sync_mode=request.sync_mode,
+                )
+            )
+        except SessionConfigValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "Executor.ValidationError",
+                    "description": "Invalid session config sync request",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+        except SessionDependencyInstallError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error_code": "Executor.DependencyInstallError",
+                    "description": "Dependency installation failed",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+        except SessionConfigSyncError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error_code": "Executor.SessionConfigSyncError",
+                    "description": "Session config sync failed",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+
+        return _map_session_config_sync_result(result)
+
     return app
 
 
@@ -648,3 +761,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _map_session_config_sync_result(
+    result: SessionConfigSyncResult,
+) -> SessionConfigSyncResponseModel:
+    return SessionConfigSyncResponseModel(
+        status=result.status,
+        installed_dependencies=[
+            InstalledDependencyModel(
+                name=dep.name,
+                version=dep.version,
+                install_location=dep.install_location,
+                install_time=dep.install_time.isoformat(),
+                is_from_template=dep.is_from_template,
+            )
+            for dep in result.installed_dependencies
+        ],
+        error=result.error,
+        started_at=result.started_at.isoformat(),
+        completed_at=result.completed_at.isoformat(),
+    )

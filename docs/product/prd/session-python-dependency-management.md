@@ -251,7 +251,7 @@ flowchart TD
 
 ## 6. API 需求
 
-当前基线文档参考：`docs/api/rest/sandbox-openapi-v0.2.0.json`
+当前基线文档参考：`docs/api/rest/sandbox-openapi.json`
 
 本期需要扩展如下能力：
 

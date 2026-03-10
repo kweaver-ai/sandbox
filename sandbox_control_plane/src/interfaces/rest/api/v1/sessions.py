@@ -6,13 +6,29 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from typing import List, Optional
 
+from src.application.commands.install_session_dependencies import (
+    InstallSessionDependenciesCommand,
+)
 from src.application.services.session_service import SessionService
 from src.shared.errors.domain import ConflictError
 from src.application.commands.create_session import CreateSessionCommand
 from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.dtos.session_dto import SessionDTO
-from src.interfaces.rest.schemas.request import CreateSessionRequest, ExecuteCodeRequest
+from src.infrastructure.executors.errors import (
+    ExecutorConnectionError,
+    ExecutorResponseError,
+    ExecutorTimeoutError,
+    ExecutorUnavailableError,
+    ExecutorValidationError,
+)
+from src.interfaces.rest.schemas.request import (
+    CreateSessionRequest,
+    ExecuteCodeRequest,
+    InstallSessionDependenciesRequest,
+)
 from src.interfaces.rest.schemas.response import (
+    DependencyResponse,
+    InstalledDependencyResponse,
     SessionResponse,
     SessionListResponse,
     ExecuteCodeResponse,
@@ -59,6 +75,7 @@ async def create_session(
             timeout=request.timeout,
             resource_limit=resource_limit,
             env_vars=request.env_vars,
+            python_package_index_url=request.python_package_index_url,
             dependencies=dependencies_pip_specs,
             install_timeout=request.install_timeout,
             fail_on_dependency_error=request.fail_on_dependency_error,
@@ -127,6 +144,32 @@ async def get_session(
     return _map_dto_to_response(session_dto)
 
 
+@router.post(
+    "/{session_id}/dependencies/install",
+    response_model=SessionResponse,
+)
+async def install_session_dependencies(
+    session_id: str,
+    request: InstallSessionDependenciesRequest,
+    service: SessionService = Depends(get_session_service_db),
+):
+    """增量安装 Python 依赖。"""
+    try:
+        command = InstallSessionDependenciesCommand(
+            session_id=session_id,
+            python_package_index_url=request.python_package_index_url,
+            dependencies=[dep.to_pip_spec() for dep in request.dependencies],
+        )
+        session_dto = await service.install_session_dependencies(command)
+        return _map_dto_to_response(session_dto)
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except (ExecutorUnavailableError, ExecutorConnectionError, ExecutorTimeoutError) as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except (ExecutorValidationError, ExecutorResponseError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.post("/{session_id}/terminate", response_model=SessionResponse)
 async def terminate_session(
     session_id: str,
@@ -170,15 +213,26 @@ def _map_dto_to_response(dto: SessionDTO) -> SessionResponse:
         status=dto.status,
         resource_limit=dto.resource_limit,
         workspace_path=dto.workspace_path,
+        language_runtime=dto.language_runtime,
         runtime_type=dto.runtime_type,
         runtime_node=dto.runtime_node,
         container_id=dto.container_id,
         pod_name=dto.pod_name,
         env_vars=dto.env_vars,
         timeout=dto.timeout,
+        python_package_index_url=dto.python_package_index_url,
+        requested_dependencies=[
+            DependencyResponse(**dep) for dep in dto.requested_dependencies
+        ],
+        installed_dependencies=[
+            InstalledDependencyResponse(**dep) for dep in dto.installed_dependencies
+        ],
+        dependency_install_status=dto.dependency_install_status,
+        dependency_install_error=dto.dependency_install_error,
+        dependency_install_started_at=dto.dependency_install_started_at,
+        dependency_install_completed_at=dto.dependency_install_completed_at,
         created_at=dto.created_at,
         updated_at=dto.updated_at,
         completed_at=dto.completed_at,
         last_activity_at=dto.last_activity_at
     )
-
