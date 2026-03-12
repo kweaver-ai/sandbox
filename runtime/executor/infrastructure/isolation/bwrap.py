@@ -93,6 +93,7 @@ class BubblewrapRunner:
         Returns:
             List of bwrap command arguments
         """
+        dependency_path = settings.dependency_install_path
         return [
             "bwrap",
             # Filesystem isolation
@@ -101,6 +102,8 @@ class BubblewrapRunner:
             "--ro-bind", "/lib64", "/lib64",
             "--ro-bind", "/bin", "/bin",
             "--ro-bind", "/sbin", "/sbin",
+            # Session-installed third-party dependencies remain read-only during execution.
+            "--ro-bind", dependency_path, dependency_path,
             # Workspace (writable)
             "--bind", str(self.workspace_path), "/workspace",
             "--chdir", "/workspace",

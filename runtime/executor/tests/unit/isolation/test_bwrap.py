@@ -108,6 +108,20 @@ class TestBubblewrapRunnerInit:
         # Check for common isolation flags
         assert "--unshare-pid" in args or "--unshare-all" in args
 
+    def test_base_args_bind_dependency_install_path(self):
+        """Test that session dependency install path is available inside bwrap."""
+        from pathlib import Path
+        from executor.infrastructure.config import settings
+        from executor.infrastructure.isolation.bwrap import BubblewrapRunner
+
+        runner = BubblewrapRunner(Path("/tmp/workspace"))
+        args = runner._base_args
+
+        ro_bind_indices = [index for index, value in enumerate(args) if value == "--ro-bind"]
+        ro_bind_pairs = [(args[index + 1], args[index + 2]) for index in ro_bind_indices]
+
+        assert (settings.dependency_install_path, settings.dependency_install_path) in ro_bind_pairs
+
     def test_inject_env_args_adds_setenv_before_separator(self):
         """Test environment variables are injected into bwrap command."""
         from pathlib import Path
