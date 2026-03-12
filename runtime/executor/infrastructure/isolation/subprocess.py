@@ -16,6 +16,7 @@ from typing import List, Tuple
 
 from executor.domain.entities import Execution
 from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
+from executor.infrastructure.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ class SubprocessRunner:
             "HOME": str(self.workspace_path),
             "USER": "sandbox",
             "WORKSPACE_PATH": str(self.workspace_path),
+            "PYTHONPATH": self._build_pythonpath(env_args.get("PYTHONPATH")),
         })
 
         # Add user-provided environment variables
@@ -231,3 +233,9 @@ console.log(JSON.stringify(result));
             raise ValueError(f"Unsupported language: {language}")
 
         return cmd, env_args
+
+    def _build_pythonpath(self, existing_pythonpath: str | None) -> str:
+        dependency_path = settings.dependency_install_path
+        if existing_pythonpath:
+            return f"{dependency_path}:{existing_pythonpath}"
+        return dependency_path

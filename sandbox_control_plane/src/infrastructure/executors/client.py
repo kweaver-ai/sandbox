@@ -13,6 +13,8 @@ from src.infrastructure.executors.dto import (
     ExecutorExecuteRequest,
     ExecutorExecuteResponse,
     ExecutorHealthResponse,
+    ExecutorSyncSessionConfigRequest,
+    ExecutorSyncSessionConfigResponse,
 )
 from src.infrastructure.executors.errors import (
     ExecutorConnectionError,
@@ -202,6 +204,48 @@ class ExecutorClient:
             raise ExecutorConnectionError(executor_url, str(e))
         except httpx.TimeoutException as e:
             raise ExecutorTimeoutError(executor_url, self._timeout)
+
+    async def sync_session_config(
+        self,
+        executor_url: str,
+        session_id: str,
+        language_runtime: str,
+        python_package_index_url: str,
+        dependencies: list[str],
+        sync_mode: str,
+    ) -> ExecutorSyncSessionConfigResponse:
+        """同步会话依赖配置到 executor。"""
+        client = self._get_client()
+        url = f"{executor_url}/internal/session-config/sync"
+        request = ExecutorSyncSessionConfigRequest(
+            session_id=session_id,
+            language_runtime=language_runtime,
+            python_package_index_url=python_package_index_url,
+            dependencies=dependencies,
+            sync_mode=sync_mode,
+        )
+
+        try:
+            response = await client.post(
+                url,
+                json=request.model_dump(),
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.ConnectError as e:
+            raise ExecutorConnectionError(executor_url, str(e))
+        except httpx.TimeoutException:
+            raise ExecutorTimeoutError(executor_url, self._timeout)
+
+        if response.status_code == 200:
+            return ExecutorSyncSessionConfigResponse(**response.json())
+        if response.status_code == 400:
+            raise ExecutorValidationError(executor_url, response.json())
+        if response.status_code in (422, 500):
+            raise ExecutorResponseError(executor_url, response.status_code, response.text)
+        if response.status_code == 503:
+            raise ExecutorUnavailableError(executor_url, response.text)
+
+        raise ExecutorResponseError(executor_url, response.status_code, response.text)
 
     async def close(self) -> None:
         """关闭客户端"""

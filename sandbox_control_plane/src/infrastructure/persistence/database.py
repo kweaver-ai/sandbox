@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import aiomysql
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -123,6 +124,102 @@ class DatabaseManager:
 
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+    async def run_startup_schema_migrations(self) -> None:
+        """
+        启动时执行幂等 schema 升级。
+
+        当前用于兼容旧库缺失 `f_python_package_index_url` 字段的场景。
+        """
+        if self._engine is None:
+            raise RuntimeError("DatabaseManager not initialized. Call initialize() first.")
+
+        backend_name = self._engine.url.get_backend_name()
+        if backend_name != "mysql":
+            logger.info(
+                "Skipping startup schema migrations for unsupported backend",
+                backend=backend_name,
+            )
+            return
+
+        async with self._engine.begin() as conn:
+            table_name = "t_sandbox_session"
+            column_name = "f_python_package_index_url"
+
+            table_exists = await self._mariadb_table_exists(conn, table_name)
+            if not table_exists:
+                logger.info(
+                    "Skipping startup schema migration because target table does not exist",
+                    table=table_name,
+                )
+                return
+
+            column_exists = await self._mariadb_column_exists(
+                conn,
+                table_name,
+                column_name,
+            )
+            if column_exists:
+                logger.info(
+                    "Startup schema migration check passed",
+                    table=table_name,
+                    column=column_name,
+                    action="skip",
+                )
+                return
+
+            logger.info(
+                "Applying startup schema migration",
+                table=table_name,
+                column=column_name,
+                action="add_column",
+            )
+            await conn.execute(
+                text(
+                    """
+                    ALTER TABLE `t_sandbox_session`
+                    ADD COLUMN `f_python_package_index_url` varchar(512) NOT NULL
+                    DEFAULT 'https://pypi.org/simple/'
+                    AFTER `f_completed_at`
+                    """
+                )
+            )
+            logger.info(
+                "Startup schema migration applied successfully",
+                table=table_name,
+                column=column_name,
+            )
+
+    async def _mariadb_table_exists(self, conn, table_name: str) -> bool:
+        """检查 MariaDB 表是否存在。"""
+        result = await conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = :table_name
+                """
+            ),
+            {"table_name": table_name},
+        )
+        return bool(result.scalar())
+
+    async def _mariadb_column_exists(self, conn, table_name: str, column_name: str) -> bool:
+        """检查 MariaDB 列是否存在。"""
+        result = await conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = :table_name
+                  AND COLUMN_NAME = :column_name
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        )
+        return bool(result.scalar())
 
     async def initialize_with_seed(
         self,

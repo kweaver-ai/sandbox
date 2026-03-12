@@ -4,17 +4,24 @@
 测试 SessionService 的用例编排逻辑。
 """
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import Mock, AsyncMock
 
 from src.application.services.session_service import SessionService
 from src.application.commands.create_session import CreateSessionCommand
+from src.application.commands.install_session_dependencies import (
+    InstallSessionDependenciesCommand,
+)
 from src.domain.entities.session import Session
 from src.domain.entities.template import Template
 from src.domain.value_objects.resource_limit import ResourceLimit
-from src.domain.value_objects.execution_status import SessionStatus, ExecutionStatus
+from src.domain.value_objects.execution_status import ExecutionStatus, SessionStatus
 from src.domain.services.scheduler import RuntimeNode
-from src.shared.errors.domain import NotFoundError
-from src.domain.repositories.execution_repository import IExecutionRepository
+from src.infrastructure.executors.dto import (
+    ExecutorInstalledDependency,
+    ExecutorSyncSessionConfigResponse,
+)
+from src.shared.errors.domain import ConflictError, NotFoundError
 
 
 class TestSessionService:
@@ -42,6 +49,7 @@ class TestSessionService:
         scheduler.schedule = AsyncMock()
         scheduler.create_container_for_session = AsyncMock(return_value="container-123")
         scheduler.destroy_container = AsyncMock()
+        scheduler.get_executor_url = AsyncMock(return_value="http://sandbox-sess:8080")
         return scheduler
 
     @pytest.fixture
@@ -54,13 +62,33 @@ class TestSessionService:
         return repo
 
     @pytest.fixture
-    def service(self, session_repo, template_repo, scheduler, execution_repo):
+    def executor_client(self):
+        client = Mock()
+        client.sync_session_config = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def initial_dependency_sync_scheduler(self):
+        return Mock()
+
+    @pytest.fixture
+    def service(
+        self,
+        session_repo,
+        template_repo,
+        scheduler,
+        execution_repo,
+        executor_client,
+        initial_dependency_sync_scheduler,
+    ):
         """创建会话服务"""
         return SessionService(
             session_repo=session_repo,
             execution_repo=execution_repo,
             template_repo=template_repo,
-            scheduler=scheduler
+            scheduler=scheduler,
+            executor_client=executor_client,
+            initial_dependency_sync_scheduler=initial_dependency_sync_scheduler,
         )
 
     @pytest.mark.asyncio
@@ -259,6 +287,68 @@ class TestSessionService:
         assert result.id == "custom-session-id"
 
     @pytest.mark.asyncio
+    async def test_install_session_dependencies_merges_by_package_name(
+        self,
+        service,
+        session_repo,
+        executor_client,
+    ):
+        session = Session(
+            id="sess_1",
+            template_id="python-test",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_1",
+            runtime_type="python3.11",
+            container_id="sandbox-sess_1",
+            requested_dependencies=["requests==2.30.0"],
+        )
+        session_repo.find_by_id.return_value = session
+        executor_client.sync_session_config.return_value = ExecutorSyncSessionConfigResponse(
+            status="completed",
+            installed_dependencies=[],
+            started_at="2026-03-09T12:00:00+00:00",
+            completed_at="2026-03-09T12:00:05+00:00",
+        )
+
+        result = await service.install_session_dependencies(
+            InstallSessionDependenciesCommand(
+                session_id="sess_1",
+                dependencies=["requests==2.31.0", "pandas==2.2.0"],
+            )
+        )
+
+        assert {dep["name"] for dep in result.requested_dependencies} == {"requests", "pandas"}
+        versions = {dep["name"]: dep["version"] for dep in result.requested_dependencies}
+        assert versions["requests"] == "==2.31.0"
+
+    @pytest.mark.asyncio
+    async def test_install_session_dependencies_rejects_concurrent_install(
+        self,
+        service,
+        session_repo,
+    ):
+        session = Session(
+            id="sess_1",
+            template_id="python-test",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_1",
+            runtime_type="python3.11",
+            container_id="sandbox-sess_1",
+            dependency_install_status="installing",
+        )
+        session_repo.find_by_id.return_value = session
+
+        with pytest.raises(ConflictError):
+            await service.install_session_dependencies(
+                InstallSessionDependenciesCommand(
+                    session_id="sess_1",
+                    dependencies=["requests==2.31.0"],
+                )
+            )
+
+    @pytest.mark.asyncio
     async def test_create_session_with_duplicate_id(self, service, template_repo, scheduler, session_repo):
         """测试使用重复 ID 创建会话"""
         template = Template(
@@ -290,7 +380,14 @@ class TestSessionService:
             await service.create_session(command)
 
     @pytest.mark.asyncio
-    async def test_create_session_with_dependencies(self, service, template_repo, scheduler, session_repo):
+    async def test_create_session_with_dependencies(
+        self,
+        service,
+        template_repo,
+        scheduler,
+        session_repo,
+        initial_dependency_sync_scheduler,
+    ):
         """测试创建带依赖的会话"""
         template = Template(
             id="python-test",
@@ -317,12 +414,15 @@ class TestSessionService:
             template_id="python-test",
             timeout=300,
             resource_limit=ResourceLimit.default(),
-            dependencies=[{"name": "requests", "version": ">=2.28.0"}]
+            dependencies=["requests>=2.28.0"],
         )
 
         result = await service.create_session(command)
 
         assert result.template_id == "python-test"
+        assert result.dependency_install_status == "installing"
+        assert result.dependency_install_started_at is not None
+        initial_dependency_sync_scheduler.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_list_sessions(self, service, session_repo):

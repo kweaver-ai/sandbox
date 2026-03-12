@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document captures research findings and technical decisions for building the Sandbox Control Plane service. All technical choices are derived from the design document (docs/sandbox-design-v2.1.md) and industry best practices for building scalable, secure container orchestration platforms.
+This document captures research findings and technical decisions for building the Sandbox Control Plane service. All technical choices are derived from the design documents in `docs/design/` and industry best practices for building scalable, secure container orchestration platforms.
 
 ## Technology Decisions
 

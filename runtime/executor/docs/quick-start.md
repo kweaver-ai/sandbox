@@ -22,7 +22,7 @@
 cd runtime/executor
 
 # 设置 PYTHONPATH（必须）
-export PYTHONPATH=/Users/guochenguang/project/sandbox-v2/sandbox/runtime
+export PYTHONPATH="$(cd .. && pwd)"
 
 # 安装依赖
 uv sync
@@ -38,7 +38,7 @@ uv run uvicorn executor.interfaces.http.rest:app --host 0.0.0.0 --port 8080 --re
 cd runtime/executor
 
 # 设置 PYTHONPATH
-export PYTHONPATH=/Users/guochenguang/project/sandbox-v2/sandbox/runtime
+export PYTHONPATH="$(cd .. && pwd)"
 
 # 创建虚拟环境
 python3 -m venv venv

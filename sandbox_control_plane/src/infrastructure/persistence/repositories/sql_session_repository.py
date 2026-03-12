@@ -46,6 +46,7 @@ class SqlSessionRepository(ISessionRepository):
             model.f_resources_disk = session.resource_limit.disk
             model.f_env_vars = json.dumps(session.env_vars, ensure_ascii=False) if session.env_vars else ""
             model.f_timeout = session.timeout
+            model.f_python_package_index_url = session.python_package_index_url
             model.f_last_activity_at = int(session.last_activity_at.timestamp() * 1000) if session.last_activity_at else now_ms
             model.f_updated_at = now_ms
             model.f_completed_at = int(session.completed_at.timestamp() * 1000) if session.completed_at else 0
@@ -66,6 +67,8 @@ class SqlSessionRepository(ISessionRepository):
                 model.f_installed_dependencies = json.dumps(deps_list, ensure_ascii=False)
             model.f_dependency_install_status = session.dependency_install_status
             model.f_dependency_install_error = session.dependency_install_error or ""
+            model.f_dependency_install_started_at = int(session.dependency_install_started_at.timestamp() * 1000) if session.dependency_install_started_at else 0
+            model.f_dependency_install_completed_at = int(session.dependency_install_completed_at.timestamp() * 1000) if session.dependency_install_completed_at else 0
         else:
             # 创建新记录
             model = SessionModel.from_entity(session)

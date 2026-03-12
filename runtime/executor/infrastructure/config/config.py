@@ -31,6 +31,14 @@ class Settings(BaseModel):
     workspace_path: str = Field(
         default="/workspace", description="Workspace directory for file operations"
     )
+    dependency_install_path: str = Field(
+        default="/opt/sandbox-venv",
+        description="Directory for dynamically installed session dependencies",
+    )
+    pip_cache_path: str = Field(
+        default="/tmp/pip-cache",
+        description="Cache directory for pip install operations",
+    )
 
     # Execution Configuration
     default_timeout: int = Field(default=30, ge=1, le=3600, description="Default timeout in seconds")
@@ -49,4 +57,3 @@ class Settings(BaseModel):
 # For production, use pydantic-settings to load from environment
 # For MVP, use default values
 settings = Settings()
-

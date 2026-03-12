@@ -17,6 +17,7 @@ import structlog
 
 from executor.domain.entities import Execution
 from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
+from executor.infrastructure.config import settings
 from executor.infrastructure.isolation.result_parser import remove_markers_from_output
 
 
@@ -124,6 +125,7 @@ class MacSeatbeltRunner:
             # Prepare environment - merge with current environment
             exec_env = os.environ.copy()
             exec_env.update(env_args)
+            exec_env["PYTHONPATH"] = self._build_pythonpath(exec_env.get("PYTHONPATH"))
 
             # Determine working directory
             cwd = str(self.workspace_path) if self.workspace_path.exists() else None
@@ -379,3 +381,9 @@ console.log('===SANDBOX_RESULT===' + JSON.stringify(result) + '===SANDBOX_RESULT
             Version string
         """
         return get_sandbox_version()
+
+    def _build_pythonpath(self, existing_pythonpath: str | None) -> str:
+        dependency_path = settings.dependency_install_path
+        if existing_pythonpath:
+            return f"{dependency_path}:{existing_pythonpath}"
+        return dependency_path

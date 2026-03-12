@@ -9,7 +9,7 @@ import pytest
 import asyncio
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 from tempfile import TemporaryDirectory
 
@@ -17,6 +17,10 @@ from executor.interfaces.http.rest import create_app
 from executor.application.commands.execute_code import ExecuteCodeCommand
 from executor.application.services.heartbeat_service import HeartbeatService
 from executor.application.services.lifecycle_service import LifecycleService
+from executor.application.services.session_config_sync_service import (
+    InstalledDependency,
+    SessionConfigSyncResult,
+)
 from executor.domain.value_objects import (
     ExecutionRequest,
     ExecutionResult,
@@ -304,7 +308,8 @@ class TestHTTPInterfaceIntegration:
              patch('executor.interfaces.http.rest.ArtifactScanner'), \
              patch('executor.interfaces.http.rest.HeartbeatService'), \
              patch('executor.interfaces.http.rest.LifecycleService'), \
-             patch('executor.interfaces.http.rest.ExecuteCodeCommand'):
+             patch('executor.interfaces.http.rest.ExecuteCodeCommand'), \
+             patch('executor.interfaces.http.rest.SessionConfigSyncService'):
 
             app = create_app()
             return app
@@ -368,6 +373,53 @@ class TestHTTPInterfaceIntegration:
             data = response.json()
             assert data["execution_id"] == "test_001"
             assert data["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_sync_session_config_endpoint(self, test_app):
+        """Test /internal/session-config/sync endpoint integration."""
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock, patch
+
+        client = TestClient(test_app)
+
+        sync_result = SessionConfigSyncResult(
+            status="completed",
+            installed_dependencies=[
+                InstalledDependency(
+                    name="requests",
+                    version="2.31.0",
+                    install_location="/opt/sandbox-venv",
+                    install_time=datetime.now(timezone.utc),
+                    is_from_template=False,
+                )
+            ],
+            error="",
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+        mock_service = AsyncMock()
+        mock_service.sync.return_value = sync_result
+
+        with patch(
+            "executor.interfaces.http.rest.get_session_config_sync_service",
+            return_value=mock_service,
+        ):
+            response = client.post(
+                "/internal/session-config/sync",
+                json={
+                    "session_id": "sess_1",
+                    "language_runtime": "python3.11",
+                    "python_package_index_url": "https://pypi.org/simple/",
+                    "dependencies": ["requests==2.31.0"],
+                    "sync_mode": "replace",
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["installed_dependencies"][0]["name"] == "requests"
 
 
 @pytest.mark.integration

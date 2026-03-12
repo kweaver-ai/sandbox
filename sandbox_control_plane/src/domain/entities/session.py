@@ -10,6 +10,11 @@ from typing import List, Optional
 from src.domain.value_objects.resource_limit import ResourceLimit
 from src.domain.value_objects.execution_status import SessionStatus
 from src.domain.entities.execution import Execution
+from src.shared.utils.dependencies import (
+    DEFAULT_PYTHON_PACKAGE_INDEX_URL,
+    merge_pip_specs,
+    normalize_python_package_index_url,
+)
 
 
 @dataclass
@@ -57,6 +62,9 @@ class Session:
     installed_dependencies: List[InstalledDependency] = field(default_factory=list)
     dependency_install_status: str = "pending"  # pending/installing/completed/failed
     dependency_install_error: Optional[str] = None
+    python_package_index_url: str = DEFAULT_PYTHON_PACKAGE_INDEX_URL
+    dependency_install_started_at: datetime | None = None
+    dependency_install_completed_at: datetime | None = None
 
     def __post_init__(self):
         """初始化后验证"""
@@ -64,6 +72,9 @@ class Session:
             raise ValueError("timeout must be positive")
         if not self.workspace_path:
             raise ValueError("workspace_path cannot be empty")
+        self.python_package_index_url = normalize_python_package_index_url(
+            self.python_package_index_url
+        )
 
     # ============== 领域行为 ==============
 
@@ -157,31 +168,68 @@ class Session:
 
     # ============== 依赖管理 ==============
 
+    def replace_requested_dependencies(
+        self, index_url: Optional[str], dependencies: List[str]
+    ) -> None:
+        """全量替换目标依赖配置。"""
+        self.python_package_index_url = normalize_python_package_index_url(index_url)
+        self.requested_dependencies = list(dependencies)
+        self.updated_at = datetime.now()
+
+    def merge_requested_dependencies(
+        self, index_url: Optional[str], dependencies: List[str]
+    ) -> None:
+        """增量合并目标依赖配置。"""
+        self.python_package_index_url = normalize_python_package_index_url(
+            index_url or self.python_package_index_url
+        )
+        self.requested_dependencies = merge_pip_specs(
+            self.requested_dependencies,
+            dependencies,
+        )
+        self.updated_at = datetime.now()
+
     def set_dependencies_installing(self) -> None:
-        """标记依赖安装中"""
+        """兼容旧接口，标记依赖安装中。"""
+        self.mark_dependency_installing()
+
+    def mark_dependency_installing(self, started_at: datetime | None = None) -> None:
+        """标记依赖安装中。"""
         self.dependency_install_status = "installing"
+        self.dependency_install_started_at = started_at or datetime.now()
+        self.dependency_install_completed_at = None
+        self.dependency_install_error = None
         self.updated_at = datetime.now()
 
     def set_dependencies_completed(self, installed: List[InstalledDependency]) -> None:
-        """
-        标记依赖安装完成
+        """兼容旧接口，标记依赖安装完成。"""
+        self.mark_dependency_install_completed(installed)
 
-        Args:
-            installed: 实际安装的依赖列表
-        """
+    def mark_dependency_install_completed(
+        self,
+        installed: List[InstalledDependency],
+        completed_at: datetime | None = None,
+    ) -> None:
+        """标记依赖安装完成。"""
         self.dependency_install_status = "completed"
         self.installed_dependencies = installed
+        self.dependency_install_error = None
+        self.dependency_install_completed_at = completed_at or datetime.now()
         self.updated_at = datetime.now()
 
     def set_dependencies_failed(self, error: str) -> None:
-        """
-        标记依赖安装失败
+        """兼容旧接口，标记依赖安装失败。"""
+        self.mark_dependency_install_failed(error)
 
-        Args:
-            error: 失败原因
-        """
+    def mark_dependency_install_failed(
+        self,
+        error: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        """标记依赖安装失败。"""
         self.dependency_install_status = "failed"
         self.dependency_install_error = error
+        self.dependency_install_completed_at = completed_at or datetime.now()
         self.updated_at = datetime.now()
 
     def has_dependencies(self) -> bool:

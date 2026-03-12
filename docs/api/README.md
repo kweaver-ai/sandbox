@@ -1,13 +1,22 @@
 # Sandbox API 文档
 
-本目录包含沙箱平台的 OpenAPI 规范文档。
+本目录按协议类型组织 API 文档，当前以 REST/OpenAPI 为主。
 
 ## 文档列表
 
-### [sandbox-openapi.json](./sandbox-openapi.json)
-**完整的 OpenAPI 3.1.0 规范** - 包含所有公开和内部 API
+### [sandbox-openapi.json](./rest/sandbox-openapi.json)
+当前 REST OpenAPI 规范。
 
-**API 版本**: 2.1.0
+### [execute-sync-openapi.yaml](./rest/execute-sync-openapi.yaml)
+同步执行接口的独立 OpenAPI 描述。
+
+## 协议目录
+
+- `rest/`: REST/OpenAPI 文档
+- `grpc/`: 预留给 gRPC 协议文档
+- `websocket/`: 预留给 WebSocket 协议文档
+
+## REST API 概览
 
 **主要功能**:
 - 健康检查：服务状态和依赖项健康检查
@@ -207,8 +216,9 @@ curl -X POST http://localhost:8000/api/v1/sessions/{session_id}/terminate
 
 ## 相关文档
 
-- [技术设计文档](../sandbox-design-v2.1.md) - 完整的系统设计文档
-- [产品需求文档](../sandbox-prd-v2.md) - 产品需求和目标
+- [文档中心](../README.md) - 文档导航入口
+- [架构总览](../design/architecture/overview.md) - 完整的系统设计文档
+- [产品路线图](../product/roadmap.md) - 产品需求与迭代方向
 
 ## 版本历史
 

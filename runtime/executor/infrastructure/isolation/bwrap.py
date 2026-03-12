@@ -17,6 +17,7 @@ import structlog
 
 from executor.domain.entities import Execution
 from executor.domain.value_objects import ExecutionResult, ExecutionStatus, ExecutionMetrics
+from executor.infrastructure.config import settings
 from executor.infrastructure.isolation.result_parser import remove_markers_from_output
 
 
@@ -92,6 +93,7 @@ class BubblewrapRunner:
         Returns:
             List of bwrap command arguments
         """
+        dependency_path = settings.dependency_install_path
         return [
             "bwrap",
             # Filesystem isolation
@@ -100,6 +102,8 @@ class BubblewrapRunner:
             "--ro-bind", "/lib64", "/lib64",
             "--ro-bind", "/bin", "/bin",
             "--ro-bind", "/sbin", "/sbin",
+            # Session-installed third-party dependencies remain read-only during execution.
+            "--ro-bind", dependency_path, dependency_path,
             # Workspace (writable)
             "--bind", str(self.workspace_path), "/workspace",
             "--chdir", "/workspace",
@@ -144,14 +148,12 @@ class BubblewrapRunner:
         try:
             # Build language-specific command and environment
             cmd, env_args = self._build_command(execution)
+            if env_args:
+                cmd = self._inject_env_args(cmd, env_args)
 
             # Prepare environment with event data
             env = os.environ.copy()
-            if execution.context.event:
-                env["EVENT_JSON"] = json.dumps(execution.context.event)
-            if execution.context.env_vars:
-                env.update(execution.context.env_vars)
-            env.update(env_args)
+            env["PYTHONPATH"] = self._build_pythonpath(env.get("PYTHONPATH"))
 
             # Execute with asyncio subprocess (non-blocking)
             process = await asyncio.create_subprocess_exec(
@@ -352,7 +354,7 @@ except Exception as e:
             "-c",
             wrapper_code,
         ]
-        return cmd, {}
+        return cmd, self._build_execution_env(execution)
 
     def _build_node_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for Node.js execution."""
@@ -378,7 +380,7 @@ console.log('===SANDBOX_RESULT===' + JSON.stringify(result) + '===SANDBOX_RESULT
             "node",
             "/workspace/user_code.js",
         ]
-        return cmd, {}
+        return cmd, self._build_execution_env(execution)
 
     def _build_shell_command(self, execution: Execution) -> tuple[List[str], dict]:
         """Build command for shell execution."""
@@ -388,4 +390,30 @@ console.log('===SANDBOX_RESULT===' + JSON.stringify(result) + '===SANDBOX_RESULT
             "-c",
             execution.code,
         ]
-        return cmd, {}
+        return cmd, self._build_execution_env(execution)
+
+    def _build_pythonpath(self, existing_pythonpath: str | None) -> str:
+        dependency_path = settings.dependency_install_path
+        if existing_pythonpath:
+            return f"{dependency_path}:{existing_pythonpath}"
+        return dependency_path
+
+    def _build_execution_env(self, execution: Execution) -> dict[str, str]:
+        env_args: dict[str, str] = {
+            "PYTHONPATH": self._build_pythonpath(os.environ.get("PYTHONPATH")),
+        }
+        if execution.context.event:
+            env_args["EVENT_JSON"] = json.dumps(execution.context.event)
+        if execution.context.env_vars:
+            env_args.update(execution.context.env_vars)
+        return env_args
+
+    def _inject_env_args(self, cmd: List[str], env_args: dict[str, str]) -> List[str]:
+        if "--" not in cmd:
+            return cmd
+        separator_index = cmd.index("--")
+        prefix = cmd[:separator_index]
+        suffix = cmd[separator_index:]
+        for key, value in env_args.items():
+            prefix.extend(["--setenv", key, value])
+        return prefix + suffix

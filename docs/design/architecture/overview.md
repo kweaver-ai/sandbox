@@ -1,77 +1,33 @@
-# 沙箱平台技术方案设计 - V2.1
+# 沙箱平台设计总览
 
-> **Sandbox Platform Technical Design Document V2.1**
+当前设计文档按“架构 / 模块 / 需求设计 / ADR / 历史归档”组织。
 
-本文档是 Sandbox Platform 沙箱平台的完整技术设计方案，描述了系统架构、关键组件、数据模型、安全设计、性能优化和部署方案等内容。
+## 文档导航
 
----
+### 架构
 
-## 📚 文档导航
+- [系统上下文](./system-context.md)
+- [逻辑架构与流程](./logical-architecture.md)
+- [安全与性能](./security-and-performance.md)
+- [存储架构](./storage-architecture.md)
 
-### [1. 架构设计](01-architecture.md)
-- **1.1 整体架构** - 系统设计原则和核心概念
-- **1.2 C4 架构模型** - 系统上下文和容器视图
-- **1.3 部署架构** - Kubernetes 集群部署架构图
+### 模块
 
-### [2. 关键组件设计](#2-关键组件设计)
+- [Control Plane](../modules/control-plane.md)
+- [Container Scheduler](../modules/container-scheduler.md)
+- [Executor](../modules/executor.md)
+- [Python Dependencies](../modules/python-dependencies.md)
 
-#### [2.1 管理中心 (Control Plane)](02-control-plane.md)
-- **2.1.1 API Gateway** - RESTful API 接口设计
-- **2.1.2 调度器 (Scheduler)** - 智能任务分发和资源调度
-- **2.1.3 会话管理器 (Session Manager)** - 会话生命周期管理
-- **2.1.4 监控探针 (Health Probe)** - 节点健康检测机制
-- **2.1.5 状态同步服务 (State Sync)** - 启动状态同步和故障恢复
+### 需求设计
 
-#### [2.2 Container Scheduler 模块](03-container-scheduler.md)
-- **2.2.1 Docker 运行时** - Docker 容器配置和生命周期管理
-- **2.2.2 Kubernetes 运行时** - K8s Scheduler 实现和 s3fs 挂载方案
+- [Session Python 依赖管理](../features/session-python-dependency-management.md)
+- [MCP Server Implementation](../features/mcp-server-implementation.md)
 
-#### [2.3 执行器 (Executor)](04-executor.md)
-- **2.3.1 执行器架构** - AWS Lambda-style Handler 设计
-- **2.3.2 执行结果格式** - 返回值和性能指标
-- **2.3.3 Bubblewrap 安全配置** - 第二层进程隔离详解
+### 其他
 
-### [3. 关键流程设计](05-processes-and-data-models.md#3-关键流程设计)
-- **3.1 会话创建流程** - 完整的会话创建时序图
-- **3.2 代码执行流程** - 从请求到结果的完整流程
-- **3.3 健康检查与故障恢复** - 容器健康监控和自动恢复
-
-### [4. 数据模型设计](05-processes-and-data-models.md#4-数据模型设计)
-- **4.1 核心实体模型** - Pydantic 数据模型定义
-- **4.2 协议定义** - 外部 API 和内部回调 API
-- **4.3 执行语义与幂等性模型** - execution_id 生命周期和重试机制
-- **4.4 S3 Workspace 挂载架构** - MinIO + s3fs 挂载方案
-
-### [5. Python 依赖管理](06-python-dependencies.md)
-- **5.1 核心依赖** - Web 框架、数据库、容器运行时
-- **5.2 开发依赖** - 测试、代码质量、类型检查
-- **5.3 数据库迁移 (Alembic)** - SQLAlchemy Alembic 配置
-- **5.4 数据库配置** - 异步引擎和连接池
-
-### [6. 安全设计](07-security-and-performance.md#6-安全设计)
-- **6.1 多层隔离策略** - 容器层 + Bubblewrap 层
-- **6.2 安全配置示例** - Docker 和 Bubblewrap 配置
-
-### [7. 性能优化](07-security-and-performance.md#7-性能优化)
-- **7.1 启动优化** - 分层镜像和预热池
-- **7.2 并发优化** - 异步处理和连接池
-
-### [8. 监控与可观测性](08-monitoring-and-deployment.md#8-监控与可观测性)
-- **8.1 指标定义** - 系统指标和业务指标
-- **8.2 监控集成** - Prometheus 和 Grafana
-
-### [9. 存储架构](09-storage-architecture.md)
-- **9.1 概述** - MinIO + s3fs 架构
-- **9.2 s3fs 挂载方案** - 容器内挂载实现
-- **9.3 路径映射** - 文件路径转换
-- **9.4 配置说明** - Secret 和环境变量
-- **9.5 故障排查** - 常见问题和调试
-
-### [10. 部署方案](08-monitoring-and-deployment.md#9-部署方案)
-- **9.1 Docker Compose 部署** - 开发/小规模部署
-- **9.2 Kubernetes 部署** - 生产环境部署
-
----
+- [ADR 模板](../decisions/template.md)
+- [历史归档：sandbox-design-v2.1](../archive/sandbox-design-v2.1.md)
+- [返回文档中心](../../README.md)
 
 ## 🏗️ 架构概览
 
@@ -149,7 +105,7 @@ sandbox/
 
 ## 🔗 相关资源
 
-- **项目主目录**: `/Users/guochenguang/project/sandbox-v2/sandbox`
+- **项目主目录**: `.`
 - **Control Plane 代码**: `sandbox_control_plane/src/`
 - **K8s 配置文件**: `deploy/manifests/`
 - **Helm Chart**: `deploy/helm/sandbox/`
@@ -164,4 +120,4 @@ sandbox/
 
 ---
 
-**👉 选择上方章节开始阅读，或查看各个子文档了解详细信息。**
+选择上方章节开始阅读，或返回 [文档中心](../../README.md)。

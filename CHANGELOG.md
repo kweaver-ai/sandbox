@@ -2,6 +2,47 @@
 
 All new features and capabilities added in this branch (`feature/803264`) are documented below.
 
+## [0.3.0]
+
+### 🚀 New Features
+
+- **Session-Level Python Dependency Management**
+  - Added session-scoped dependency configuration and installation status tracking
+  - Added background initial dependency sync during session creation
+  - Added synchronous `POST /api/v1/sessions/{session_id}/dependencies/install` API
+  - Added installed dependency details and error reporting in session responses
+
+- **Runtime Executor Dependency Sync**
+  - Added executor-side session config sync service for full dependency reconciliation
+  - Added isolated dependency directory reset before reinstalling packages
+  - Added Python executable detection for uv/virtualenv-based pip installs
+  - Improved compatibility across bwrap, subprocess, and macOS seatbelt isolation backends
+
+- **Session Management UI**
+  - Added dependency install actions and status display in the session list page
+  - Added frontend API types and hooks for manual dependency installation
+  - Added dependency install progress and failure visibility in session details
+
+- **Database & Upgrade Support**
+  - Added `0.3.0` MariaDB and DM8 initialization SQL
+  - Added startup schema migration support for upgrading existing deployments
+
+### 🔧 Improvements
+
+- Unified REST OpenAPI documentation into `docs/api/rest/sandbox-openapi.json`
+- Extended session DTOs, persistence models, and APIs with dependency metadata
+- Added integration and unit tests for initial sync, manual install, and dependency execution flows
+
+### 📚 Documentation
+
+- Added detailed design and PRD documents for session Python dependency management
+- Reorganized repository documentation under architecture, development, operations, and product sections
+- Added standalone OpenAPI description for synchronous execution endpoints
+
+---
+
+*Released on 2026-03-11*
+
 ## [0.2.1]
 
 ### 🐛 Bug Fixes

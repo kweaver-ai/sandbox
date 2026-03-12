@@ -23,11 +23,11 @@ RUN npm config set registry https://registry.npmmirror.com/ && \
     npm config set fetch-retry-maxtimeout 120000 && \
     npm config set fetch-timeout 180000
 
-# Copy package files
-COPY package.json ./
+# Copy dependency manifests so Docker installs from the lockfile.
+COPY package.json package-lock.json ./
 
-# Install dependencies with retry on network errors
-RUN npm install || (echo "Retrying npm install..." && npm install)
+# Install exactly the versions captured in package-lock.json.
+RUN npm ci || (echo "Retrying npm ci..." && npm ci)
 
 # Copy source code
 COPY . .

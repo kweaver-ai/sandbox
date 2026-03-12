@@ -16,6 +16,7 @@ import {
   Card,
   Statistic,
   Upload,
+  Tooltip,
   message,
 } from 'antd';
 import {
@@ -25,6 +26,7 @@ import {
   EyeOutlined,
   PlayCircleOutlined,
   UploadOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
 import { useSessions } from '@hooks/useSessions';
@@ -35,7 +37,15 @@ import * as filesApi from '@apis/files';
 
 export default function SessionsPage() {
   const navigate = useNavigate();
-  const { sessions, stats, loading, fetchSessions, createSession, terminateSession } =
+  const {
+    sessions,
+    stats,
+    loading,
+    fetchSessions,
+    createSession,
+    installSessionDependencies,
+    terminateSession,
+  } =
     useSessions();
   const { templates, fetchTemplates } = useTemplates();
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,37 +53,57 @@ export default function SessionsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [detailSession, setDetailSession] = useState<SessionResponse | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [dependencies, setDependencies] = useState<DependencySpec[]>([]);
   const [depInput, setDepInput] = useState('');
   const [form] = Form.useForm<CreateSessionRequest>();
+  const [installForm] = Form.useForm<{
+    python_package_index_url?: string;
+    dependencies: string;
+  }>();
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadSessionId, setUploadSessionId] = useState<string>('');
   const [uploadSessionName, setUploadSessionName] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [showInstallDependenciesModal, setShowInstallDependenciesModal] = useState(false);
+  const [installSessionId, setInstallSessionId] = useState<string>('');
+  const [installSessionName, setInstallSessionName] = useState<string>('');
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 初始加载和定时刷新
+  // 初始加载
   useEffect(() => {
     fetchSessions();
+  }, [fetchSessions]);
 
-    // 设置30秒定时刷新
+  // 定时刷新，依赖安装进行中时加快轮询
+  useEffect(() => {
+    const hasInstallingDependencies = sessions.some(
+      (session) => session.dependency_install_status === 'installing',
+    );
+    const refreshInterval = hasInstallingDependencies ? 5000 : 30000;
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
     timerRef.current = setInterval(() => {
       fetchSessions();
-    }, 30000);
+    }, refreshInterval);
 
-    // 清理定时器
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     };
-  }, [fetchSessions]);
+  }, [fetchSessions, sessions]);
 
   // 打开创建模态框时获取模板列表
   const handleOpenCreateModal = async () => {
     await fetchTemplates();
+    form.setFieldsValue({
+      python_package_index_url: 'https://pypi.org/simple/',
+      install_timeout: 300,
+    });
     setShowCreateModal(true);
   };
 
@@ -97,6 +127,10 @@ export default function SessionsPage() {
     setShowDetailModal(true);
   };
 
+  const updateSessionInState = (updatedSession: SessionResponse) => {
+    setDetailSession((prev) => (prev?.id === updatedSession.id ? updatedSession : prev));
+  };
+
   // 跳转到执行页面并选中会话
   const handleExecuteCode = (sessionId: string) => {
     navigate(`/execute?sessionId=${sessionId}`);
@@ -117,33 +151,17 @@ export default function SessionsPage() {
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
+      const dependencies = parseDependencyInput(depInput);
       const data: CreateSessionRequest = {
         ...values,
-        dependencies: depInput
-          .split('\n')
-          .filter((line) => line.trim())
-          .map((line) => {
-            const trimmed = line.trim();
-            // 匹配包名和版本（包含操作符）
-            // 格式: package_name 或 package_name==version 或 package_name>=version 等
-            const match = trimmed.match(/^([a-zA-Z0-9._-]+)(==|>=|<=|>|<|~=|!=|~|=)?(.*)$/);
-            if (match) {
-              const name = match[1];
-              const operator = match[2] || '';
-              const version = match[3] || '';
-              // 如果有版本号，保留操作符；如果没有版本号，version 为空字符串
-              return { name, version: operator ? `${operator}${version}` : '' };
-            }
-            // 如果无法匹配，返回整个字符串作为包名
-            return { name: trimmed, version: '' };
-          })
-          .filter((dep) => dep.name),
+        dependencies,
+        python_package_index_url: values.python_package_index_url?.trim() || undefined,
+        install_timeout: values.install_timeout || 300,
       };
       await createSession(data);
       setShowCreateModal(false);
       form.resetFields();
       setDepInput('');
-      setDependencies([]);
     } catch (error) {
       // 表单验证失败或创建失败
     }
@@ -163,6 +181,59 @@ export default function SessionsPage() {
     setUploadSessionId(record.id);
     setUploadSessionName(record.id);
     setShowUploadModal(true);
+  };
+
+  const handleOpenInstallDependenciesModal = (record: SessionResponse) => {
+    setInstallSessionId(record.id);
+    setInstallSessionName(record.id);
+    installForm.setFieldsValue({
+      python_package_index_url: record.python_package_index_url || '',
+      dependencies: '',
+    });
+    setShowInstallDependenciesModal(true);
+  };
+
+  const parseDependencyInput = (input: string): DependencySpec[] =>
+    input
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((trimmed) => {
+        const match = trimmed.match(/^([a-zA-Z0-9._-]+)(==|>=|<=|>|<|~=|!=|~|=)?(.*)$/);
+        if (match) {
+          const name = match[1];
+          const operator = match[2] || '';
+          const version = match[3] || '';
+          return {
+            name,
+            ...(operator ? { version: `${operator}${version}` } : {}),
+          };
+        }
+        return { name: trimmed };
+      })
+      .filter((dep) => dep.name);
+
+  const handleInstallDependencies = async () => {
+    try {
+      const values = await installForm.validateFields();
+      const dependencies = parseDependencyInput(values.dependencies);
+
+      if (dependencies.length === 0) {
+        message.warning('请至少输入一个依赖');
+        return;
+      }
+
+      const updatedSession = await installSessionDependencies(installSessionId, {
+        python_package_index_url: values.python_package_index_url?.trim() || undefined,
+        dependencies,
+      });
+      updateSessionInState(updatedSession);
+      setShowInstallDependenciesModal(false);
+      installForm.resetFields();
+      await fetchSessions();
+    } catch (error) {
+      // ignore validation errors
+    }
   };
 
   // 处理文件上传
@@ -220,6 +291,31 @@ export default function SessionsPage() {
     return configs[status] || configs.PENDING;
   };
 
+  const renderDependencyStatus = (record: SessionResponse) => {
+    const status = record.dependency_install_status;
+
+    if (status === 'installing') {
+      return <Tag color="processing">安装中</Tag>;
+    }
+    if (status === 'failed') {
+      const errorText = record.dependency_install_error || '依赖安装失败';
+      return (
+        <Tooltip title={errorText}>
+          <Tag color="error" style={{ cursor: 'help' }}>
+            安装失败
+          </Tag>
+        </Tooltip>
+      );
+    }
+    if (status === 'completed' && record.installed_dependencies?.length) {
+      return <Tag color="success">已安装 {record.installed_dependencies.length}</Tag>;
+    }
+    if (status === 'completed') {
+      return <Tag color="default">无依赖</Tag>;
+    }
+    return <Tag>待安装</Tag>;
+  };
+
   // 表格列定义
   const columns = [
     {
@@ -255,6 +351,12 @@ export default function SessionsPage() {
           : '-',
     },
     {
+      title: '依赖',
+      key: 'dependency_status',
+      width: 130,
+      render: (_: unknown, record: SessionResponse) => renderDependencyStatus(record),
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
@@ -274,6 +376,9 @@ export default function SessionsPage() {
           record.status === 'CREATING' ||
           record.status === 'starting' ||
           record.status === 'STARTING';
+        const canInstallDependencies =
+          record.status === 'running' || record.status === 'RUNNING';
+        const dependencyInstalling = record.dependency_install_status === 'installing';
 
         return (
           <Space size="small">
@@ -313,6 +418,14 @@ export default function SessionsPage() {
                 record.status === 'timeout' ||
                 record.status === 'TIMEOUT'
               }
+            />
+            <Button
+              type="text"
+              icon={<DownloadOutlined />}
+              size="small"
+              title={dependencyInstalling ? '依赖安装中' : '安装依赖'}
+              onClick={() => handleOpenInstallDependenciesModal(record)}
+              disabled={!canInstallDependencies || dependencyInstalling}
             />
             {canTerminate && (
               <Popconfirm
@@ -504,7 +617,6 @@ export default function SessionsPage() {
           setShowCreateModal(false);
           form.resetFields();
           setDepInput('');
-          setDependencies([]);
         }}
         width={600}
         okText="创建"
@@ -588,6 +700,28 @@ export default function SessionsPage() {
               </Select>
             </Form.Item>
           </div>
+
+          <Form.Item
+            name="python_package_index_url"
+            label="Python 仓库源（可选）"
+            initialValue="https://pypi.org/simple/"
+          >
+            <Input placeholder="例如: https://pypi.org/simple/" />
+          </Form.Item>
+
+          <Form.Item
+            name="install_timeout"
+            label="依赖安装超时(秒)"
+            initialValue={300}
+          >
+            <Select>
+              <Select.Option value={60}>1 分钟</Select.Option>
+              <Select.Option value={300}>5 分钟</Select.Option>
+              <Select.Option value={600}>10 分钟</Select.Option>
+              <Select.Option value={900}>15 分钟</Select.Option>
+              <Select.Option value={1800}>30 分钟</Select.Option>
+            </Select>
+          </Form.Item>
 
           <Form.Item label="Python 依赖包（可选）">
             <Input.TextArea
@@ -702,8 +836,71 @@ export default function SessionsPage() {
                 <div style={{ fontSize: 14, marginTop: 4 }}>{detailSession.completed_at}</div>
               </div>
             )}
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, color: '#677489' }}>依赖安装状态</label>
+              <div style={{ fontSize: 14, marginTop: 4 }}>
+                {detailSession.dependency_install_status || '-'}
+              </div>
+            </div>
+
+            {detailSession.python_package_index_url && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, color: '#677489' }}>依赖仓库源</label>
+                <div style={{ fontSize: 14, marginTop: 4 }}>
+                  <code style={{ fontSize: 12 }}>{detailSession.python_package_index_url}</code>
+                </div>
+              </div>
+            )}
+
+            {!!detailSession.installed_dependencies?.length && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, color: '#677489' }}>已安装依赖</label>
+                <div style={{ fontSize: 14, marginTop: 8 }}>
+                  {detailSession.installed_dependencies.map((dep) => (
+                    <Tag key={`${dep.name}-${dep.version}`} style={{ marginBottom: 8 }}>
+                      {dep.name} {dep.version}
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="安装三方依赖"
+        open={showInstallDependenciesModal}
+        onOk={handleInstallDependencies}
+        onCancel={() => {
+          setShowInstallDependenciesModal(false);
+          installForm.resetFields();
+        }}
+        okText="开始安装"
+        cancelText="取消"
+      >
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ fontSize: 14, marginBottom: 8 }}>会话：{installSessionName}</p>
+          <p style={{ fontSize: 12, color: '#677489', margin: 0 }}>
+            输入仓库源和依赖列表，系统会在当前运行中的会话中增量安装依赖。
+          </p>
+        </div>
+        <Form form={installForm} layout="vertical">
+          <Form.Item name="python_package_index_url" label="Python 仓库源（可选）">
+            <Input placeholder="例如: https://pypi.org/simple/" />
+          </Form.Item>
+          <Form.Item
+            name="dependencies"
+            label="依赖列表"
+            rules={[{ required: true, message: '请输入至少一个依赖' }]}
+          >
+            <Input.TextArea
+              rows={5}
+              placeholder={'每行一个包，例如:\nrequests==2.31.0\npandas>=2.2.0'}
+            />
+          </Form.Item>
+        </Form>
       </Modal>
 
       {/* 上传文件模态框 */}

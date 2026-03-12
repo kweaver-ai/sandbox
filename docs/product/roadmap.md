@@ -9,8 +9,8 @@
 ## Executive Summary
 
 This roadmap outlines the remaining features to implement for the Sandbox Platform based on:
-- `docs/sandbox-design-v2.1.md` - Technical architecture specification
-- `docs/e2e-integration-plan.md` - Business scenario requirements (PTC data analysis + Q&A)
+- `docs/design/archive/sandbox-design-v2.1.md` - Technical architecture specification
+- `docs/product/use-cases/ptc-data-analysis-and-context-qa.md` - Business scenario requirements (PTC data analysis + Q&A)
 
 **Current State**: ~95% complete for core Python execution functionality
 **Latest Updates**:
@@ -396,5 +396,5 @@ sandbox_control_plane/src/interfaces/rest/api/v1/health.py                 # Enh
 **Phase 1 Status**: 95% COMPLETE - Only Security Hardening remaining
 
 **Documentation Updates**:
-- ✅ Updated `docs/sandbox-design-v2.1.md` with K8s scheduler implementation details
-- ✅ This roadmap is saved at `docs/roadmap.md` for reference
+- ✅ Updated `docs/design/archive/sandbox-design-v2.1.md` with K8s scheduler implementation details
+- ✅ This roadmap is saved at `docs/product/roadmap.md` for reference

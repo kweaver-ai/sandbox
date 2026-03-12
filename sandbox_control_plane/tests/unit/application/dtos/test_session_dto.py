@@ -37,6 +37,11 @@ class TestSessionDTO:
         assert dto.pod_name is None
         assert dto.env_vars == {}  # Default from __post_init__
         assert dto.timeout == 300
+        assert dto.language_runtime == "python3.11"
+        assert dto.python_package_index_url == "https://pypi.org/simple/"
+        assert dto.requested_dependencies == []
+        assert dto.installed_dependencies == []
+        assert dto.dependency_install_status == "pending"
         assert dto.created_at is not None  # Default from __post_init__
         assert dto.updated_at is not None  # Default from __post_init__
         assert dto.last_activity_at is not None  # Default from __post_init__
@@ -56,6 +61,11 @@ class TestSessionDTO:
             pod_name="pod-456",
             env_vars={"DEBUG": "true"},
             timeout=600,
+            language_runtime="python3.11",
+            python_package_index_url="https://mirror.example/simple",
+            requested_dependencies=[{"name": "requests", "version": "==2.31.0"}],
+            installed_dependencies=[],
+            dependency_install_status="completed",
             created_at=now,
             updated_at=now,
             completed_at=now,
@@ -67,6 +77,7 @@ class TestSessionDTO:
         assert dto.pod_name == "pod-456"
         assert dto.env_vars == {"DEBUG": "true"}
         assert dto.timeout == 600
+        assert dto.python_package_index_url == "https://mirror.example/simple"
         assert dto.completed_at == now
 
     def test_post_init_defaults(self):
@@ -89,6 +100,8 @@ class TestSessionDTO:
         assert dto.created_at is not None
         assert dto.updated_at is not None
         assert dto.last_activity_at is not None
+        assert dto.requested_dependencies == []
+        assert dto.installed_dependencies == []
 
     def test_from_entity(self):
         """测试从领域实体创建 DTO"""
@@ -102,7 +115,8 @@ class TestSessionDTO:
                 disk="1Gi"
             ),
             workspace_path="/workspace/test",
-            runtime_type="python3.11"
+            runtime_type="python3.11",
+            requested_dependencies=["requests==2.31.0"],
         )
 
         dto = SessionDTO.from_entity(session)
@@ -118,6 +132,10 @@ class TestSessionDTO:
         }
         assert dto.workspace_path == "/workspace/test"
         assert dto.runtime_type == "python3.11"
+        assert dto.language_runtime == "python3.11"
+        assert dto.requested_dependencies == [
+            {"name": "requests", "version": "==2.31.0"}
+        ]
 
     def test_from_entity_with_all_fields(self):
         """测试从领域实体创建 DTO（所有字段）"""
@@ -138,6 +156,8 @@ class TestSessionDTO:
             pod_name="pod-456",
             env_vars={"DEBUG": "true"},
             timeout=600,
+            python_package_index_url="https://mirror.example/simple",
+            requested_dependencies=["requests==2.31.0"],
             created_at=now,
             updated_at=now,
             completed_at=now,
@@ -152,6 +172,7 @@ class TestSessionDTO:
         assert dto.pod_name == "pod-456"
         assert dto.env_vars == {"DEBUG": "true"}
         assert dto.timeout == 600
+        assert dto.python_package_index_url == "https://mirror.example/simple"
         assert dto.completed_at == now
 
     def test_is_dataclass(self):

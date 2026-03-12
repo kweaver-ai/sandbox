@@ -1,7 +1,7 @@
 # 2.2 Container Scheduler 模块
 
 
-> **文档导航**: [返回首页](index.md)
+> **文档导航**: [返回架构总览](../architecture/overview.md)
 
 
 ### 2.2 Container Scheduler 模块

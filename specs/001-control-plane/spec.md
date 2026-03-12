@@ -3,7 +3,7 @@
 **Feature Branch**: `001-control-plane`
 **Created**: 2026-01-06
 **Status**: Draft
-**Input**: User description: "sandbox_control_plane 构建，具体文档请参考 @docs/sandbox-design-v2.1.md  2.1 管理中心章节， 接口文档请参考 @docs/api/"
+**Input**: User description: "sandbox_control_plane 构建，具体文档请参考 @docs/design/modules/control-plane.md，接口文档请参考 @docs/api/"
 
 ## User Scenarios & Testing
 
@@ -195,7 +195,7 @@ As a platform operator, I need to monitor container status, resource usage, and 
 
 ### Architecture Requirements
 
-**MANDATORY**: This implementation MUST follow the **Hexagonal Architecture** (Ports and Adapters pattern) as defined in `.specify/memory/constitution.md` Principle VII and `docs/PROJECT_STRUCTURE.md`.
+**MANDATORY**: This implementation MUST follow the **Hexagonal Architecture** (Ports and Adapters pattern) as defined in `.specify/memory/constitution.md` Principle VII and `docs/dev/project-structure.md`.
 
 #### Four-Layer Structure
 

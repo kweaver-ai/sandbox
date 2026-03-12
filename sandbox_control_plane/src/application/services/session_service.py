@@ -3,11 +3,11 @@
 
 编排会话相关的用例。
 """
-from typing import List, Optional
+from typing import Callable, List, Optional
 from datetime import datetime, timedelta
 import uuid
 
-from src.domain.entities.session import Session
+from src.domain.entities.session import InstalledDependency, Session
 from src.domain.entities.execution import Execution
 from src.domain.entities.template import Template
 from src.domain.value_objects.resource_limit import ResourceLimit
@@ -19,6 +19,9 @@ from src.domain.repositories.template_repository import ITemplateRepository
 from src.domain.services.scheduler import IScheduler, ScheduleRequest, RuntimeNode
 from src.domain.services.storage import IStorageService
 from src.application.commands.create_session import CreateSessionCommand
+from src.application.commands.install_session_dependencies import (
+    InstallSessionDependenciesCommand,
+)
 from src.infrastructure.config.settings import get_settings
 from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.queries.get_session import GetSessionQuery
@@ -26,7 +29,19 @@ from src.application.queries.get_execution import GetExecutionQuery
 from src.application.dtos.session_dto import SessionDTO
 from src.application.dtos.execution_dto import ExecutionDTO
 from src.shared.errors.domain import NotFoundError, ValidationError, ConflictError
+from src.infrastructure.executors import ExecutorClient
+from src.infrastructure.executors.errors import (
+    ExecutorConnectionError,
+    ExecutorResponseError,
+    ExecutorTimeoutError,
+    ExecutorUnavailableError,
+    ExecutorValidationError,
+)
 from src.infrastructure.logging import get_logger
+from src.shared.utils.dependencies import (
+    DEFAULT_PYTHON_PACKAGE_INDEX_URL,
+    normalize_python_package_index_url,
+)
 
 logger = get_logger(__name__)
 
@@ -44,13 +59,17 @@ class SessionService:
         execution_repo: IExecutionRepository,
         template_repo: ITemplateRepository,
         scheduler: IScheduler,
-        storage_service: Optional[IStorageService] = None
+        storage_service: Optional[IStorageService] = None,
+        executor_client: Optional[ExecutorClient] = None,
+        initial_dependency_sync_scheduler: Optional[Callable[[str, int], None]] = None,
     ):
         self._session_repo = session_repo
         self._execution_repo = execution_repo
         self._template_repo = template_repo
         self._scheduler = scheduler
         self._storage_service = storage_service
+        self._executor_client = executor_client or ExecutorClient()
+        self._initial_dependency_sync_scheduler = initial_dependency_sync_scheduler
 
     async def create_session(self, command: CreateSessionCommand) -> SessionDTO:
         """
@@ -122,6 +141,15 @@ class SessionService:
             status=session.status.value,
         )
 
+        if dependencies := (command.dependencies or []):
+            session.mark_dependency_installing()
+            await self._session_repo.save(session)
+            self._schedule_initial_dependency_sync(
+                session_id=session.id,
+                install_timeout=command.install_timeout,
+                dependency_count=len(dependencies),
+            )
+
         return SessionDTO.from_entity(session)
 
     async def _validate_template(self, template_id: str) -> Template:
@@ -179,8 +207,11 @@ class SessionService:
             runtime_node=runtime_node.id,
             env_vars=command.env_vars or {},
             timeout=command.timeout,
+            python_package_index_url=normalize_python_package_index_url(
+                command.python_package_index_url
+            ),
             requested_dependencies=dependencies,
-            dependency_install_status="installing" if dependencies else "completed",
+            dependency_install_status="pending" if dependencies else "completed",
         )
 
     async def _create_container_for_session(
@@ -194,7 +225,7 @@ class SessionService:
         from src.domain.entities.template import Template
 
         container_id = None
-        dependencies = command.dependencies or []
+        dependencies: list[str] = []
 
         try:
             if hasattr(self._scheduler, 'create_container_for_session'):
@@ -299,6 +330,37 @@ class SessionService:
             raise NotFoundError(f"Session not found: {query.session_id}")
 
         return SessionDTO.from_entity(session)
+
+    async def install_session_dependencies(
+        self,
+        command: InstallSessionDependenciesCommand,
+    ) -> SessionDTO:
+        """增量安装会话依赖。"""
+        session = await self._session_repo.find_by_id(command.session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {command.session_id}")
+
+        if session.dependency_install_status == "installing":
+            raise ConflictError(
+                f"Dependency installation already in progress for session: {session.id}"
+            )
+
+        session.merge_requested_dependencies(
+            command.python_package_index_url,
+            command.dependencies,
+        )
+        return await self._sync_session_dependencies(session, sync_mode="merge")
+
+    async def sync_session_dependencies_for_session(
+        self,
+        session_id: str,
+        sync_mode: str = "replace",
+    ) -> SessionDTO:
+        """同步指定 session 的依赖配置。"""
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {session_id}")
+        return await self._sync_session_dependencies(session, sync_mode=sync_mode)
 
     async def list_sessions(
         self,
@@ -654,6 +716,92 @@ class SessionService:
         await self._session_repo.save(session)
         return True
 
+    async def _sync_session_dependencies(
+        self,
+        session: Session,
+        sync_mode: str,
+    ) -> SessionDTO:
+        """同步 session 依赖配置到 executor。"""
+        if not session.is_active():
+            raise ValidationError(f"Session is not active: {session.id}")
+        if not session.container_id:
+            raise ValidationError(f"Session has no container: {session.id}")
+        if not hasattr(self._scheduler, "get_executor_url"):
+            raise ValidationError("Scheduler does not support executor URL discovery")
+
+        session.mark_dependency_installing()
+        await self._session_repo.save(session)
+
+        try:
+            executor_url = await self._scheduler.get_executor_url(session.container_id)
+            result = await self._executor_client.sync_session_config(
+                executor_url=executor_url,
+                session_id=session.id,
+                language_runtime=session.runtime_type,
+                python_package_index_url=session.python_package_index_url,
+                dependencies=session.requested_dependencies,
+                sync_mode=sync_mode,
+            )
+        except (
+            ExecutorConnectionError,
+            ExecutorTimeoutError,
+            ExecutorUnavailableError,
+            ExecutorValidationError,
+            ExecutorResponseError,
+        ) as error:
+            session.mark_dependency_install_failed(str(error))
+            await self._session_repo.save(session)
+            raise
+
+        installed_dependencies = [
+            InstalledDependency(
+                name=dep.name,
+                version=dep.version,
+                install_location=dep.install_location,
+                install_time=datetime.fromisoformat(dep.install_time.replace("Z", "+00:00")),
+                is_from_template=dep.is_from_template,
+            )
+            for dep in result.installed_dependencies
+        ]
+
+        completed_at = None
+        if result.completed_at:
+            completed_at = datetime.fromisoformat(result.completed_at.replace("Z", "+00:00"))
+
+        session.mark_dependency_install_completed(
+            installed_dependencies,
+            completed_at=completed_at,
+        )
+        if result.started_at:
+            session.dependency_install_started_at = datetime.fromisoformat(
+                result.started_at.replace("Z", "+00:00")
+            )
+        await self._session_repo.save(session)
+        return SessionDTO.from_entity(session)
+
+    def _schedule_initial_dependency_sync(
+        self,
+        session_id: str,
+        install_timeout: int,
+        dependency_count: int,
+    ) -> None:
+        """调度首次依赖安装后台任务。"""
+        if self._initial_dependency_sync_scheduler is None:
+            logger.warning(
+                "Initial dependency sync scheduler is not configured",
+                session_id=session_id,
+                dependency_count=dependency_count,
+            )
+            return
+
+        logger.info(
+            "Scheduling initial dependency sync",
+            session_id=session_id,
+            dependency_count=dependency_count,
+            install_timeout=install_timeout,
+        )
+        self._initial_dependency_sync_scheduler(session_id, install_timeout)
+
     def _generate_session_id(self) -> str:
         """生成会话 ID"""
         timestamp = datetime.now().strftime("%Y%m%d")
@@ -680,4 +828,3 @@ class SessionService:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         unique = uuid.uuid4().hex[:8]
         return f"exec_{timestamp}_{unique}"
-

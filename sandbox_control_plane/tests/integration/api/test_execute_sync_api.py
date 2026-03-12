@@ -916,13 +916,14 @@ def handler(event):
                 if response.status_code == 200:
                     session = response.json()
                     status = session.get("status")
-                    if status == "running":
+                    dependency_install_status = session.get("dependency_install_status")
+                    if status == "running" and dependency_install_status == "completed":
                         break
                     elif status == "failed":
                         pytest.fail(f"Session failed to start: {session}")
                 await asyncio.sleep(1)
             else:
-                pytest.fail(f"Session did not become ready in {max_wait} seconds")
+                pytest.fail(f"Session did not become ready with dependencies in {max_wait} seconds")
 
             # Step 3: 使用已安装 requests 库的会话执行代码
             request_data = {
@@ -930,13 +931,13 @@ def handler(event):
 import requests
 
 def handler(event):
-    # 测试 requests 库的基本功能
-    url = "https://httpbin.org/get"
-    response = requests.get(url, timeout=5)
+    # 测试 requests 库可导入且核心对象可用，不依赖外网
+    request = requests.Request("GET", "https://example.com/api", params={"q": "sandbox"})
+    prepared = request.prepare()
     return {
-        "status_code": response.status_code,
-        "url": response.url,
-        "has_data": len(response.text) > 0
+        "method": prepared.method,
+        "url": prepared.url,
+        "has_query_string": "q=sandbox" in prepared.url
     }
 ''',
                 "language": "python",
@@ -951,7 +952,9 @@ def handler(event):
             assert response.status_code == 200
             data = response.json()
             assert data["status"] in ("success", "completed")
-            assert data["return_value"]["status_code"] == 200
+            assert data["return_value"]["method"] == "GET"
+            assert data["return_value"]["url"].startswith("https://example.com/api")
+            assert data["return_value"]["has_query_string"] == True
         finally:
             # Cleanup session manually (also tracked by auto_cleanup)
             await http_client.delete(f"/sessions/{session_id}")
@@ -1002,13 +1005,14 @@ def handler(event):
                 if response.status_code == 200:
                     session = response.json()
                     status = session.get("status")
-                    if status == "running":
+                    dependency_install_status = session.get("dependency_install_status")
+                    if status == "running" and dependency_install_status == "completed":
                         break
                     elif status == "failed":
                         pytest.fail(f"Session failed to start: {session}")
                 await asyncio.sleep(1)
             else:
-                pytest.fail(f"Session did not become ready in {max_wait} seconds")
+                pytest.fail(f"Session did not become ready with dependencies in {max_wait} seconds")
 
             # Step 3: 使用已安装 click 库的会话执行代码
             request_data = {

@@ -4,7 +4,7 @@
 测试 DatabaseManager 的功能。
 """
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 
 from src.infrastructure.persistence.database import DatabaseManager, Base
 
@@ -52,6 +52,12 @@ class TestDatabaseManager:
         """测试未初始化时创建表"""
         with pytest.raises(RuntimeError, match="not initialized"):
             await db_manager.create_tables()
+
+    @pytest.mark.asyncio
+    async def test_run_startup_schema_migrations_not_initialized(self, db_manager):
+        """测试未初始化时执行启动迁移。"""
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await db_manager.run_startup_schema_migrations()
 
     @pytest.mark.asyncio
     async def test_initialize_with_seed_no_tables_no_seed(self, db_manager):
@@ -115,6 +121,60 @@ class TestDatabaseManager:
         await db_manager.close()
 
         mock_engine.dispose.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_startup_schema_migrations_adds_missing_column(self, db_manager):
+        """测试启动迁移会补齐缺失字段。"""
+        mock_conn = AsyncMock()
+        table_exists_result = Mock()
+        table_exists_result.scalar.return_value = 1
+        column_exists_result = Mock()
+        column_exists_result.scalar.return_value = 0
+        alter_result = Mock()
+        mock_conn.execute = AsyncMock(
+            side_effect=[table_exists_result, column_exists_result, alter_result]
+        )
+
+        mock_begin = AsyncMock()
+        mock_begin.__aenter__.return_value = mock_conn
+        mock_begin.__aexit__.return_value = None
+
+        mock_engine = Mock()
+        mock_engine.url.get_backend_name.return_value = "mysql"
+        mock_engine.begin.return_value = mock_begin
+        db_manager._engine = mock_engine
+
+        await db_manager.run_startup_schema_migrations()
+
+        assert mock_conn.execute.await_count == 3
+        alter_stmt = str(mock_conn.execute.await_args_list[2].args[0])
+        assert "ALTER TABLE `t_sandbox_session`" in alter_stmt
+        assert "ADD COLUMN `f_python_package_index_url`" in alter_stmt
+
+    @pytest.mark.asyncio
+    async def test_run_startup_schema_migrations_skips_existing_column(self, db_manager):
+        """测试启动迁移在字段已存在时跳过。"""
+        mock_conn = AsyncMock()
+        table_exists_result = Mock()
+        table_exists_result.scalar.return_value = 1
+        column_exists_result = Mock()
+        column_exists_result.scalar.return_value = 1
+        mock_conn.execute = AsyncMock(
+            side_effect=[table_exists_result, column_exists_result]
+        )
+
+        mock_begin = AsyncMock()
+        mock_begin.__aenter__.return_value = mock_conn
+        mock_begin.__aexit__.return_value = None
+
+        mock_engine = Mock()
+        mock_engine.url.get_backend_name.return_value = "mysql"
+        mock_engine.begin.return_value = mock_begin
+        db_manager._engine = mock_engine
+
+        await db_manager.run_startup_schema_migrations()
+
+        assert mock_conn.execute.await_count == 2
 
 
 class TestBase:

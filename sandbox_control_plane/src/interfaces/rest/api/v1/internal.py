@@ -63,11 +63,6 @@ async def handle_container_ready(
         from src.domain.value_objects.execution_status import SessionStatus
         session.status = SessionStatus.RUNNING
 
-        # 如果有依赖待安装，标记为已完成（容器成功启动说明依赖安装成功）
-        if session.is_dependency_install_pending():
-            session.dependency_install_status = "completed"
-            logger.info(f"Session {session.id} dependencies marked as completed")
-
         await session_repo.save(session)
         logger.info(f"Session {session.id} status updated to RUNNING")
         return InternalAPIResponse(message="Container ready acknowledged, session updated")

@@ -16,6 +16,7 @@ from .lifecycle_service import (
     register_signal_handlers,
     map_exit_code_to_reason,
 )
+from .session_config_sync_service import SessionConfigSyncService
 
 __all__ = [
     "HeartbeatService",
@@ -26,4 +27,5 @@ __all__ = [
     "register_lifecycle_service",
     "register_signal_handlers",
     "map_exit_code_to_reason",
+    "SessionConfigSyncService",
 ]

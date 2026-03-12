@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.domain.value_objects.resource_limit import ResourceLimit
+from src.shared.utils.dependencies import DEFAULT_PYTHON_PACKAGE_INDEX_URL
 
 
 @dataclass
@@ -28,6 +29,7 @@ class CreateSessionCommand:
     install_timeout: int = 300
     fail_on_dependency_error: bool = True
     allow_version_conflicts: bool = False
+    python_package_index_url: str = DEFAULT_PYTHON_PACKAGE_INDEX_URL
 
     def __post_init__(self):
         """初始化后验证"""

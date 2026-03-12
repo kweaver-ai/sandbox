@@ -70,6 +70,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await db_manager.initialize()
     logger.info("Database initialized")
+    await db_manager.run_startup_schema_migrations()
+    logger.info("Startup schema migrations completed")
 
     # 根据环境决定是否自动创建表和初始化数据
     from src.infrastructure.config.settings import get_settings
