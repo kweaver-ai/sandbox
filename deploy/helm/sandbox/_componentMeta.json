@@ -172,14 +172,14 @@
                             "idleThresholdMinutes": {
                                 "type": "number",
                                 "title": "空闲超时时间（分钟）",
-                                "default": 30,
+                                "default": -1,
                                 "minimum": -1,
                                 "description": "-1 表示不清理空闲会话"
                             },
                             "maxLifetimeHours": {
                                 "type": "number",
                                 "title": "最大生命周期（小时）",
-                                "default": 6,
+                                "default": -1,
                                 "minimum": -1,
                                 "description": "-1 表示无限期"
                             },
