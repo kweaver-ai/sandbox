@@ -1,10 +1,12 @@
 {{- if .Values.web.enabled }}
 ---
+{{- $depServices := include "mergedGlobalValues.depServices" . | fromYaml -}}
+{{- $imageRegistry := include "mergedGlobalValues.imageRegistry" . -}}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -29,7 +31,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -38,7 +40,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  ingressClassName: {{ index .Values.depServices "class-443" "ingressClass" | default "nginx" | quote }}
+  ingressClassName: {{ index $depServices "class-443" "ingressClass" | default "nginx" | quote }}
   rules:
   - http:
       paths:
@@ -58,7 +60,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "sandbox.webName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: web
@@ -90,14 +92,14 @@ spec:
             - sh
             - -c
             - |
-              until nc -z {{ include "sandbox.controlPlaneName" . }}.{{ .Values.namespace }}.svc.cluster.local {{ .Values.controlPlane.service.port }}; do
+              until nc -z {{ include "sandbox.controlPlaneName" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.controlPlane.service.port }}; do
                 echo "Waiting for Control Plane..."
                 sleep 2
               done
               echo "Control Plane is ready!"
       containers:
         - name: web
-          image: "{{- if .Values.web.image.registry }}{{ .Values.web.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          image: "{{- if .Values.web.image.registry }}{{ .Values.web.image.registry }}/{{ else if $imageRegistry }}{{ $imageRegistry }}/{{ end }}{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
           # NOTE: DO NOT add VITE_API_BASE_URL environment variable here.
           # The frontend uses runtime URL detection via getApiBaseUrl()
@@ -135,4 +137,3 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
-

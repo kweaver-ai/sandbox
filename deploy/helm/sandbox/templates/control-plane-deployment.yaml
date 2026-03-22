@@ -1,10 +1,12 @@
 {{- if .Values.controlPlane.enabled }}
 ---
+{{- $depServices := include "mergedGlobalValues.depServices" . | fromYaml -}}
+{{- $imageRegistry := include "mergedGlobalValues.imageRegistry" . -}}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "sandbox.controlPlaneName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: control-plane
@@ -29,7 +31,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "sandbox.controlPlaneName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: control-plane
@@ -38,7 +40,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  ingressClassName: {{ index .Values.depServices "class-443" "ingressClass" | default "nginx" }}
+  ingressClassName: {{ index $depServices "class-443" "ingressClass" | default "nginx" }}
   rules:
   - http:
       paths:
@@ -58,7 +60,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "sandbox.controlPlaneName" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: control-plane
@@ -91,14 +93,14 @@ spec:
       #       - sh
       #       - -c
       #       - |
-      #         until nc -z mariadb.{{ .Values.namespace }}.svc.cluster.local 3306; do
+      #         until nc -z mariadb.{{ .Release.Namespace }}.svc.cluster.local 3306; do
       #           echo "Waiting for MariaDB..."
       #           sleep 2
       #         done
       #         echo "MariaDB is ready!"
       containers:
         - name: control-plane
-          image: "{{- if .Values.controlPlane.image.registry }}{{ .Values.controlPlane.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          image: "{{- if .Values.controlPlane.image.registry }}{{ .Values.controlPlane.image.registry }}/{{ else if $imageRegistry }}{{ $imageRegistry }}/{{ end }}{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           ports:
             - name: http
@@ -285,7 +287,7 @@ spec:
                   key: S3_REGION
             # Internal configuration
             - name: CONTROL_PLANE_URL
-              value: "http://{{ include "sandbox.controlPlaneName" . }}.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.controlPlane.service.port }}"
+              value: "http://{{ include "sandbox.controlPlaneName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.controlPlane.service.port }}"
           resources:
             {{- toYaml .Values.controlPlane.resources | nindent 12 }}
           livenessProbe:

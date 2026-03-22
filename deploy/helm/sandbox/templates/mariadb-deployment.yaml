@@ -1,10 +1,11 @@
 {{- if .Values.mariadb.enabled }}
 ---
+{{- $imageRegistry := include "mergedGlobalValues.imageRegistry" . -}}
 apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: mariadb-pv
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: mariadb
@@ -23,7 +24,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mariadb
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: mariadb
@@ -41,7 +42,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mariadb
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: mariadb
@@ -59,7 +60,7 @@ spec:
     spec:
       containers:
         - name: mariadb
-          image: "{{- if .Values.mariadb.image.registry }}{{ .Values.mariadb.image.registry }}/{{ else if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          image: "{{- if .Values.mariadb.image.registry }}{{ .Values.mariadb.image.registry }}/{{ else if $imageRegistry }}{{ $imageRegistry }}/{{ end }}{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
           imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
           ports:
             - name: mysql
@@ -99,7 +100,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mariadb
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "sandbox.fullname" . }}
     component: mariadb
