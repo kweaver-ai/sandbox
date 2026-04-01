@@ -43,7 +43,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean
 
 # Install uv (fast Python package installer)
-RUN pip install --no-cache-dir uv
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      pip install --no-cache-dir -i "https://$PIP_MIRROR/pypi/simple" uv; \
+    else \
+      pip install --no-cache-dir uv; \
+    fi
 
 # Create non-privileged user
 # The executor runs as UID:GID 1000:1000 for security
@@ -57,7 +61,7 @@ COPY runtime/executor/pyproject.toml runtime/executor/uv.lock ./
 
 # Install Python dependencies using uv (faster, uses lock file)
 RUN if [ "$USE_MIRROR" = "true" ]; then \
-      export UV_INDEX_URL=https://$PIP_MIRROR/pypi/web/simple; \
+      export UV_INDEX_URL="https://$PIP_MIRROR/pypi/simple"; \
     fi && \
     uv sync --frozen --no-dev
 

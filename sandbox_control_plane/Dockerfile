@@ -11,7 +11,7 @@ FROM ${PYTHON_IMAGE}
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false
-ARG APT_MIRROR=mirrors.aliyun.com
+ARG APT_MIRROR=mirrors.ustc.edu.cn
 ARG PIP_MIRROR=mirrors.aliyun.com
 
 # Metadata
@@ -41,7 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /tmp/* /var/tmp/*
 
 # Install uv (fast Python package installer)
-RUN pip install --no-cache-dir uv
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      pip install --no-cache-dir -i "https://$PIP_MIRROR/pypi/simple" uv; \
+    else \
+      pip install --no-cache-dir uv; \
+    fi
 
 WORKDIR /app
 
@@ -50,7 +54,7 @@ COPY pyproject.toml uv.lock README.md ./
 
 # Install Python dependencies using uv (faster, uses lock file)
 RUN if [ "$USE_MIRROR" = "true" ]; then \
-      export UV_INDEX_URL=https://$PIP_MIRROR/pypi/web/simple; \
+      export UV_INDEX_URL="https://$PIP_MIRROR/pypi/simple"; \
     fi && \
     uv sync --frozen --no-dev
 
