@@ -7,7 +7,7 @@ ARG APT_MIRROR=mirrors.ustc.edu.cn
 ARG PIP_MIRROR=mirrors.aliyun.com
 ARG PYTHON_IMAGE=python:3.11-slim
 
-FROM ${PYTHON_IMAGE}
+FROM ${PYTHON_IMAGE} AS builder
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false
@@ -25,17 +25,11 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
       sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
     fi
 
-# Install system dependencies (optimized)
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # curl for health checks
-    curl \
-    ca-certificates \
-    wget \
-    # Minimal build tools for Python packages
     gcc \
     python3-dev \
     libffi-dev \
-    # Clean up in the same layer to reduce image size
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && rm -rf /tmp/* /var/tmp/*
@@ -57,6 +51,34 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
       export UV_INDEX_URL="https://$PIP_MIRROR/pypi/simple"; \
     fi && \
     uv sync --frozen --no-dev
+
+FROM ${PYTHON_IMAGE} AS runtime
+
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+
+LABEL maintainer="Sandbox Team"
+LABEL description="Sandbox Control Plane - Management API"
+LABEL version="2.1.0"
+
+# Configure APT mirror if needed
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# Copy Python virtual environment from builder stage
+COPY --from=builder /app/.venv ./.venv
 
 # Copy source code (dockerignore will exclude unnecessary files)
 COPY src/ ./src/

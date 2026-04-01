@@ -9,7 +9,7 @@ ARG PIP_MIRROR=mirrors.ustc.edu.cn
 ARG PYTHON_VERSION=3.11
 ARG PYTHON_IMAGE=python:${PYTHON_VERSION}-slim
 
-FROM ${PYTHON_IMAGE}
+FROM ${PYTHON_IMAGE} AS builder
 
 # Re-declare ARG after FROM (ARGs don't persist across FROM)
 ARG USE_MIRROR=false
@@ -27,18 +27,13 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
       sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
     fi
 
-# Install system dependencies
+# Install build and runtime dependencies required during dependency resolution
 RUN apt-get update && apt-get install -y \
-    # Bubblewrap for process isolation (second layer)
     bubblewrap \
-    # s3fs for S3 workspace mounting (FUSE filesystem)
     s3fs \
-    # gosu for dropping privileges in entrypoint
     gosu \
-    # curl for health checks
     curl \
     ca-certificates \
-    # Clean up
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -64,6 +59,41 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
       export UV_INDEX_URL="https://$PIP_MIRROR/pypi/simple"; \
     fi && \
     uv sync --frozen --no-dev
+
+FROM ${PYTHON_IMAGE} AS runtime
+
+ARG USE_MIRROR=false
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+
+LABEL maintainer="Sandbox Team"
+LABEL description="Sandbox Executor Base - Daemon + Bubblewrap Isolation"
+LABEL version="1.0.0"
+
+# Configure APT mirror if needed
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    bubblewrap \
+    s3fs \
+    gosu \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-privileged user
+# The executor runs as UID:GID 1000:1000 for security
+RUN groupadd -g 1000 sandbox && \
+    useradd -m -u 1000 -g sandbox sandbox
+
+WORKDIR /app
+
+# Copy Python virtual environment from builder stage
+COPY --from=builder /app/.venv ./.venv
 
 # Copy executor code
 COPY runtime/executor/ ./executor/
