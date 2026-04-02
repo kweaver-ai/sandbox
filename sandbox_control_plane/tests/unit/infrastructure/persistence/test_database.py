@@ -47,6 +47,15 @@ class TestDatabaseManager:
 
         assert runtime_url == "mysql+aiomysql://root:password@localhost:3306/kweaver"
 
+    def test_get_managed_sandbox_table_names(self, db_manager):
+        """测试只返回受管的沙箱表。"""
+        assert db_manager._get_managed_sandbox_table_names() == {
+            "t_sandbox_execution",
+            "t_sandbox_runtime_node",
+            "t_sandbox_session",
+            "t_sandbox_template",
+        }
+
     @pytest.mark.asyncio
     async def test_ensure_database_exists_integration(self, db_manager):
         """测试确保数据库存在（集成测试，需要实际连接）"""
@@ -137,11 +146,21 @@ class TestDatabaseManager:
         mock_engine.dispose.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_upgrade_legacy_database_name_renames_old_database(self, db_manager, mock_settings):
-        """测试旧数据库名会在启动时迁移到新数据库名。"""
+    async def test_upgrade_legacy_database_name_migrates_managed_tables_without_dropping_legacy_database(
+        self,
+        db_manager,
+        mock_settings,
+    ):
+        """测试旧数据库名会迁移受管表，但不会删除旧库。"""
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (0,)])
-        mock_cursor.fetchall = AsyncMock(return_value=[("t_one",), ("t_two",)])
+        mock_cursor.fetchall = AsyncMock(
+            side_effect=[
+                [("t_sandbox_session",), ("t_sandbox_execution",)],
+                [],
+                [],
+            ]
+        )
 
         mock_cursor_context = AsyncMock()
         mock_cursor_context.__aenter__.return_value = mock_cursor
@@ -169,20 +188,33 @@ class TestDatabaseManager:
         executed_sql = [call.args[0] for call in mock_cursor.execute.await_args_list]
         assert any(f"CREATE DATABASE `{TARGET_DATABASE_NAME}`" in stmt for stmt in executed_sql)
         assert any(
-            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_one` TO `{TARGET_DATABASE_NAME}`.`t_one`" in stmt
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_sandbox_session` "
+            f"TO `{TARGET_DATABASE_NAME}`.`t_sandbox_session`" in stmt
             for stmt in executed_sql
         )
         assert any(
-            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_two` TO `{TARGET_DATABASE_NAME}`.`t_two`" in stmt
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_sandbox_execution` "
+            f"TO `{TARGET_DATABASE_NAME}`.`t_sandbox_execution`" in stmt
             for stmt in executed_sql
         )
-        assert any(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+        assert not any(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`" in stmt for stmt in executed_sql)
 
     @pytest.mark.asyncio
-    async def test_upgrade_legacy_database_name_skips_when_target_exists(self, db_manager, mock_settings):
-        """测试新数据库已存在时跳过迁移。"""
+    async def test_upgrade_legacy_database_name_migrates_missing_tables_when_target_exists(
+        self,
+        db_manager,
+        mock_settings,
+    ):
+        """测试新数据库已存在但缺表时会迁移缺失表且保留旧库。"""
         mock_cursor = AsyncMock()
         mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (1,)])
+        mock_cursor.fetchall = AsyncMock(
+            side_effect=[
+                [("t_sandbox_session",), ("t_sandbox_execution",)],
+                [],
+                [],
+            ]
+        )
 
         mock_cursor_context = AsyncMock()
         mock_cursor_context.__aenter__.return_value = mock_cursor
@@ -207,7 +239,106 @@ class TestDatabaseManager:
             ):
                 await db_manager.upgrade_legacy_database_name()
 
-        assert mock_cursor.execute.await_count == 2
+        executed_sql = [call.args[0] for call in mock_cursor.execute.await_args_list]
+        assert not any(f"CREATE DATABASE `{TARGET_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+        assert any(
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_sandbox_execution` "
+            f"TO `{TARGET_DATABASE_NAME}`.`t_sandbox_execution`" in stmt
+            for stmt in executed_sql
+        )
+        assert not any(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+
+    @pytest.mark.asyncio
+    async def test_upgrade_legacy_database_name_keeps_legacy_database_when_tables_remain(
+        self,
+        db_manager,
+        mock_settings,
+    ):
+        """测试目标库已有同名表时保留旧库剩余表，避免覆盖数据。"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (1,)])
+        mock_cursor.fetchall = AsyncMock(
+            side_effect=[
+                [("t_sandbox_session",), ("t_sandbox_execution",)],
+                [("t_sandbox_session",), ("t_sandbox_execution",)],
+                [("t_sandbox_session",), ("t_sandbox_execution",)],
+            ]
+        )
+
+        mock_cursor_context = AsyncMock()
+        mock_cursor_context.__aenter__.return_value = mock_cursor
+        mock_cursor_context.__aexit__.return_value = None
+
+        mock_conn = Mock()
+        mock_conn.cursor = Mock(return_value=mock_cursor_context)
+
+        mock_acquire = AsyncMock()
+        mock_acquire.__aenter__.return_value = mock_conn
+        mock_acquire.__aexit__.return_value = None
+
+        mock_pool = Mock()
+        mock_pool.acquire = Mock(return_value=mock_acquire)
+        mock_pool.close = Mock()
+        mock_pool.wait_closed = AsyncMock()
+
+        with patch("src.infrastructure.persistence.database.get_settings", return_value=mock_settings):
+            with patch(
+                "src.infrastructure.persistence.database.aiomysql.create_pool",
+                AsyncMock(return_value=mock_pool),
+            ):
+                await db_manager.upgrade_legacy_database_name()
+
+        executed_sql = [call.args[0] for call in mock_cursor.execute.await_args_list]
+        assert not any("RENAME TABLE" in stmt for stmt in executed_sql)
+        assert not any(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+
+    @pytest.mark.asyncio
+    async def test_upgrade_legacy_database_name_ignores_non_sandbox_tables(
+        self,
+        db_manager,
+        mock_settings,
+    ):
+        """测试只迁移受管的沙箱表，不处理其他业务表。"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (1,)])
+        mock_cursor.fetchall = AsyncMock(
+            side_effect=[
+                [("t_sandbox_session",), ("t_other_business",)],
+                [],
+                [],
+            ]
+        )
+
+        mock_cursor_context = AsyncMock()
+        mock_cursor_context.__aenter__.return_value = mock_cursor
+        mock_cursor_context.__aexit__.return_value = None
+
+        mock_conn = Mock()
+        mock_conn.cursor = Mock(return_value=mock_cursor_context)
+
+        mock_acquire = AsyncMock()
+        mock_acquire.__aenter__.return_value = mock_conn
+        mock_acquire.__aexit__.return_value = None
+
+        mock_pool = Mock()
+        mock_pool.acquire = Mock(return_value=mock_acquire)
+        mock_pool.close = Mock()
+        mock_pool.wait_closed = AsyncMock()
+
+        with patch("src.infrastructure.persistence.database.get_settings", return_value=mock_settings):
+            with patch(
+                "src.infrastructure.persistence.database.aiomysql.create_pool",
+                AsyncMock(return_value=mock_pool),
+            ):
+                await db_manager.upgrade_legacy_database_name()
+
+        executed_sql = [call.args[0] for call in mock_cursor.execute.await_args_list]
+        assert any(
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_sandbox_session` "
+            f"TO `{TARGET_DATABASE_NAME}`.`t_sandbox_session`" in stmt
+            for stmt in executed_sql
+        )
+        assert not any("t_other_business" in stmt for stmt in executed_sql)
 
     @pytest.mark.asyncio
     async def test_run_startup_schema_migrations_adds_missing_column(self, db_manager):

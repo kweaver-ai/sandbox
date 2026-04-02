@@ -48,6 +48,10 @@ class DatabaseManager:
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
+    def _get_managed_sandbox_table_names(self) -> set[str]:
+        """返回 control plane 自己管理的沙箱表名白名单。"""
+        return set(Base.metadata.tables.keys())
+
     @dataclass(frozen=True)
     class _DatabaseConnectionInfo:
         """数据库连接信息。"""
@@ -126,35 +130,64 @@ class DatabaseManager:
                     target_exists = await self._schema_exists(cursor, TARGET_DATABASE_NAME)
                     if target_exists:
                         logger.warning(
-                            "Target database already exists, skipping legacy rename",
+                            "Target database already exists, checking for missing legacy tables",
                             legacy_database=LEGACY_DATABASE_NAME,
                             target_database=TARGET_DATABASE_NAME,
                         )
-                        return
+                    else:
+                        logger.info(
+                            "Migrating legacy database name",
+                            legacy_database=LEGACY_DATABASE_NAME,
+                            target_database=TARGET_DATABASE_NAME,
+                        )
+                        await cursor.execute(
+                            f"CREATE DATABASE `{TARGET_DATABASE_NAME}` "
+                            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                        )
 
-                    logger.info(
-                        "Migrating legacy database name",
-                        legacy_database=LEGACY_DATABASE_NAME,
-                        target_database=TARGET_DATABASE_NAME,
-                    )
-                    await cursor.execute(
-                        f"CREATE DATABASE `{TARGET_DATABASE_NAME}` "
-                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                    )
+                    managed_table_names = self._get_managed_sandbox_table_names()
+                    legacy_table_names = [
+                        table_name
+                        for table_name in await self._list_tables(cursor, LEGACY_DATABASE_NAME)
+                        if table_name in managed_table_names
+                    ]
+                    target_table_names = [
+                        table_name
+                        for table_name in await self._list_tables(cursor, TARGET_DATABASE_NAME)
+                        if table_name in managed_table_names
+                    ]
+                    missing_table_names = [
+                        table_name
+                        for table_name in legacy_table_names
+                        if table_name not in set(target_table_names)
+                    ]
 
-                    table_names = await self._list_tables(cursor, LEGACY_DATABASE_NAME)
-                    for table_name in table_names:
+                    for table_name in missing_table_names:
                         await cursor.execute(
                             f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`{table_name}` "
                             f"TO `{TARGET_DATABASE_NAME}`.`{table_name}`"
                         )
 
-                    await cursor.execute(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`")
+                    remaining_legacy_tables = [
+                        table_name
+                        for table_name in await self._list_tables(cursor, LEGACY_DATABASE_NAME)
+                        if table_name in managed_table_names
+                    ]
+                    if remaining_legacy_tables:
+                        logger.warning(
+                            "Legacy database still contains tables after migration",
+                            legacy_database=LEGACY_DATABASE_NAME,
+                            target_database=TARGET_DATABASE_NAME,
+                            migrated_tables=len(missing_table_names),
+                            remaining_tables=remaining_legacy_tables,
+                        )
+                        return
+
                     logger.info(
-                        "Legacy database renamed successfully",
+                        "Legacy database migration completed without dropping source database",
                         legacy_database=LEGACY_DATABASE_NAME,
                         target_database=TARGET_DATABASE_NAME,
-                        migrated_tables=len(table_names),
+                        migrated_tables=len(missing_table_names),
                     )
         finally:
             pool.close()
