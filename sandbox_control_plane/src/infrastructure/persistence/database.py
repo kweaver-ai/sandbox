@@ -4,8 +4,9 @@
 配置和管理 SQLAlchemy 异步引擎和会话。
 """
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import AsyncGenerator
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import aiomysql
 
@@ -23,6 +24,9 @@ class Base(DeclarativeBase):
 
 
 logger = get_logger(__name__)
+
+LEGACY_DATABASE_NAME = "adp"
+TARGET_DATABASE_NAME = "kweaver"
 
 
 # Import all models so they're registered with Base.metadata
@@ -44,6 +48,146 @@ class DatabaseManager:
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
+    @dataclass(frozen=True)
+    class _DatabaseConnectionInfo:
+        """数据库连接信息。"""
+
+        user: str | None
+        password: str | None
+        host: str | None
+        port: int
+        database: str
+
+    def _get_database_connection_info(self) -> _DatabaseConnectionInfo:
+        """从配置中解析数据库连接信息。"""
+        parsed = urlparse(self._get_runtime_database_url())
+        configured_database = parsed.path.lstrip("/")
+
+        return self._DatabaseConnectionInfo(
+            user=parsed.username,
+            password=parsed.password,
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+            database=configured_database,
+        )
+
+    def _get_runtime_database_url(self) -> str:
+        """返回运行期使用的数据库 URL，并将旧库名规范化到新库名。"""
+        settings = get_settings()
+        parsed = urlparse(settings.effective_database_url)
+        database_name = parsed.path.lstrip("/")
+        if database_name != LEGACY_DATABASE_NAME:
+            return settings.effective_database_url
+
+        normalized = parsed._replace(path=f"/{TARGET_DATABASE_NAME}")
+        return urlunparse(normalized)
+
+    async def _create_server_pool(self) -> aiomysql.Pool:
+        """创建连接到 MySQL 服务端的连接池。"""
+        connection_info = self._get_database_connection_info()
+        return await aiomysql.create_pool(
+            host=connection_info.host,
+            port=connection_info.port,
+            user=connection_info.user,
+            password=connection_info.password,
+            db=None,
+            autocommit=True,
+            minsize=1,
+            maxsize=1,
+        )
+
+    async def upgrade_legacy_database_name(self) -> None:
+        """
+        启动时迁移旧数据库名到新数据库名。
+
+        当前支持将旧库 `adp` 升级为 `kweaver`。
+        """
+        connection_info = self._get_database_connection_info()
+        target_database = connection_info.database
+        if target_database != TARGET_DATABASE_NAME:
+            logger.info(
+                "Skipping legacy database rename because configured target database is not managed",
+                database=target_database,
+            )
+            return
+
+        pool = await self._create_server_pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    legacy_exists = await self._schema_exists(cursor, LEGACY_DATABASE_NAME)
+                    if not legacy_exists:
+                        logger.debug(
+                            "Legacy database not found, skipping rename",
+                            legacy_database=LEGACY_DATABASE_NAME,
+                        )
+                        return
+
+                    target_exists = await self._schema_exists(cursor, TARGET_DATABASE_NAME)
+                    if target_exists:
+                        logger.warning(
+                            "Target database already exists, skipping legacy rename",
+                            legacy_database=LEGACY_DATABASE_NAME,
+                            target_database=TARGET_DATABASE_NAME,
+                        )
+                        return
+
+                    logger.info(
+                        "Migrating legacy database name",
+                        legacy_database=LEGACY_DATABASE_NAME,
+                        target_database=TARGET_DATABASE_NAME,
+                    )
+                    await cursor.execute(
+                        f"CREATE DATABASE `{TARGET_DATABASE_NAME}` "
+                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+
+                    table_names = await self._list_tables(cursor, LEGACY_DATABASE_NAME)
+                    for table_name in table_names:
+                        await cursor.execute(
+                            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`{table_name}` "
+                            f"TO `{TARGET_DATABASE_NAME}`.`{table_name}`"
+                        )
+
+                    await cursor.execute(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`")
+                    logger.info(
+                        "Legacy database renamed successfully",
+                        legacy_database=LEGACY_DATABASE_NAME,
+                        target_database=TARGET_DATABASE_NAME,
+                        migrated_tables=len(table_names),
+                    )
+        finally:
+            pool.close()
+            await pool.wait_closed()
+
+    async def _schema_exists(self, cursor, schema_name: str) -> bool:
+        """检查 schema 是否存在。"""
+        await cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.SCHEMATA
+            WHERE SCHEMA_NAME = %s
+            """,
+            (schema_name,),
+        )
+        result = await cursor.fetchone()
+        return bool(result and result[0])
+
+    async def _list_tables(self, cursor, schema_name: str) -> list[str]:
+        """列出 schema 下的所有基础表。"""
+        await cursor.execute(
+            """
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+            """,
+            (schema_name,),
+        )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
     async def ensure_database_exists(self) -> None:
         """
         确保数据库存在，如果不存在则创建
@@ -51,41 +195,17 @@ class DatabaseManager:
         使用原始连接（不通过 SQLAlchemy）来创建数据库，
         因为 SQLAlchemy 需要数据库已存在才能创建引擎。
         """
-        settings = get_settings()
-
-        # 解析数据库连接信息
-        # 从 mysql+aiomysql://user:pass@host:port/db 中提取信息
-        parsed = urlparse(settings.effective_database_url)
-
-        db_user = parsed.username
-        db_password = parsed.password
-        db_host = parsed.hostname
-        db_port = parsed.port or 3306
-        db_name = parsed.path.lstrip('/')
-
-        # 使用连接池方式连接（更稳定）
-        pool = await aiomysql.create_pool(
-            host=db_host,
-            port=db_port,
-            user=db_user,
-            password=db_password,
-            db=None,  # 不指定数据库，连接到 MySQL 服务器
-            autocommit=True,
-            minsize=1,
-            maxsize=1,
-        )
+        connection_info = self._get_database_connection_info()
+        db_name = connection_info.database
+        pool = await self._create_server_pool()
 
         try:
             async with pool.acquire() as conn:
                 async with conn.cursor() as cursor:
                     # 检查数据库是否存在
-                    await cursor.execute(
-                        f"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA "
-                        f"WHERE SCHEMA_NAME = '{db_name}'"
-                    )
-                    result = await cursor.fetchone()
+                    result = await self._schema_exists(cursor, db_name)
 
-                    if result is None:
+                    if not result:
                         # 数据库不存在，创建它
                         await cursor.execute(
                             f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
@@ -105,7 +225,7 @@ class DatabaseManager:
         # 然后创建引擎
         settings = get_settings()
         self._engine = create_async_engine(
-            settings.effective_database_url,
+            self._get_runtime_database_url(),
             echo=settings.log_level == "DEBUG",
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,

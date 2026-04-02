@@ -283,9 +283,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secret.name }}
                   key: S3_REGION
-            # Internal configuration
-            - name: CONTROL_PLANE_URL
-              value: "http://{{ include "sandbox.controlPlaneName" . }}.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.controlPlane.service.port }}"
           resources:
             {{- toYaml .Values.controlPlane.resources | nindent 12 }}
           livenessProbe:

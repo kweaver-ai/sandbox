@@ -6,7 +6,12 @@
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 
-from src.infrastructure.persistence.database import DatabaseManager, Base
+from src.infrastructure.persistence.database import (
+    Base,
+    DatabaseManager,
+    LEGACY_DATABASE_NAME,
+    TARGET_DATABASE_NAME,
+)
 
 
 class TestDatabaseManager:
@@ -16,7 +21,7 @@ class TestDatabaseManager:
     def mock_settings(self):
         """模拟设置"""
         settings = Mock()
-        settings.effective_database_url = "mysql+aiomysql://root:password@localhost:3306/sandbox"
+        settings.effective_database_url = "mysql+aiomysql://root:password@localhost:3306/kweaver"
         settings.log_level = "INFO"
         settings.db_pool_size = 5
         settings.db_max_overflow = 10
@@ -32,6 +37,15 @@ class TestDatabaseManager:
         """测试初始化"""
         assert db_manager._engine is None
         assert db_manager._session_factory is None
+
+    def test_get_runtime_database_url_normalizes_legacy_database_name(self, db_manager, mock_settings):
+        """测试运行期数据库 URL 会将旧库名规范化到新库名。"""
+        mock_settings.effective_database_url = "mysql+aiomysql://root:password@localhost:3306/adp"
+
+        with patch("src.infrastructure.persistence.database.get_settings", return_value=mock_settings):
+            runtime_url = db_manager._get_runtime_database_url()
+
+        assert runtime_url == "mysql+aiomysql://root:password@localhost:3306/kweaver"
 
     @pytest.mark.asyncio
     async def test_ensure_database_exists_integration(self, db_manager):
@@ -121,6 +135,79 @@ class TestDatabaseManager:
         await db_manager.close()
 
         mock_engine.dispose.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upgrade_legacy_database_name_renames_old_database(self, db_manager, mock_settings):
+        """测试旧数据库名会在启动时迁移到新数据库名。"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (0,)])
+        mock_cursor.fetchall = AsyncMock(return_value=[("t_one",), ("t_two",)])
+
+        mock_cursor_context = AsyncMock()
+        mock_cursor_context.__aenter__.return_value = mock_cursor
+        mock_cursor_context.__aexit__.return_value = None
+
+        mock_conn = Mock()
+        mock_conn.cursor = Mock(return_value=mock_cursor_context)
+
+        mock_acquire = AsyncMock()
+        mock_acquire.__aenter__.return_value = mock_conn
+        mock_acquire.__aexit__.return_value = None
+
+        mock_pool = Mock()
+        mock_pool.acquire = Mock(return_value=mock_acquire)
+        mock_pool.close = Mock()
+        mock_pool.wait_closed = AsyncMock()
+
+        with patch("src.infrastructure.persistence.database.get_settings", return_value=mock_settings):
+            with patch(
+                "src.infrastructure.persistence.database.aiomysql.create_pool",
+                AsyncMock(return_value=mock_pool),
+            ):
+                await db_manager.upgrade_legacy_database_name()
+
+        executed_sql = [call.args[0] for call in mock_cursor.execute.await_args_list]
+        assert any(f"CREATE DATABASE `{TARGET_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+        assert any(
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_one` TO `{TARGET_DATABASE_NAME}`.`t_one`" in stmt
+            for stmt in executed_sql
+        )
+        assert any(
+            f"RENAME TABLE `{LEGACY_DATABASE_NAME}`.`t_two` TO `{TARGET_DATABASE_NAME}`.`t_two`" in stmt
+            for stmt in executed_sql
+        )
+        assert any(f"DROP DATABASE `{LEGACY_DATABASE_NAME}`" in stmt for stmt in executed_sql)
+
+    @pytest.mark.asyncio
+    async def test_upgrade_legacy_database_name_skips_when_target_exists(self, db_manager, mock_settings):
+        """测试新数据库已存在时跳过迁移。"""
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(side_effect=[(1,), (1,)])
+
+        mock_cursor_context = AsyncMock()
+        mock_cursor_context.__aenter__.return_value = mock_cursor
+        mock_cursor_context.__aexit__.return_value = None
+
+        mock_conn = Mock()
+        mock_conn.cursor = Mock(return_value=mock_cursor_context)
+
+        mock_acquire = AsyncMock()
+        mock_acquire.__aenter__.return_value = mock_conn
+        mock_acquire.__aexit__.return_value = None
+
+        mock_pool = Mock()
+        mock_pool.acquire = Mock(return_value=mock_acquire)
+        mock_pool.close = Mock()
+        mock_pool.wait_closed = AsyncMock()
+
+        with patch("src.infrastructure.persistence.database.get_settings", return_value=mock_settings):
+            with patch(
+                "src.infrastructure.persistence.database.aiomysql.create_pool",
+                AsyncMock(return_value=mock_pool),
+            ):
+                await db_manager.upgrade_legacy_database_name()
+
+        assert mock_cursor.execute.await_count == 2
 
     @pytest.mark.asyncio
     async def test_run_startup_schema_migrations_adds_missing_column(self, db_manager):

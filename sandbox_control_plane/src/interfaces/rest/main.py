@@ -68,6 +68,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from src.infrastructure.persistence.database import db_manager
     from src.infrastructure.config.settings import get_settings
 
+    await db_manager.upgrade_legacy_database_name()
+    logger.info("Legacy database upgrade check completed")
+
     await db_manager.initialize()
     logger.info("Database initialized")
     await db_manager.run_startup_schema_migrations()

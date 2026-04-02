@@ -2,6 +2,23 @@
 
 All new features and capabilities added in this branch (`feature/803264`) are documented below.
 
+## [0.3.1]
+
+### 🚀 New Features
+
+- **Database Name Upgrade Handling**
+  - Changed the control plane default database name from `adp` to `kweaver`
+  - Added startup upgrade handling to detect the legacy `adp` schema and migrate tables into `kweaver`
+  - Normalized runtime database connections to `kweaver` to prevent recreating the legacy database during startup
+
+### 🔧 Improvements
+
+- Added unit test coverage for legacy database rename flow and runtime database URL normalization
+
+---
+
+*Released on 2026-04-02*
+
 ## [0.3.0]
 
 ### 🚀 New Features
