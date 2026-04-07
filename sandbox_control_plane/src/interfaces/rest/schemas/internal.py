@@ -52,3 +52,51 @@ class ContainerReadyRequest(BaseModel):
     pod_name: Optional[str] = Field(None, description="Pod 名称（Kubernetes）")
     executor_port: int = Field(8080, description="执行器 HTTP API 端口")
     ready_at: Optional[str] = Field(None, description="就绪时间（ISO 8601）")
+
+
+class PackageMaterializeRequest(BaseModel):
+    """Runtime package 装配请求。"""
+
+    package_path: str = Field(..., description="workspace 内 zip 包相对路径")
+    target_dir: Optional[str] = Field(
+        None,
+        description="workspace 内解压目标目录；未传则由 executor 生成默认目录",
+    )
+    package_hash: Optional[str] = Field(
+        None,
+        description="包 hash，用于缓存目录命名和幂等判断",
+    )
+    force: bool = Field(False, description="是否强制重新解压")
+
+
+class PackageMaterializeResponse(BaseModel):
+    """Runtime package 装配响应。"""
+
+    session_id: str
+    package_path: str
+    target_dir: str
+    checksum: Optional[str] = None
+    reused: bool = False
+    files_count: int = 0
+
+
+class TaskWorkspacePrepareRequest(BaseModel):
+    """Task workspace 准备请求。"""
+
+    task_id: str = Field(..., description="任务/执行 ID")
+    task_type: str = Field("skill", description="任务类型")
+    create_dirs: list[str] = Field(
+        default_factory=lambda: ["input", "output", "tmp", "logs"],
+        description="需要创建的子目录",
+    )
+    reset: bool = Field(False, description="是否重置已有任务目录")
+
+
+class TaskWorkspacePrepareResponse(BaseModel):
+    """Task workspace 准备响应。"""
+
+    session_id: str
+    task_id: str
+    task_root: str
+    directories: Dict[str, str] = Field(default_factory=dict)
+    existed: bool = False

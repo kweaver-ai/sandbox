@@ -54,7 +54,8 @@ async def submit_execution(
         code=request.code,
         language=request.language,
         timeout=request.timeout,
-        event_data=request.event
+        event_data=request.event,
+        env_vars=request.env_vars,
     )
 
     execution_dto = await service.execute_code(command)
@@ -95,7 +96,8 @@ async def execute_code_sync(
         code=request.code,
         language=request.language,
         timeout=request.timeout,
-        event_data=request.event
+        event_data=request.event,
+        env_vars=request.env_vars,
     )
     execution_dto = await service.execute_code(command)
     execution_id = execution_dto.id
@@ -212,6 +214,20 @@ def _map_dto_to_response(dto: ExecutionDTO) -> ExecutionResponse:
         stdout=dto.stdout,
         stderr=dto.stderr,
         exit_code=dto.exit_code,
+        error_message=dto.error_message,
+        execution_time=dto.execution_time,
+        artifacts=[
+            {
+                "path": artifact.path,
+                "size": artifact.size,
+                "mime_type": artifact.mime_type,
+                "type": artifact.type,
+                "created_at": artifact.created_at,
+                "checksum": artifact.checksum,
+            }
+            for artifact in dto.artifacts
+        ],
+        retry_count=dto.retry_count,
         return_value=dto.return_value,
         metrics=dto.metrics,
         created_at=dto.created_at,

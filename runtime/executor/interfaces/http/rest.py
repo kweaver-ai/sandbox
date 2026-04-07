@@ -6,9 +6,12 @@ Runs inside the container and receives execution requests from Control Plane.
 """
 
 import asyncio
+import hashlib
 import os
 import platform
+import shutil
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -142,6 +145,56 @@ class SessionConfigSyncResponseModel(BaseModel):
     completed_at: str
 
 
+class PackageMaterializeRequestModel(BaseModel):
+    """Internal request model for runtime package materialization."""
+
+    session_id: str = Field(..., description="Session identifier")
+    package_path: str = Field(..., description="Workspace relative zip path")
+    target_dir: Optional[str] = Field(
+        None,
+        description="Workspace relative target directory",
+    )
+    package_hash: Optional[str] = Field(
+        None,
+        description="Package hash used for cache naming",
+    )
+    force: bool = Field(default=False, description="Force re-materialize")
+
+
+class PackageMaterializeResponseModel(BaseModel):
+    """Internal response model for runtime package materialization."""
+
+    session_id: str
+    package_path: str
+    target_dir: str
+    checksum: Optional[str] = None
+    reused: bool = False
+    files_count: int = 0
+
+
+class TaskWorkspacePrepareRequestModel(BaseModel):
+    """Internal request model for task workspace preparation."""
+
+    session_id: str = Field(..., description="Session identifier")
+    task_id: str = Field(..., description="Task identifier")
+    task_type: str = Field(default="skill", description="Task type")
+    create_dirs: list[str] = Field(
+        default_factory=lambda: ["input", "output", "tmp", "logs"],
+        description="Sub directories to create",
+    )
+    reset: bool = Field(default=False, description="Reset existing task workspace")
+
+
+class TaskWorkspacePrepareResponseModel(BaseModel):
+    """Internal response model for task workspace preparation."""
+
+    session_id: str
+    task_id: str
+    task_root: str
+    directories: dict[str, str] = Field(default_factory=dict)
+    existed: bool = False
+
+
 # Global service instances
 _execute_command: Optional[ExecuteCodeCommand] = None
 _heartbeat_service: Optional[HeartbeatService] = None
@@ -169,6 +222,99 @@ def get_session_config_sync_service() -> SessionConfigSyncService:
             detail="Session config sync service not initialized",
         )
     return _session_config_sync_service
+
+
+def _get_workspace_root() -> Path:
+    """Resolve the local workspace mount used by the executor."""
+    workspace_path = Path(os.environ.get("WORKSPACE_PATH", str(settings.workspace_path)))
+    if str(workspace_path).startswith("s3://"):
+        return Path("/workspace")
+    return workspace_path
+
+
+def _resolve_relative_path(base: Path, relative_path: str) -> Path:
+    """Resolve a path within the workspace and prevent traversal."""
+    candidate = (base / relative_path).resolve()
+    base_resolved = base.resolve()
+    if base_resolved not in candidate.parents and candidate != base_resolved:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path escapes workspace: {relative_path}",
+        )
+    return candidate
+
+
+def _count_files(root: Path) -> int:
+    return sum(1 for path in root.rglob("*") if path.is_file())
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _materialize_package(request: PackageMaterializeRequestModel) -> PackageMaterializeResponseModel:
+    workspace_root = _get_workspace_root()
+    package_file = _resolve_relative_path(workspace_root, request.package_path)
+    if not package_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Package does not exist: {request.package_path}",
+        )
+
+    package_hash = request.package_hash or _sha256_file(package_file)
+    target_dir_rel = request.target_dir or f".runtime_packages/{package_hash}"
+    target_dir = _resolve_relative_path(workspace_root, target_dir_rel)
+    ready_marker = target_dir / ".ready"
+    package_dir = target_dir / "package"
+
+    reused = ready_marker.exists() and package_dir.exists() and not request.force
+    if not reused:
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        package_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(package_file) as zf:
+            zf.extractall(package_dir)
+        ready_marker.write_text(package_hash, encoding="utf-8")
+
+    return PackageMaterializeResponseModel(
+        session_id=request.session_id,
+        package_path=request.package_path,
+        target_dir=str(target_dir.relative_to(workspace_root)),
+        checksum=package_hash,
+        reused=reused,
+        files_count=_count_files(package_dir),
+    )
+
+
+def _prepare_task_workspace(request: TaskWorkspacePrepareRequestModel) -> TaskWorkspacePrepareResponseModel:
+    workspace_root = _get_workspace_root()
+    task_root = _resolve_relative_path(
+        workspace_root,
+        f".tasks/{request.task_type}/{request.task_id}",
+    )
+    existed = task_root.exists()
+    if existed and request.reset:
+        shutil.rmtree(task_root)
+        existed = False
+
+    directories: dict[str, str] = {}
+    task_root.mkdir(parents=True, exist_ok=True)
+    for dirname in request.create_dirs:
+        subdir = _resolve_relative_path(task_root, dirname)
+        subdir.mkdir(parents=True, exist_ok=True)
+        directories[dirname] = str(subdir.relative_to(workspace_root))
+
+    return TaskWorkspacePrepareResponseModel(
+        session_id=request.session_id,
+        task_id=request.task_id,
+        task_root=str(task_root.relative_to(workspace_root)),
+        directories=directories,
+        existed=existed,
+    )
 
 
 @asynccontextmanager
@@ -734,6 +880,84 @@ def create_app() -> FastAPI:
             ) from exc
 
         return _map_session_config_sync_result(result)
+
+    @app.post(
+        "/internal/packages/materialize",
+        response_model=PackageMaterializeResponseModel,
+        responses={
+            200: {"description": "Runtime package materialized"},
+            400: {"model": ErrorResponse, "description": "Invalid request"},
+            500: {"model": ErrorResponse, "description": "Internal error"},
+        },
+        summary="Materialize runtime package",
+        description="Internal endpoint used to cache and unpack a runtime package inside workspace",
+        tags=["internal"],
+    )
+    async def materialize_runtime_package_endpoint(
+        request: PackageMaterializeRequestModel,
+    ) -> PackageMaterializeResponseModel:
+        try:
+            return _materialize_package(request)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "Executor.ValidationError",
+                    "description": "Invalid runtime package materialize request",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+        except Exception as exc:
+            logger.exception("Runtime package materialization failed", error=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error_code": "Executor.RuntimePackageMaterializeError",
+                    "description": "Runtime package materialization failed",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+
+    @app.post(
+        "/internal/tasks/prepare",
+        response_model=TaskWorkspacePrepareResponseModel,
+        responses={
+            200: {"description": "Task workspace prepared"},
+            400: {"model": ErrorResponse, "description": "Invalid request"},
+            500: {"model": ErrorResponse, "description": "Internal error"},
+        },
+        summary="Prepare task workspace",
+        description="Internal endpoint used to provision task-scoped input/output/tmp/logs directories",
+        tags=["internal"],
+    )
+    async def prepare_task_workspace_endpoint(
+        request: TaskWorkspacePrepareRequestModel,
+    ) -> TaskWorkspacePrepareResponseModel:
+        try:
+            return _prepare_task_workspace(request)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "Executor.ValidationError",
+                    "description": "Invalid task workspace prepare request",
+                    "error_detail": str(exc),
+                },
+            ) from exc
+        except Exception as exc:
+            logger.exception("Task workspace preparation failed", error=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error_code": "Executor.TaskWorkspacePrepareError",
+                    "description": "Task workspace preparation failed",
+                    "error_detail": str(exc),
+                },
+            ) from exc
 
     return app
 

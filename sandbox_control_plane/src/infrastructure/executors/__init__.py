@@ -9,6 +9,10 @@ from src.infrastructure.executors.dto import (
     ExecutorExecuteResponse,
     ExecutorHealthResponse,
     ExecutorContainerInfo,
+    ExecutorMaterializePackageRequest,
+    ExecutorMaterializePackageResponse,
+    ExecutorPrepareTaskWorkspaceRequest,
+    ExecutorPrepareTaskWorkspaceResponse,
 )
 from src.infrastructure.executors.errors import (
     ExecutorError,
@@ -25,6 +29,10 @@ __all__ = [
     "ExecutorExecuteResponse",
     "ExecutorHealthResponse",
     "ExecutorContainerInfo",
+    "ExecutorMaterializePackageRequest",
+    "ExecutorMaterializePackageResponse",
+    "ExecutorPrepareTaskWorkspaceRequest",
+    "ExecutorPrepareTaskWorkspaceResponse",
     "ExecutorError",
     "ExecutorConnectionError",
     "ExecutorTimeoutError",

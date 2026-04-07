@@ -8,6 +8,10 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import httpx
 
 from src.infrastructure.executors.client import ExecutorClient
+from src.infrastructure.executors.dto import (
+    ExecutorMaterializePackageResponse,
+    ExecutorPrepareTaskWorkspaceResponse,
+)
 from src.infrastructure.executors.errors import (
     ExecutorConnectionError,
     ExecutorTimeoutError,
@@ -91,6 +95,102 @@ class TestExecutorClient:
         """测试关闭不存在的客户端"""
         # Should not raise error
         await client.close()
+
+    @pytest.mark.asyncio
+    async def test_materialize_package_success(self, client, mock_httpx_client):
+        """测试 runtime package 装配请求与响应。"""
+        client._client = mock_httpx_client
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "session_id": "sess-456",
+            "package_path": ".packages/skill/v1/pkg.zip",
+            "target_dir": ".runtime_packages/hash123",
+            "checksum": "hash123",
+            "reused": False,
+            "files_count": 3,
+        }
+        mock_httpx_client.post.return_value = mock_response
+
+        result = await client.materialize_package(
+            executor_url="http://localhost:8080",
+            session_id="sess-456",
+            package_path=".packages/skill/v1/pkg.zip",
+            target_dir=None,
+            package_hash="hash123",
+            force=False,
+        )
+
+        assert result == ExecutorMaterializePackageResponse(
+            session_id="sess-456",
+            package_path=".packages/skill/v1/pkg.zip",
+            target_dir=".runtime_packages/hash123",
+            checksum="hash123",
+            reused=False,
+            files_count=3,
+        )
+        mock_httpx_client.post.assert_called_once_with(
+            "http://localhost:8080/internal/packages/materialize",
+            json={
+                "session_id": "sess-456",
+                "package_path": ".packages/skill/v1/pkg.zip",
+                "target_dir": None,
+                "package_hash": "hash123",
+                "force": False,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_prepare_task_workspace_success(self, client, mock_httpx_client):
+        """测试 task workspace 准备请求与响应。"""
+        client._client = mock_httpx_client
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "session_id": "sess-456",
+            "task_id": "task-123",
+            "task_root": ".tasks/skill/task-123",
+            "directories": {
+                "input": ".tasks/skill/task-123/input",
+                "output": ".tasks/skill/task-123/output",
+            },
+            "existed": False,
+        }
+        mock_httpx_client.post.return_value = mock_response
+
+        result = await client.prepare_task_workspace(
+            executor_url="http://localhost:8080",
+            session_id="sess-456",
+            task_id="task-123",
+            task_type="skill",
+            create_dirs=["input", "output"],
+            reset=True,
+        )
+
+        assert result == ExecutorPrepareTaskWorkspaceResponse(
+            session_id="sess-456",
+            task_id="task-123",
+            task_root=".tasks/skill/task-123",
+            directories={
+                "input": ".tasks/skill/task-123/input",
+                "output": ".tasks/skill/task-123/output",
+            },
+            existed=False,
+        )
+        mock_httpx_client.post.assert_called_once_with(
+            "http://localhost:8080/internal/tasks/prepare",
+            json={
+                "session_id": "sess-456",
+                "task_id": "task-123",
+                "task_type": "skill",
+                "create_dirs": ["input", "output"],
+                "reset": True,
+            },
+            headers={"Content-Type": "application/json"},
+        )
 
     @pytest.mark.asyncio
     async def test_submit_execution_success(self, client, mock_httpx_client):

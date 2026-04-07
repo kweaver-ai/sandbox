@@ -135,6 +135,7 @@ class ExecuteCodeRequest(BaseModel):
     )
     timeout: int = Field(30, ge=1, le=3600, description="执行超时（秒）")
     event: Optional[Dict] = Field(None, description="事件数据")
+    env_vars: Dict[str, str] = Field(default_factory=dict, description="本次执行的环境变量，会覆盖 session 同名变量")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -143,13 +144,15 @@ class ExecuteCodeRequest(BaseModel):
                     "code": 'def handler(event):\n    name = event.get("name", "World")\n    return {"message": f"Hello, {name}!"}',
                     "language": "python",
                     "timeout": 10,
-                    "event": {"name": "World"}
+                    "event": {"name": "World"},
+                    "env_vars": {}
                 },
                 {
                     "code": 'def handler(event):\n    name = event.get("name", "World")\n    age = event.get("age", 0)\n    return {"message": f"Hello, {name}!", "age_doubled": age * 2}',
                     "language": "python",
                     "timeout": 30,
-                    "event": {"name": "Alice", "age": 25}
+                    "event": {"name": "Alice", "age": 25},
+                    "env_vars": {"DEBUG": "true"}
                 }
             ]
         }

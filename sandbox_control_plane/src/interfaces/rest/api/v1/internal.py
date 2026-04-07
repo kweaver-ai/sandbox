@@ -18,11 +18,16 @@ from src.interfaces.rest.schemas.internal import (
     ContainerReadyRequest,
     ExecutionResultReport,
     InternalAPIResponse,
+    PackageMaterializeRequest,
+    PackageMaterializeResponse,
+    TaskWorkspacePrepareRequest,
+    TaskWorkspacePrepareResponse,
 )
 from src.infrastructure.dependencies import (
     USE_SQL_REPOSITORIES,
     get_execution_repository as get_sql_execution_repository,
     get_session_repository as get_sql_session_repository,
+    get_session_service_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +86,59 @@ async def handle_container_exited():
     logger.info("Container exited event received")
     # Currently just acknowledge - future: update container status in database
     return InternalAPIResponse(message="Container exited acknowledged")
+
+
+@router.post(
+    "/sessions/{session_id}/packages/materialize",
+    response_model=PackageMaterializeResponse,
+)
+async def materialize_package(
+    session_id: str,
+    request: PackageMaterializeRequest,
+    service=Depends(get_session_service_db),
+):
+    """在对应 executor 内装配 runtime package。"""
+    result = await service.materialize_package_for_session(
+        session_id=session_id,
+        package_path=request.package_path,
+        target_dir=request.target_dir,
+        package_hash=request.package_hash,
+        force=request.force,
+    )
+    return PackageMaterializeResponse(
+        session_id=result.session_id,
+        package_path=result.package_path,
+        target_dir=result.target_dir,
+        checksum=result.checksum,
+        reused=result.reused,
+        files_count=result.files_count,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/tasks/prepare",
+    response_model=TaskWorkspacePrepareResponse,
+)
+async def prepare_task_workspace(
+    session_id: str,
+    request: TaskWorkspacePrepareRequest,
+    service=Depends(get_session_service_db),
+):
+    """在对应 executor 内准备 task workspace。"""
+    result = await service.prepare_task_workspace_for_session(
+        session_id=session_id,
+        task_id=request.task_id,
+        task_type=request.task_type,
+        create_dirs=request.create_dirs,
+        reset=request.reset,
+    )
+    return TaskWorkspacePrepareResponse(
+        session_id=result.session_id,
+        task_id=result.task_id,
+        task_root=result.task_root,
+        directories=result.directories,
+        existed=result.existed,
+    )
 
 
 @router.post("/executions/{execution_id}/heartbeat")

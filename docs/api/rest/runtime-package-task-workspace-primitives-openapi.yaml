@@ -1,0 +1,404 @@
+openapi: 3.1.0
+info:
+  title: Sandbox Runtime Package & Task Workspace Primitives
+  description: |
+    Internal REST primitives for runtime package materialization and task workspace preparation.
+
+    These endpoints are intended for upper orchestrators such as AOI and are not end-user facing APIs.
+  version: 1.0.0
+servers:
+  - url: http://sandbox-control-plane:8000/
+paths:
+  /api/v1/sessions/{session_id}/files:
+    get:
+      tags:
+        - session-files
+      summary: List Session Files
+      description: List files under a session workspace, optionally scoped to a directory prefix.
+      operationId: listSessionFiles
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional workspace relative directory path
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1000
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionFilesResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/sessions/{session_id}/files/upload:
+    post:
+      tags:
+        - session-files
+      summary: Upload Session File
+      description: Upload a file into the session workspace.
+      operationId: uploadSessionFile
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Workspace relative destination path
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionFileUploadResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/sessions/{session_id}/files/{file_path}:
+    get:
+      tags:
+        - session-files
+      summary: Download Session File
+      description: |
+        Download a file from the session workspace.
+
+        The control plane may return either:
+        - raw binary content for small files
+        - JSON containing a presigned URL for large files
+      operationId: downloadSessionFile
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace relative file path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionFileDownloadResponse'
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: File not found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/internal/sessions/{session_id}/packages/materialize:
+    post:
+      tags:
+        - internal-runtime
+      summary: Materialize Runtime Package
+      description: Materialize a zip package inside a session workspace and reuse cached extraction when possible.
+      operationId: materializeRuntimePackage
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageMaterializeRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageMaterializeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/internal/sessions/{session_id}/tasks/prepare:
+    post:
+      tags:
+        - internal-runtime
+      summary: Prepare Task Workspace
+      description: Prepare an isolated task workspace within a session workspace.
+      operationId: prepareTaskWorkspace
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskWorkspacePrepareRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskWorkspacePrepareResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    SessionFileInfo:
+      type: object
+      title: SessionFileInfo
+      required:
+        - name
+        - container_path
+        - size
+      properties:
+        name:
+          type: string
+          description: Workspace relative file path
+        container_path:
+          type: string
+          description: Absolute in-container path, e.g. /workspace/.tasks/skill/task-001/output/result.pdf
+        size:
+          type: integer
+        modified_time:
+          anyOf:
+            - type: string
+            - type: 'null'
+        etag:
+          anyOf:
+            - type: string
+            - type: 'null'
+    ListSessionFilesResponse:
+      type: object
+      title: ListSessionFilesResponse
+      required:
+        - session_id
+        - files
+        - count
+      properties:
+        session_id:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionFileInfo'
+        count:
+          type: integer
+    SessionFileUploadResponse:
+      type: object
+      title: SessionFileUploadResponse
+      required:
+        - session_id
+        - file_path
+        - size
+      properties:
+        session_id:
+          type: string
+        file_path:
+          type: string
+          description: Workspace relative destination path
+        size:
+          type: integer
+    SessionFileDownloadResponse:
+      type: object
+      title: SessionFileDownloadResponse
+      required:
+        - session_id
+        - file_path
+      properties:
+        session_id:
+          type: string
+        file_path:
+          type: string
+          description: Workspace relative file path
+        presigned_url:
+          anyOf:
+            - type: string
+            - type: 'null'
+        size:
+          anyOf:
+            - type: integer
+            - type: 'null'
+    PackageMaterializeRequest:
+      type: object
+      title: PackageMaterializeRequest
+      description: Runtime package materialization request
+      required:
+        - package_path
+      properties:
+        package_path:
+          type: string
+          description: Workspace relative zip path
+          examples:
+            - .packages/docx/v1/abc123.zip
+        target_dir:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Optional workspace relative extraction target directory
+        package_hash:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Optional package hash for cache naming and idempotency
+        force:
+          type: boolean
+          default: false
+          description: Force re-materialization even if cache is reusable
+    PackageMaterializeResponse:
+      type: object
+      title: PackageMaterializeResponse
+      required:
+        - session_id
+        - package_path
+        - target_dir
+        - reused
+        - files_count
+      properties:
+        session_id:
+          type: string
+        package_path:
+          type: string
+        target_dir:
+          type: string
+        checksum:
+          anyOf:
+            - type: string
+            - type: 'null'
+        reused:
+          type: boolean
+        files_count:
+          type: integer
+    TaskWorkspacePrepareRequest:
+      type: object
+      title: TaskWorkspacePrepareRequest
+      required:
+        - task_id
+      properties:
+        task_id:
+          type: string
+          description: Task or execution identifier
+        task_type:
+          type: string
+          default: skill
+          description: Task type
+        create_dirs:
+          type: array
+          description: Sub-directories to create under the task root
+          items:
+            type: string
+          default:
+            - input
+            - output
+            - tmp
+            - logs
+        reset:
+          type: boolean
+          default: false
+          description: Reset the existing task workspace before recreating it
+    TaskWorkspacePrepareResponse:
+      type: object
+      title: TaskWorkspacePrepareResponse
+      required:
+        - session_id
+        - task_id
+        - task_root
+        - directories
+        - existed
+      properties:
+        session_id:
+          type: string
+        task_id:
+          type: string
+        task_root:
+          type: string
+        directories:
+          type: object
+          additionalProperties:
+            type: string
+        existed:
+          type: boolean
+    HTTPValidationError:
+      type: object
+      title: HTTPValidationError
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+    ValidationError:
+      type: object
+      title: ValidationError
+      required:
+        - loc
+        - msg
+        - type
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string

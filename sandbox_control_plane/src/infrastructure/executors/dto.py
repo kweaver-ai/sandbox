@@ -94,6 +94,56 @@ class ExecutorSyncSessionConfigResponse(BaseModel):
     completed_at: Optional[str] = None
 
 
+class ExecutorMaterializePackageRequest(BaseModel):
+    """Executor runtime package 装配请求。"""
+
+    session_id: str = Field(..., description="Session identifier")
+    package_path: str = Field(..., description="Workspace relative zip path")
+    target_dir: Optional[str] = Field(
+        None,
+        description="Workspace relative target directory",
+    )
+    package_hash: Optional[str] = Field(
+        None,
+        description="Package hash used for cache naming",
+    )
+    force: bool = Field(default=False, description="Force re-materialize")
+
+
+class ExecutorMaterializePackageResponse(BaseModel):
+    """Executor runtime package 装配响应。"""
+
+    session_id: str
+    package_path: str
+    target_dir: str
+    checksum: Optional[str] = None
+    reused: bool = False
+    files_count: int = 0
+
+
+class ExecutorPrepareTaskWorkspaceRequest(BaseModel):
+    """Executor task workspace 准备请求。"""
+
+    session_id: str = Field(..., description="Session identifier")
+    task_id: str = Field(..., description="Task identifier")
+    task_type: str = Field(default="skill", description="Task type")
+    create_dirs: list[str] = Field(
+        default_factory=lambda: ["input", "output", "tmp", "logs"],
+        description="Sub directories to create",
+    )
+    reset: bool = Field(default=False, description="Reset existing task workspace")
+
+
+class ExecutorPrepareTaskWorkspaceResponse(BaseModel):
+    """Executor task workspace 准备响应。"""
+
+    session_id: str
+    task_id: str
+    task_root: str
+    directories: Dict[str, str] = Field(default_factory=dict)
+    existed: bool = False
+
+
 @dataclass
 class ExecutorContainerInfo:
     """

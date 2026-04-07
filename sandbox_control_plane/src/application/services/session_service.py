@@ -30,6 +30,10 @@ from src.application.dtos.session_dto import SessionDTO
 from src.application.dtos.execution_dto import ExecutionDTO
 from src.shared.errors.domain import NotFoundError, ValidationError, ConflictError
 from src.infrastructure.executors import ExecutorClient
+from src.infrastructure.executors.dto import (
+    ExecutorMaterializePackageResponse,
+    ExecutorPrepareTaskWorkspaceResponse,
+)
 from src.infrastructure.executors.errors import (
     ExecutorConnectionError,
     ExecutorResponseError,
@@ -620,7 +624,10 @@ class SessionService:
             language=command.language,
             event=command.event_data or {},
             timeout=command.timeout or 300,
-            env_vars=session.env_vars,
+            env_vars={
+                **(session.env_vars or {}),
+                **(command.env_vars or {}),
+            },
             execution_id=execution_id,
             session_id=session.id,
         )
@@ -778,6 +785,64 @@ class SessionService:
             )
         await self._session_repo.save(session)
         return SessionDTO.from_entity(session)
+
+    async def materialize_package_for_session(
+        self,
+        session_id: str,
+        package_path: str,
+        target_dir: Optional[str] = None,
+        package_hash: Optional[str] = None,
+        force: bool = False,
+    ) -> ExecutorMaterializePackageResponse:
+        """在指定 session 对应的 executor 中装配 runtime package。"""
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {session_id}")
+        if not session.is_active():
+            raise ValidationError(f"Session is not active: {session.id}")
+        if not session.container_id:
+            raise ValidationError(f"Session has no container: {session.id}")
+        if not hasattr(self._scheduler, "get_executor_url"):
+            raise ValidationError("Scheduler does not support executor URL discovery")
+
+        executor_url = await self._scheduler.get_executor_url(session.container_id)
+        return await self._executor_client.materialize_package(
+            executor_url=executor_url,
+            session_id=session_id,
+            package_path=package_path,
+            target_dir=target_dir,
+            package_hash=package_hash,
+            force=force,
+        )
+
+    async def prepare_task_workspace_for_session(
+        self,
+        session_id: str,
+        task_id: str,
+        task_type: str = "skill",
+        create_dirs: Optional[list[str]] = None,
+        reset: bool = False,
+    ) -> ExecutorPrepareTaskWorkspaceResponse:
+        """在指定 session 对应的 executor 中准备 task workspace。"""
+        session = await self._session_repo.find_by_id(session_id)
+        if not session:
+            raise NotFoundError(f"Session not found: {session_id}")
+        if not session.is_active():
+            raise ValidationError(f"Session is not active: {session.id}")
+        if not session.container_id:
+            raise ValidationError(f"Session has no container: {session.id}")
+        if not hasattr(self._scheduler, "get_executor_url"):
+            raise ValidationError("Scheduler does not support executor URL discovery")
+
+        executor_url = await self._scheduler.get_executor_url(session.container_id)
+        return await self._executor_client.prepare_task_workspace(
+            executor_url=executor_url,
+            session_id=session_id,
+            task_id=task_id,
+            task_type=task_type,
+            create_dirs=create_dirs,
+            reset=reset,
+        )
 
     def _schedule_initial_dependency_sync(
         self,

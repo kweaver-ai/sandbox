@@ -4,7 +4,7 @@
 定义执行代码的命令对象。
 """
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 
 @dataclass
@@ -17,6 +17,7 @@ class ExecuteCodeCommand:
     stdin: Optional[str] = None
     timeout: int = 30
     event_data: Optional[dict] = None
+    env_vars: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         """初始化后验证"""
@@ -26,3 +27,5 @@ class ExecuteCodeCommand:
             raise ValueError("timeout must be positive")
         if self.language not in {"python", "javascript", "shell"}:
             raise ValueError(f"Unsupported language: {self.language}")
+        if self.env_vars is None:
+            self.env_vars = {}

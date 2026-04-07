@@ -7,6 +7,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import Mock, AsyncMock
 
+from src.application.commands.execute_code import ExecuteCodeCommand
 from src.application.services.session_service import SessionService
 from src.application.commands.create_session import CreateSessionCommand
 from src.application.commands.install_session_dependencies import (
@@ -19,6 +20,8 @@ from src.domain.value_objects.execution_status import ExecutionStatus, SessionSt
 from src.domain.services.scheduler import RuntimeNode
 from src.infrastructure.executors.dto import (
     ExecutorInstalledDependency,
+    ExecutorMaterializePackageResponse,
+    ExecutorPrepareTaskWorkspaceResponse,
     ExecutorSyncSessionConfigResponse,
 )
 from src.shared.errors.domain import ConflictError, NotFoundError
@@ -47,6 +50,7 @@ class TestSessionService:
         """模拟调度器"""
         scheduler = Mock()
         scheduler.schedule = AsyncMock()
+        scheduler.execute = AsyncMock()
         scheduler.create_container_for_session = AsyncMock(return_value="container-123")
         scheduler.destroy_container = AsyncMock()
         scheduler.get_executor_url = AsyncMock(return_value="http://sandbox-sess:8080")
@@ -57,6 +61,7 @@ class TestSessionService:
         """模拟执行仓储"""
         repo = Mock()
         repo.save = AsyncMock()
+        repo.commit = AsyncMock()
         repo.find_by_id = AsyncMock()
         repo.find_by_session_id = AsyncMock(return_value=[])
         return repo
@@ -65,6 +70,8 @@ class TestSessionService:
     def executor_client(self):
         client = Mock()
         client.sync_session_config = AsyncMock()
+        client.materialize_package = AsyncMock()
+        client.prepare_task_workspace = AsyncMock()
         return client
 
     @pytest.fixture
@@ -175,6 +182,120 @@ class TestSessionService:
 
         with pytest.raises(NotFoundError, match="Session not found"):
             await service.get_session(query)
+
+    @pytest.mark.asyncio
+    async def test_materialize_package_for_session(self, service, session_repo, executor_client):
+        """测试会话级 runtime package 装配会转发到 executor client。"""
+        session = Session(
+            id="sess_pkg_001",
+            template_id="python-datascience",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_pkg_001",
+            runtime_type="docker",
+        )
+        session.container_id = "container-123"
+        session_repo.find_by_id.return_value = session
+        executor_client.materialize_package.return_value = ExecutorMaterializePackageResponse(
+            session_id="sess_pkg_001",
+            package_path=".packages/skill/v1/pkg.zip",
+            target_dir=".runtime_packages/hash123",
+            checksum="hash123",
+            reused=False,
+            files_count=3,
+        )
+
+        result = await service.materialize_package_for_session(
+            session_id="sess_pkg_001",
+            package_path=".packages/skill/v1/pkg.zip",
+            package_hash="hash123",
+        )
+
+        assert result.target_dir == ".runtime_packages/hash123"
+        executor_client.materialize_package.assert_awaited_once_with(
+            executor_url="http://sandbox-sess:8080",
+            session_id="sess_pkg_001",
+            package_path=".packages/skill/v1/pkg.zip",
+            target_dir=None,
+            package_hash="hash123",
+            force=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_prepare_task_workspace_for_session(self, service, session_repo, executor_client):
+        """测试 task workspace 准备会转发到 executor client。"""
+        session = Session(
+            id="sess_task_001",
+            template_id="python-datascience",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_task_001",
+            runtime_type="docker",
+        )
+        session.container_id = "container-123"
+        session_repo.find_by_id.return_value = session
+        executor_client.prepare_task_workspace.return_value = ExecutorPrepareTaskWorkspaceResponse(
+            session_id="sess_task_001",
+            task_id="task_001",
+            task_root=".tasks/skill/task_001",
+            directories={"input": ".tasks/skill/task_001/input"},
+            existed=False,
+        )
+
+        result = await service.prepare_task_workspace_for_session(
+            session_id="sess_task_001",
+            task_id="task_001",
+            task_type="skill",
+            create_dirs=["input", "output"],
+            reset=True,
+        )
+
+        assert result.task_root == ".tasks/skill/task_001"
+        executor_client.prepare_task_workspace.assert_awaited_once_with(
+            executor_url="http://sandbox-sess:8080",
+            session_id="sess_task_001",
+            task_id="task_001",
+            task_type="skill",
+            create_dirs=["input", "output"],
+            reset=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_code_merges_session_and_request_env_vars(self, service, session_repo, scheduler, execution_repo):
+        """测试执行时请求级环境变量会覆盖 session 默认值。"""
+        session = Session(
+            id="sess_exec_001",
+            template_id="python-datascience",
+            status=SessionStatus.RUNNING,
+            resource_limit=ResourceLimit.default(),
+            workspace_path="s3://sandbox-workspace/sessions/sess_exec_001",
+            runtime_type="docker",
+            env_vars={"DEFAULT_FLAG": "1", "SHARED": "session"},
+        )
+        session.container_id = "container-123"
+        session_repo.find_by_id.return_value = session
+
+        result = await service.execute_code(
+            ExecuteCodeCommand(
+                session_id="sess_exec_001",
+                code="def handler(event):\n    return {'ok': True}",
+                language="python",
+                timeout=30,
+                event_data={"name": "demo"},
+                env_vars={"REQUEST_ONLY": "yes", "SHARED": "request"},
+            )
+        )
+
+        assert result.session_id == "sess_exec_001"
+        execution_repo.save.assert_awaited_once()
+        execution_repo.commit.assert_awaited_once()
+        scheduler.execute.assert_awaited_once()
+        execution_request = scheduler.execute.await_args.kwargs["execution_request"]
+        assert execution_request.env_vars == {
+            "DEFAULT_FLAG": "1",
+            "SHARED": "request",
+            "REQUEST_ONLY": "yes",
+        }
 
     @pytest.mark.asyncio
     async def test_terminate_session_success(self, service, session_repo):

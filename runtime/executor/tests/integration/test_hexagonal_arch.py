@@ -8,10 +8,14 @@ to infrastructure adapters, verifying that all layers work together correctly.
 import pytest
 import asyncio
 import os
+import io
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 from tempfile import TemporaryDirectory
+
+from httpx import AsyncClient
 
 from executor.interfaces.http.rest import create_app
 from executor.application.commands.execute_code import ExecuteCodeCommand
@@ -236,6 +240,71 @@ class TestPortAdapterIntegration:
             # Test collect_artifacts method
             artifacts = scanner.collect_artifacts(Path(tmpdir))
             assert isinstance(artifacts, list)
+
+
+@pytest.mark.integration
+class TestExecutorInternalRuntimeEndpoints:
+    """Tests for new runtime package/task internal endpoints."""
+
+    @pytest.fixture
+    def temp_workspace(self):
+        with TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    @pytest.fixture
+    async def async_client(self, temp_workspace, monkeypatch):
+        monkeypatch.setenv("WORKSPACE_PATH", str(temp_workspace))
+        app = create_app()
+        async with AsyncClient(app=app, base_url="http://testserver") as client:
+            yield client
+
+    @pytest.mark.asyncio
+    async def test_materialize_package_endpoint(self, async_client, temp_workspace):
+        package_rel = ".packages/demo/v1/pkg.zip"
+        package_path = temp_workspace / package_rel
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, "w") as zf:
+            zf.writestr("convert.py", "print('ok')")
+            zf.writestr("refs/readme.md", "# demo")
+        package_path.write_bytes(content.getvalue())
+
+        response = await async_client.post(
+            "/internal/packages/materialize",
+            json={
+                "session_id": "sess_demo",
+                "package_path": package_rel,
+                "package_hash": "hash-demo",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == "sess_demo"
+        assert data["target_dir"] == ".runtime_packages/hash-demo"
+        assert data["files_count"] == 2
+        assert (temp_workspace / ".runtime_packages/hash-demo/package/convert.py").exists()
+
+    @pytest.mark.asyncio
+    async def test_prepare_task_workspace_endpoint(self, async_client, temp_workspace):
+        response = await async_client.post(
+            "/internal/tasks/prepare",
+            json={
+                "session_id": "sess_demo",
+                "task_id": "task_demo",
+                "task_type": "skill",
+                "create_dirs": ["input", "output", "logs"],
+                "reset": True,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == "sess_demo"
+        assert data["task_root"] == ".tasks/skill/task_demo"
+        assert data["directories"]["input"] == ".tasks/skill/task_demo/input"
+        assert (temp_workspace / ".tasks/skill/task_demo/input").exists()
 
 
 @pytest.mark.integration

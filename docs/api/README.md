@@ -10,6 +10,12 @@
 ### [execute-sync-openapi.yaml](./rest/execute-sync-openapi.yaml)
 同步执行接口的独立 OpenAPI 描述。
 
+### [runtime-package-task-workspace-primitives.md](./rest/runtime-package-task-workspace-primitives.md)
+runtime package 装配、task workspace 准备、session 文件上传/下载的 REST 文档。
+
+### [runtime-package-task-workspace-primitives-openapi.yaml](./rest/runtime-package-task-workspace-primitives-openapi.yaml)
+runtime package 装配、task workspace 准备、session 文件操作的独立 OpenAPI 描述。
+
 ## 协议目录
 
 - `rest/`: REST/OpenAPI 文档
@@ -105,6 +111,10 @@
 - `POST /api/v1/internal/containers/exited` - 容器退出通知
 - `POST /api/v1/internal/executions/{execution_id}/heartbeat` - 执行心跳上报
 - `POST /api/v1/internal/executions/{execution_id}/result` - 执行结果上报
+
+#### 内部运行时原语
+- `POST /api/v1/internal/sessions/{session_id}/packages/materialize` - 在 executor 内装配 runtime package
+- `POST /api/v1/internal/sessions/{session_id}/tasks/prepare` - 在 executor 内准备 task workspace
 
 ## 公共规范
 

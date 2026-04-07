@@ -13,6 +13,10 @@ from src.infrastructure.executors.dto import (
     ExecutorExecuteRequest,
     ExecutorExecuteResponse,
     ExecutorHealthResponse,
+    ExecutorMaterializePackageRequest,
+    ExecutorMaterializePackageResponse,
+    ExecutorPrepareTaskWorkspaceRequest,
+    ExecutorPrepareTaskWorkspaceResponse,
     ExecutorSyncSessionConfigRequest,
     ExecutorSyncSessionConfigResponse,
 )
@@ -238,6 +242,90 @@ class ExecutorClient:
 
         if response.status_code == 200:
             return ExecutorSyncSessionConfigResponse(**response.json())
+        if response.status_code == 400:
+            raise ExecutorValidationError(executor_url, response.json())
+        if response.status_code in (422, 500):
+            raise ExecutorResponseError(executor_url, response.status_code, response.text)
+        if response.status_code == 503:
+            raise ExecutorUnavailableError(executor_url, response.text)
+
+        raise ExecutorResponseError(executor_url, response.status_code, response.text)
+
+    async def materialize_package(
+        self,
+        executor_url: str,
+        session_id: str,
+        package_path: str,
+        target_dir: Optional[str] = None,
+        package_hash: Optional[str] = None,
+        force: bool = False,
+    ) -> ExecutorMaterializePackageResponse:
+        """在 executor 内装配 runtime package。"""
+        client = self._get_client()
+        url = f"{executor_url}/internal/packages/materialize"
+        request = ExecutorMaterializePackageRequest(
+            session_id=session_id,
+            package_path=package_path,
+            target_dir=target_dir,
+            package_hash=package_hash,
+            force=force,
+        )
+
+        try:
+            response = await client.post(
+                url,
+                json=request.model_dump(),
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.ConnectError as e:
+            raise ExecutorConnectionError(executor_url, str(e))
+        except httpx.TimeoutException:
+            raise ExecutorTimeoutError(executor_url, self._timeout)
+
+        if response.status_code == 200:
+            return ExecutorMaterializePackageResponse(**response.json())
+        if response.status_code == 400:
+            raise ExecutorValidationError(executor_url, response.json())
+        if response.status_code in (422, 500):
+            raise ExecutorResponseError(executor_url, response.status_code, response.text)
+        if response.status_code == 503:
+            raise ExecutorUnavailableError(executor_url, response.text)
+
+        raise ExecutorResponseError(executor_url, response.status_code, response.text)
+
+    async def prepare_task_workspace(
+        self,
+        executor_url: str,
+        session_id: str,
+        task_id: str,
+        task_type: str = "skill",
+        create_dirs: Optional[list[str]] = None,
+        reset: bool = False,
+    ) -> ExecutorPrepareTaskWorkspaceResponse:
+        """在 executor 内准备 task workspace。"""
+        client = self._get_client()
+        url = f"{executor_url}/internal/tasks/prepare"
+        request = ExecutorPrepareTaskWorkspaceRequest(
+            session_id=session_id,
+            task_id=task_id,
+            task_type=task_type,
+            create_dirs=create_dirs or ["input", "output", "tmp", "logs"],
+            reset=reset,
+        )
+
+        try:
+            response = await client.post(
+                url,
+                json=request.model_dump(),
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.ConnectError as e:
+            raise ExecutorConnectionError(executor_url, str(e))
+        except httpx.TimeoutException:
+            raise ExecutorTimeoutError(executor_url, self._timeout)
+
+        if response.status_code == 200:
+            return ExecutorPrepareTaskWorkspaceResponse(**response.json())
         if response.status_code == 400:
             raise ExecutorValidationError(executor_url, response.json())
         if response.status_code in (422, 500):
